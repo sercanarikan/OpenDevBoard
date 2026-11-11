@@ -1,0 +1,105 @@
+{
+  "columns": {
+    "todo": "Yapılacak & Yeni",
+    "todoShort": "Yapılacak",
+    "inProgress": "Aktif & Devam Ediyor",
+    "inProgressShort": "Devam Ediyor",
+    "resolved": "Çözüldü & İncelemede",
+    "resolvedShort": "İncelemede",
+    "done": "Bitti & Kapatıldı",
+    "doneShort": "Bitti",
+    "expandTitle": "{{title}} genişlet ({{count}} öğe)",
+    "expandNamed": "{{title}} genişlet",
+    "collapse": "Sütunu daralt",
+    "collapseNamed": "{{title}} sütununu daralt"
+  },
+  "swimlanes": {
+    "mode": "Swimlane",
+    "none": "Standart (Grup Yok)",
+    "parent": "Üst Hikayeye Göre (Parent Story)",
+    "assignee": "Kişiye Göre",
+    "priority": "Önceliğe Göre",
+    "independent": "Bağımsız / Kök İşler",
+    "independentSubtitle": "Doğrudan üst hikayesi bulunmayan işler",
+    "selectMode": "Swimlane modunu seç",
+    "visibleCards_one": "{{count}} görünür kart",
+    "visibleCards_other": "{{count}} görünür kart",
+    "totalCards": "{{count}} toplam",
+    "loadMoreLanes": "Daha fazla şerit yükle (kalan {{remaining}})",
+    "completedOfUnits": "{{completed}}/{{total}} tamamlandı ({{percent}}%)"
+  },
+  "filters": {
+    "allWorkItems": "Tüm İşler",
+    "myTasks": "Görevlerim",
+    "unassigned": "Atanmamış",
+    "blocked": "Engellenenler",
+    "bugs": "Hatalar (Bugs)",
+    "hideCompleted": "Tamamlananları Gizle",
+    "title": "İşleri Filtrele",
+    "resetFacets": "Filtreleri sıfırla",
+    "hideDoneClosed": "Bitti / Kapatılanları gizle",
+    "toggleHideCompletedAria": "Tamamlananları gizlemeyi değiştir",
+    "workItemType": "İş Öğesi Türü",
+    "state": "Durum",
+    "priority": "Öncelik",
+    "searchPlaceholder": "Kartları başlık, ID veya üst öğeye göre ara...",
+    "clearSearch": "Aramayı temizle",
+    "activeLabel": "Aktif Filtreler:",
+    "project": "Proje: {{project}}",
+    "assignedTo": "Atanan: {{name}}",
+    "unassignedOnly": "Yalnızca Atanmamış İşler",
+    "query": "Sorgu: \"{{query}}\"",
+    "doneHidden": "Bitti Gizli",
+    "tabCountTitle": "Aktif işler (tamamlanmış işler sayılmaz)",
+    "doneBadgeTitle": "Bu filtre kapsamındaki tamamlanmış işler",
+    "clearAll": "Tümünü temizle"
+  },
+  "sorting": {
+    "priority": "Öncelik (P1 → P4)",
+    "changedDate": "Son Güncelleme",
+    "id": "Work Item ID",
+    "title": "Başlık",
+    "label": "Kartları sütun içinde sırala",
+    "ascending": "Artan",
+    "descending": "Azalan",
+    "toggleOrder": "Sıralama yönünü değiştir"
+  },
+  "density": {
+    "switchToCompact": "Kompakt yoğunluğa geç",
+    "switchToComfortable": "Rahat yoğunluğa geç"
+  },
+  "cards": {
+    "priorityTitle": "Öncelik {{priority}}",
+    "parentTitle": "Üst: {{title}} (incelemek için tıklayın)",
+    "blocking": "Engelliyor",
+    "loadMore": "Daha fazla yükle ({{remaining}})",
+    "loadMoreAria": "Daha fazla kart yükle: {{lane}}, {{column}}"
+  },
+  "empty": {
+    "noMatchTitle": "Eşleşen kart bulunamadı",
+    "noMatchDesc": "Seçili filtre veya proje görünümüyle eşleşen iş öğesi yok.",
+    "resetFilters": "Filtreleri sıfırla"
+  },
+  "loading": "Kanban Board yükleniyor...",
+  "error": {
+    "boardLoadFailed": "Pano yüklenemedi",
+    "retry": "Yeniden dene",
+    "loadMoreFailed": "Daha fazla öğe yüklenemedi"
+  },
+  "status": {
+    "updating": "Güncelleniyor…"
+  },
+  "emptyColumn": "Bu durumda iş bulunmuyor",
+  "footer": {
+    "loadedOf": "{{total}} karttan {{shown}} tanesi yüklendi",
+    "loadedOfTitle": "Bu pano için yüklenen kartlar. Bitti sütunundaki tamamlanmış işleri de içerir.",
+    "scopeBreakdown": "{{active}} aktif + {{done}} tamamlanmış",
+    "mode": "Mod: {{mode}}",
+    "modeStandard": "Standart Pano",
+    "modeParent": "Hikaye Swimlane'leri",
+    "modeAssignee": "Kişi Swimlane'leri",
+    "modePriority": "Öncelik Swimlane'leri",
+    "clickCard": "İncelemek için karta tıklayın",
+    "escDeselect": "ESC: Seçimi kaldır"
+  }
+}

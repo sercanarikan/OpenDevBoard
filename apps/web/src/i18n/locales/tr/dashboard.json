@@ -1,0 +1,59 @@
+{
+  "title": "Genel Bakış",
+  "welcome": "Hoş geldiniz, {{name}}",
+  "subtitle": "Günlük iş durumunuz, bekleyen incelemeleriniz ve öncelikli görevleriniz",
+  "cards": {
+    "myTasks": "Aktif Görevlerim",
+    "myTasksDesc": "Üzerinize atanmış açık iş öğeleri",
+    "blockedTasks": "Engellenen İşlerim",
+    "blockedTasksDesc": "Öncül bir işi bekleyen görevleriniz",
+    "pendingPRs": "İncelememi Bekleyenler",
+    "pendingPRsDesc": "İncelemeniz gereken açık PR'lar",
+    "myOpenPRs": "Açık PR'larım",
+    "myOpenPRsDesc": "Oluşturduğunuz aktif birleştirme talepleri"
+  },
+  "sections": {
+    "priorityWork": "Öncelikli Görevlerim",
+    "priorityWorkDesc": "Kritik ve yüksek öncelikli açık işleriniz",
+    "pendingReviews": "İnceleme Bekleyen PR'lar",
+    "pendingReviewsDesc": "Onay veya geri bildirim vermeniz gereken kod değişiklikleri",
+    "recentActivity": "Son Senkronizasyona Göre Güncellenenler",
+    "recentActivityDesc": "Önbellekteki son değişiklik zamanına göre sıralanmış görevleriniz",
+    "quickNav": "Hızlı Erişim",
+    "viewAll": "Tümünü Gör",
+    "lastSync": "Önbellek: {{time}}",
+    "cicdHealth": "CI/CD Sağlığı ve Dağıtımlar",
+    "cicdHealthDesc": "Pipeline başarı oranları, kırık derlemeler ve son ortam dağıtımları",
+    "pipelineStatus": "Pipeline Sağlığı",
+    "latestFailed": "Son Başarısız Pipeline",
+    "latestDeployment": "Son Dağıtım",
+    "noFailedPipelines": "Tüm pipeline'lar sağlıklı, kırık build bulunmuyor.",
+    "noDeployments": "Henüz dağıtım kaydı bulunmuyor.",
+    "viewPipelines": "Pipeline'ları Gör",
+    "viewDeployments": "Dağıtımları Gör",
+    "myRecentActivity": "Son Aktivitelerim",
+    "myRecentActivityDesc": "Gerçekleşen son iş, commit ve inceleme hareketleriniz",
+    "teamActivitySnapshot": "Ekip Aktivitesi Özeti",
+    "teamActivitySnapshotDesc": "Son 7 günlük commit ve pull request hareketleri",
+    "viewHistory": "Tüm Geçmişi Gör",
+    "viewTeam": "Ekip Aktivitesini Gör",
+    "noRecentPersonalActivity": "Henüz kayıtlı aktivite bulunmuyor.",
+    "noTeamActivity": "Henüz ekip aktivitesi bulunmuyor."
+  },
+  "empty": {
+    "noPriorityWork": "Öncelikli açık göreviniz bulunmuyor.",
+    "noPendingReviews": "Şu anda incelemenizi bekleyen açık Pull Request yok.",
+    "noRecentActivity": "Son güncellenen görev bulunamadı."
+  },
+  "quickActions": {
+    "goToTasks": "Görevlerime Git",
+    "goToBlocked": "Engellenen İşlere Git",
+    "goToKanban": "Kanban Panosu",
+    "goToDependencies": "Bağımlılık Grafiği",
+    "goToPRs": "Pull Request'lere Git",
+    "goToPipelines": "Pipeline Health",
+    "goToDeployments": "Deployment Metrics",
+    "goToTeam": "Ekip Aktivitesi",
+    "goToHistory": "Geçmişim"
+  }
+}

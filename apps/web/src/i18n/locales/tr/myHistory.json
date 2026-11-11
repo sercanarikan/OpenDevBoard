@@ -1,0 +1,33 @@
+{
+  "title": "Geçmişim",
+  "subtitle": "Azure DevOps üzerinde tamamladığınız işler, commit'leriniz ve kod incelemeleriniz",
+  "summary": {
+    "totalEvents": "Toplam Aktivite",
+    "completedWorkItems": "Tamamlanan İşler",
+    "commits": "Commit'ler",
+    "pullRequests": "Pull Request'ler",
+    "reviews": "İncelemeler",
+    "period7d": "Son 7 Gün",
+    "period30d": "Son 30 Gün"
+  },
+  "timeline": {
+    "today": "Bugün",
+    "yesterday": "Dün",
+    "thisWeek": "Bu Hafta",
+    "earlier": "Daha Eski"
+  },
+  "filters": {
+    "all": "Tüm Aktiviteler",
+    "workItem": "Work Items",
+    "commit": "Commit'ler",
+    "pullRequest": "Pull Requests",
+    "review": "İncelemeler",
+    "searchPlaceholder": "Aktivite, iş no veya commit ara..."
+  },
+  "empty": {
+    "noEvents": "Seçilen filtre ve döneme uygun aktivite bulunamadı.",
+    "loading": "Kişisel aktivite geçmişiniz yükleniyor…",
+    "loadFailed": "Aktivite geçmişi yüklenemedi.",
+    "retry": "Tekrar Dene"
+  }
+}

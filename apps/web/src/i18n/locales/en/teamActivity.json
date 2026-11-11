@@ -1,0 +1,42 @@
+{
+  "title": "Team Activity",
+  "subtitle": "Commit, pull request, and contribution analytics across Azure DevOps repositories",
+  "summary": {
+    "totalCommits": "Total Commits",
+    "activeContributors": "Active Contributors",
+    "totalPRs": "Total PRs",
+    "reviewedPRs": "Reviewed PRs",
+    "period7d": "Last 7 Days",
+    "period30d": "Last 30 Days",
+    "scopeLabel": "Last {{days}} Days · {{project}}"
+  },
+  "sections": {
+    "activityTrend": "Daily Activity Trend",
+    "contributors": "Contributors",
+    "repositories": "Repository Activity",
+    "recentCommits": "Recent Commits Stream"
+  },
+  "columns": {
+    "contributor": "Contributor",
+    "commits": "Commits",
+    "authoredPRs": "Opened PRs",
+    "reviews": "Reviews",
+    "lastActivity": "Last Activity",
+    "commitsTooltip": "Commit and PR counts reflect analytical activity volume; they are not an individual performance or productivity score.",
+    "repository": "Repository",
+    "project": "Project",
+    "message": "Commit Message",
+    "date": "Date"
+  },
+  "filters": {
+    "all": "All",
+    "periodLabel": "Period:",
+    "searchPlaceholder": "Search by contributor, commit, or repository..."
+  },
+  "empty": {
+    "noActivity": "No activity found for the selected period and filter.",
+    "loading": "Loading team activity metrics…",
+    "loadFailed": "Failed to load team activity metrics.",
+    "retry": "Retry"
+  }
+}

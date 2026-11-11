@@ -1,0 +1,59 @@
+{
+  "title": "Dashboard",
+  "welcome": "Welcome back, {{name}}",
+  "subtitle": "Daily summary of your active tasks, pending code reviews, and priority work",
+  "cards": {
+    "myTasks": "My Active Tasks",
+    "myTasksDesc": "Open work items assigned to you",
+    "blockedTasks": "My Blocked Tasks",
+    "blockedTasksDesc": "Tasks blocked by pending predecessors",
+    "pendingPRs": "Pending My Review",
+    "pendingPRsDesc": "Pull requests awaiting your review",
+    "myOpenPRs": "My Open PRs",
+    "myOpenPRsDesc": "Active pull requests created by you"
+  },
+  "sections": {
+    "priorityWork": "My Priority Work",
+    "priorityWorkDesc": "Critical and high priority open items",
+    "pendingReviews": "Pending PR Reviews",
+    "pendingReviewsDesc": "Code changes awaiting your approval or feedback",
+    "recentActivity": "Updated Tasks (Cached Sync)",
+    "recentActivityDesc": "Work items ordered by last changed timestamp in cache",
+    "quickNav": "Quick Navigation",
+    "viewAll": "View All",
+    "lastSync": "Cached sync: {{time}}",
+    "cicdHealth": "CI/CD Health & Deployments",
+    "cicdHealthDesc": "Build pipeline success rates, broken builds, and environment release activity",
+    "pipelineStatus": "Pipeline Health",
+    "latestFailed": "Latest Broken Pipeline",
+    "latestDeployment": "Latest Deployment",
+    "noFailedPipelines": "All pipelines are healthy; no broken builds found.",
+    "noDeployments": "No deployment records found.",
+    "viewPipelines": "View Pipelines",
+    "viewDeployments": "View Deployments",
+    "myRecentActivity": "My Recent Activity",
+    "myRecentActivityDesc": "Your latest work item, commit, and review actions",
+    "teamActivitySnapshot": "Team Activity Snapshot",
+    "teamActivitySnapshotDesc": "Commit and pull request activity in the last 7 days",
+    "viewHistory": "View Full History",
+    "viewTeam": "View Team Activity",
+    "noRecentPersonalActivity": "No recent activity recorded yet.",
+    "noTeamActivity": "No team activity recorded yet."
+  },
+  "empty": {
+    "noPriorityWork": "No open priority tasks found.",
+    "noPendingReviews": "No open pull requests awaiting your review.",
+    "noRecentActivity": "No recently updated tasks found."
+  },
+  "quickActions": {
+    "goToTasks": "Go to My Tasks",
+    "goToBlocked": "Go to Blocked Tasks",
+    "goToKanban": "Kanban Board",
+    "goToDependencies": "Dependency Graph",
+    "goToPRs": "Go to Pull Requests",
+    "goToPipelines": "Pipeline Health",
+    "goToDeployments": "Deployment Metrics",
+    "goToTeam": "Team Activity",
+    "goToHistory": "My History"
+  }
+}

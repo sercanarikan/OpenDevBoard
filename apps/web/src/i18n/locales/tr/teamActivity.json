@@ -1,0 +1,42 @@
+{
+  "title": "Ekip Aktivitesi",
+  "subtitle": "Azure DevOps depolarındaki commit, pull request ve katkı analizleri",
+  "summary": {
+    "totalCommits": "Toplam Commit",
+    "activeContributors": "Aktif Katkıda Bulunan",
+    "totalPRs": "Toplam PR",
+    "reviewedPRs": "İncelenen PR",
+    "period7d": "Son 7 Gün",
+    "period30d": "Son 30 Gün",
+    "scopeLabel": "Son {{days}} Gün · {{project}}"
+  },
+  "sections": {
+    "activityTrend": "Günlük Aktivite Trendi",
+    "contributors": "Katkı Sağlayanlar",
+    "repositories": "Depo Bazlı Aktivite",
+    "recentCommits": "Son Commit Akışı"
+  },
+  "columns": {
+    "contributor": "Kullanıcı",
+    "commits": "Commit",
+    "authoredPRs": "Açılan PR",
+    "reviews": "İnceleme",
+    "lastActivity": "Son Aktivite",
+    "commitsTooltip": "Commit ve PR sayıları analitik aktivite hacmidir; bireysel çalışan performansı veya başarı puanı değildir.",
+    "repository": "Depo",
+    "project": "Proje",
+    "message": "Commit Mesajı",
+    "date": "Tarih"
+  },
+  "filters": {
+    "all": "Tümü",
+    "periodLabel": "Dönem:",
+    "searchPlaceholder": "Kullanıcı, commit veya depoda ara..."
+  },
+  "empty": {
+    "noActivity": "Seçilen dönem ve filtreye uygun aktivite bulunamadı.",
+    "loading": "Ekip aktivite verileri yükleniyor…",
+    "loadFailed": "Ekip aktivite verileri yüklenemedi.",
+    "retry": "Tekrar Dene"
+  }
+}

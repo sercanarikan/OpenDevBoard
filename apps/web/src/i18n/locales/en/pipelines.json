@@ -1,0 +1,70 @@
+{
+  "title": "Pipeline Health",
+  "subtitle": "Health status of CI/CD build and test pipeline executions",
+  "summary": {
+    "totalPipelines": "Total Pipelines",
+    "totalRuns": "Total Runs",
+    "succeeded": "Succeeded",
+    "failed": "Broken / Failed",
+    "inProgress": "In Progress",
+    "successRate": "Success Rate",
+    "period7d": "Last 7 Days",
+    "period30d": "Last 30 Days"
+  },
+  "filters": {
+    "all": "All",
+    "succeeded": "Succeeded",
+    "failed": "Failed",
+    "inProgress": "In Progress",
+    "statusLabel": "Status:",
+    "resultLabel": "Result:",
+    "periodLabel": "Period:",
+    "searchPlaceholder": "Search by pipeline name, branch, or ID..."
+  },
+  "columns": {
+    "build": "Build / Run",
+    "pipeline": "Pipeline",
+    "project": "Project",
+    "branch": "Source Branch",
+    "status": "Status",
+    "result": "Result",
+    "duration": "Duration",
+    "triggeredBy": "Triggered By",
+    "date": "Date"
+  },
+  "status": {
+    "inProgress": "In Progress",
+    "completed": "Completed",
+    "notStarted": "Not Started",
+    "cancelling": "Cancelling"
+  },
+  "result": {
+    "succeeded": "Succeeded",
+    "failed": "Failed",
+    "partiallySucceeded": "Partially Succeeded",
+    "canceled": "Canceled",
+    "none": "Pending"
+  },
+  "inspector": {
+    "title": "Pipeline Run Details",
+    "openInDevops": "Open in Azure DevOps",
+    "pipelineInfo": "Pipeline Information",
+    "type": "Type",
+    "buildNumber": "Build Number",
+    "timing": "Timing & Duration",
+    "queueTime": "Queue Time",
+    "startTime": "Start Time",
+    "finishTime": "Finish Time",
+    "duration": "Run Duration",
+    "sourceCommit": "Source Branch & Commit",
+    "branch": "Branch",
+    "commit": "Commit SHA",
+    "triggeredBy": "Triggered By"
+  },
+  "empty": {
+    "noPipelines": "No pipeline runs match the active filter and period.",
+    "loading": "Loading pipeline health metrics…",
+    "loadFailed": "Failed to load pipeline health metrics.",
+    "retry": "Retry"
+  }
+}

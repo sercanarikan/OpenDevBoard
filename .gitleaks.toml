@@ -1,0 +1,29 @@
+title = "devopsflow gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "azure-devops-pat-assignment"
+description = "Azure DevOps PAT assigned a real-looking value"
+regex = '''(?i)AZURE_DEVOPS_PAT\s*[:=]\s*["']?([A-Za-z0-9]{40,})["']?'''
+secretGroup = 1
+keywords = ["azure_devops_pat"]
+
+# Templates and lockfiles never hold real secrets.
+[[allowlists]]
+description = "Templates and lockfiles"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)package-lock\.json$''',
+]
+
+# Narrow exception: legacy README troubleshooting snippet `curl -u ":<PAT>" ...`
+# (documentation placeholder; verified it is not a real PAT).
+[[allowlists]]
+description = "Legacy README curl placeholder"
+targetRules = ["curl-auth-user"]
+paths = [
+  '''(^|/)apps/legacy-ui/README\.md$''',
+  '''(^|/)AzureDashboard/README\.md$''',
+]

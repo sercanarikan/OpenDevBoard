@@ -1,0 +1,67 @@
+{
+  "title": "Pull Requests",
+  "subtitle": "Azure DevOps kod incelemeleri ve aktif birleştirme talepleri",
+  "filters": {
+    "needsMyReview": "İncelememi Bekleyenler",
+    "createdByMe": "Oluşturduklarım",
+    "involved": "İlgilendiklerim",
+    "all": "Tümü",
+    "statusLabel": "Durum:",
+    "searchPlaceholder": "Başlık, ID, yazar veya depoda ara..."
+  },
+  "status": {
+    "active": "Aktif (Açık)",
+    "completed": "Tamamlandı (Birleştirildi)",
+    "abandoned": "Terk Edildi (Kapatıldı)",
+    "all": "Tüm Durumlar",
+    "draft": "Taslak"
+  },
+  "columns": {
+    "pr": "PR",
+    "title": "Başlık",
+    "repoBranch": "Depo ve Dal",
+    "author": "Yazar",
+    "reviewers": "İnceleyenler",
+    "status": "Durum",
+    "date": "Tarih"
+  },
+  "votes": {
+    "approved": "Onaylandı",
+    "approvedWithSuggestions": "Önerilerle Onaylandı",
+    "waitingForAuthor": "Yazar Yanıtı Bekleniyor",
+    "rejected": "Reddedildi",
+    "noVote": "İnceleme Bekliyor"
+  },
+  "inspector": {
+    "title": "Pull Request Detayı",
+    "openInDevops": "Azure DevOps'ta Aç",
+    "branches": "Dallar ve Birleştirme",
+    "sourceBranch": "Kaynak Dal",
+    "targetBranch": "Hedef Dal",
+    "mergeStatus": "Merge / Çatışma Kontrolü",
+    "mergeNoConflicts": "Çatışma Yok (Birleştirilebilir)",
+    "mergeHasConflicts": "Çatışma Var (Çözülmeli)",
+    "mergeQueued": "Kontrol Sıraya Alındı",
+    "mergeNotSet": "Kontrol Edilmedi",
+    "author": "Yazar",
+    "created": "Oluşturulma",
+    "closed": "Kapatılma",
+    "reviewers": "İnceleyenler",
+    "required": "Zorunlu",
+    "description": "Açıklama",
+    "noDescription": "Açıklama belirtilmemiş.",
+    "workItems": "İlişkili İş Öğeleri",
+    "noWorkItems": "İlişkili iş öğesi bulunmuyor.",
+    "inspectWorkItem": "İş Detayını İncele"
+  },
+  "empty": {
+    "noPRs": "Bu filtreye uygun Pull Request bulunamadı.",
+    "loading": "Pull Request kayıtları yükleniyor…",
+    "loadFailed": "Pull Request kayıtları yüklenemedi.",
+    "retry": "Tekrar Dene"
+  },
+  "summary": {
+    "totalMatching": "{{total}} PR gösteriliyor",
+    "reviewPendingCount": "{{count}} inceleme bekleyen"
+  }
+}

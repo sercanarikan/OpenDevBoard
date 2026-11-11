@@ -1,0 +1,70 @@
+{
+  "title": "Pipeline Health",
+  "subtitle": "CI/CD derleme ve test pipeline çalıştırmalarının sağlık durumu",
+  "summary": {
+    "totalPipelines": "Toplam Pipeline",
+    "totalRuns": "Toplam Koşum",
+    "succeeded": "Başarılı",
+    "failed": "Kırık / Hatalı",
+    "inProgress": "Devam Eden",
+    "successRate": "Başarı Oranı",
+    "period7d": "Son 7 Gün",
+    "period30d": "Son 30 Gün"
+  },
+  "filters": {
+    "all": "Tümü",
+    "succeeded": "Başarılı",
+    "failed": "Başarısız",
+    "inProgress": "Devam Eden",
+    "statusLabel": "Durum:",
+    "resultLabel": "Sonuç:",
+    "periodLabel": "Dönem:",
+    "searchPlaceholder": "Pipeline adı, dal veya ID ara..."
+  },
+  "columns": {
+    "build": "Build / Run",
+    "pipeline": "Pipeline",
+    "project": "Proje",
+    "branch": "Kaynak Dal",
+    "status": "Durum",
+    "result": "Sonuç",
+    "duration": "Süre",
+    "triggeredBy": "Tetikleyen",
+    "date": "Tarih"
+  },
+  "status": {
+    "inProgress": "Devam Ediyor",
+    "completed": "Tamamlandı",
+    "notStarted": "Başlamadı",
+    "cancelling": "İptal Ediliyor"
+  },
+  "result": {
+    "succeeded": "Başarılı",
+    "failed": "Başarısız",
+    "partiallySucceeded": "Kısmi Başarılı",
+    "canceled": "İptal Edildi",
+    "none": "Bekliyor"
+  },
+  "inspector": {
+    "title": "Pipeline Koşum Detayı",
+    "openInDevops": "Azure DevOps'ta Aç",
+    "pipelineInfo": "Pipeline Bilgileri",
+    "type": "Tür",
+    "buildNumber": "Build Numarası",
+    "timing": "Zamanlama ve Süre",
+    "queueTime": "Kuyruk Zamanı",
+    "startTime": "Başlangıç",
+    "finishTime": "Bitiş",
+    "duration": "Çalışma Süresi",
+    "sourceCommit": "Kaynak Dal ve Commit",
+    "branch": "Dal",
+    "commit": "Commit SHA",
+    "triggeredBy": "Tetikleyen Kullanıcı"
+  },
+  "empty": {
+    "noPipelines": "Seçilen filtre ve döneme uygun pipeline koşumu bulunamadı.",
+    "loading": "Pipeline sağlık verileri yükleniyor…",
+    "loadFailed": "Pipeline sağlık verileri yüklenemedi.",
+    "retry": "Tekrar Dene"
+  }
+}

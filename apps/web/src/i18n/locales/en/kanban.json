@@ -1,0 +1,105 @@
+{
+  "columns": {
+    "todo": "To Do & New",
+    "todoShort": "To Do",
+    "inProgress": "Active & In Progress",
+    "inProgressShort": "In Progress",
+    "resolved": "Resolved & In Review",
+    "resolvedShort": "In Review",
+    "done": "Done & Closed",
+    "doneShort": "Done",
+    "expandTitle": "Expand {{title}} ({{count}} items)",
+    "expandNamed": "Expand {{title}}",
+    "collapse": "Collapse column",
+    "collapseNamed": "Collapse {{title}}"
+  },
+  "swimlanes": {
+    "mode": "Swimlane",
+    "none": "None (Standard)",
+    "parent": "By Parent Story",
+    "assignee": "By Assignee",
+    "priority": "By Priority",
+    "independent": "Independent / Top-Level Tasks",
+    "independentSubtitle": "Items without a direct parent user story",
+    "selectMode": "Select Kanban Swimlane mode",
+    "visibleCards_one": "{{count}} visible card",
+    "visibleCards_other": "{{count}} visible cards",
+    "totalCards": "{{count}} total",
+    "loadMoreLanes": "Load more lanes ({{remaining}} remaining)",
+    "completedOfUnits": "{{completed}}/{{total}} completed ({{percent}}%)"
+  },
+  "filters": {
+    "allWorkItems": "All Work Items",
+    "myTasks": "My Tasks",
+    "unassigned": "Unassigned",
+    "blocked": "Blocked",
+    "bugs": "Bugs",
+    "hideCompleted": "Hide Completed",
+    "title": "Filter Work Items",
+    "resetFacets": "Reset facets",
+    "hideDoneClosed": "Hide Done / Closed",
+    "toggleHideCompletedAria": "Toggle hide completed",
+    "workItemType": "Work Item Type",
+    "state": "State",
+    "priority": "Priority",
+    "searchPlaceholder": "Search cards by title, ID, parent...",
+    "clearSearch": "Clear search",
+    "activeLabel": "Active Filters:",
+    "project": "Project: {{project}}",
+    "assignedTo": "Assigned to: {{name}}",
+    "unassignedOnly": "Unassigned Tasks Only",
+    "query": "Query: \"{{query}}\"",
+    "doneHidden": "Done Hidden",
+    "tabCountTitle": "Active items (completed work is not counted)",
+    "doneBadgeTitle": "Completed items in this filter scope",
+    "clearAll": "Clear all"
+  },
+  "sorting": {
+    "priority": "Priority (P1 → P4)",
+    "changedDate": "Recently Updated",
+    "id": "Work Item ID",
+    "title": "Title",
+    "label": "Sort cards inside columns",
+    "ascending": "Ascending",
+    "descending": "Descending",
+    "toggleOrder": "Toggle sort order"
+  },
+  "density": {
+    "switchToCompact": "Switch to Compact density",
+    "switchToComfortable": "Switch to Comfortable density"
+  },
+  "cards": {
+    "priorityTitle": "Priority {{priority}}",
+    "parentTitle": "Parent: {{title}} (Click to inspect)",
+    "blocking": "Blocking",
+    "loadMore": "Load more ({{remaining}})",
+    "loadMoreAria": "Load more cards: {{lane}}, {{column}}"
+  },
+  "empty": {
+    "noMatchTitle": "No matching cards found",
+    "noMatchDesc": "No work items match the selected filter criteria or project view.",
+    "resetFilters": "Reset filters"
+  },
+  "loading": "Loading Kanban Board...",
+  "error": {
+    "boardLoadFailed": "The board could not be loaded",
+    "retry": "Retry",
+    "loadMoreFailed": "Could not load more items"
+  },
+  "status": {
+    "updating": "Updating…"
+  },
+  "emptyColumn": "No items in this state",
+  "footer": {
+    "loadedOf": "{{shown}} of {{total}} cards loaded",
+    "loadedOfTitle": "Cards loaded for this board. Includes completed work shown in the Done column.",
+    "scopeBreakdown": "{{active}} active + {{done}} completed",
+    "mode": "Mode: {{mode}}",
+    "modeStandard": "Standard Board",
+    "modeParent": "Story Swimlanes",
+    "modeAssignee": "Assignee Swimlanes",
+    "modePriority": "Priority Swimlanes",
+    "clickCard": "Click card to inspect",
+    "escDeselect": "ESC: Deselect"
+  }
+}

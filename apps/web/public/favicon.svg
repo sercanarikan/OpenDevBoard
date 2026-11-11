@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" role="img" aria-labelledby="title">
+  <title id="title">OpenDevBoard</title>
+  <rect x="5" y="6" width="38" height="36" rx="9" stroke="#2563EB" stroke-width="2.5"/>
+  <rect x="12" y="13" width="10" height="10" rx="2.5" fill="#2563EB"/>
+  <rect x="26" y="13" width="10" height="6" rx="2" fill="#06B6D4"/>
+  <rect x="26" y="22" width="10" height="13" rx="2.5" fill="#06B6D4" opacity=".72"/>
+  <rect x="12" y="27" width="10" height="8" rx="2" fill="#2563EB" opacity=".62"/>
+</svg>

@@ -1,0 +1,14 @@
+{
+  "name": "devopsflow-scripts",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "node e2e.mjs",
+    "e2e:test": "node test-e2e-orchestrator.mjs",
+    "visual": "node visual-matrix.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

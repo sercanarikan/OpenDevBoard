@@ -1,0 +1,115 @@
+{
+  "tabs": {
+    "graph": "İnteraktif Graf",
+    "matrix": "Bağımlılık Matrisi"
+  },
+  "hops": {
+    "oneHop": "1-Aşama",
+    "twoHops": "2-Aşama",
+    "fullChain": "Tüm Zincir",
+    "connected": "Bağlantılı Ağ",
+    "fit": "Sığdır",
+    "centerOnFocus": "Merkez",
+    "centerOnFocusTitle": "Odağı ekranın ortasına getir",
+    "label": "Aşama:",
+    "hideCompleted": "Tamamlananları Gizle",
+    "hideCompletedTitle": "Zaten tamamlanmış bağımlılıkları gizle",
+    "fitTitle": "Grafı görünüme sığdır",
+    "fullChainTitle": "Tüm bağımlılık zinciri (yukarı ve aşağı akış)",
+    "connectedTitle": "Merkez işle doğrudan veya dolaylı bağlantılı tüm işler, kardeş dallar dahil gösterilir.",
+    "oneHopTitle": "Doğrudan bağımlılıklar (1 aşama)",
+    "twoHopsTitle": "Genişletilmiş bağımlılıklar (2 aşama)"
+  },
+  "focus": {
+    "centerFocus": "Merkez Odak",
+    "switchFocus": "Odağı Değiştir",
+    "leftPredecessors": "Sol: Öncül İşler",
+    "rightSuccessors": "Sağ: Ardıl İşler",
+    "renderingInfo": "Grafikte {{nodes}} bağlı düğüm ve {{edges}} bağımlılık bağlantısı çiziliyor",
+    "hint": "Tek tık ile detayları incele; grafı yeniden konumlamak için \"Merkez Odak Yap\" seçeneğini kullan",
+    "centerLabel": "Merkez Odak:",
+    "switchLabel": "Odağı Değiştir:",
+    "searchMatrix": "Matriste başlık, ID veya atanan kişi ara...",
+    "inspecting": "İnceleniyor:",
+    "switchAria": "Grafikte odaklanılan işi değiştir",
+    "scopeTip": "Bu grafik, seçilen işin bağımlılık zincirini gösterir. Organizasyondaki diğer bağımlılıkları görmek için Bağımlılık Matrisi'ni kullanın.",
+    "scopeTipConnected": "Merkez işle doğrudan veya dolaylı bağlantılı tüm işler, kardeş dallar dahil gösterilir. Diğer bağımlılıkları görmek için Bağımlılık Matrisi'ni kullanın.",
+    "scopeTipFullChain": "Merkez işin bütün upstream predecessor ve downstream successor etki zincirini gösterir. Kardeş dallar için Bağlantılı Ağ'ı kullanın.",
+    "scopeTipHops": "Merkez işin doğrudan bağımlılıklarını gösterir. Kardeş dallar ve tüm ağ için Bağlantılı Ağ'ı kullanın.",
+    "focusDetails": "Odak: #{{id}} · {{hopLabel}} · {{nodes}} İş · {{edges}} Bağımlılık",
+    "focusInGraph": "Grafa Odakla",
+    "graphUpdating": "Graf güncelleniyor…"
+  },
+  "graph": {
+    "noDependencies": "Bu görev için mevcut kapsamda bağımlılık bulunamadı.",
+    "loading": "İlişki verisi yükleniyor…",
+    "loadFailed": "İlişki verisi yüklenemedi",
+    "retry": "Tekrar dene"
+  },
+  "alert": {
+    "title": "Döngüsel Bağımlılık Tespit Edildi:",
+    "cycleLoop": "Döngü: {{path}}"
+  },
+  "overview": {
+    "title": "Graf Özeti",
+    "center": "Merkez Odak",
+    "blocked": "Engellenen",
+    "blocking": "Engelliyor",
+    "active": "Aktif / Bitti"
+  },
+  "matrix": {
+    "title": "Bağımlılık Matrisi",
+    "sourceItem": "Kaynak İş (Bloke Eden)",
+    "targetItem": "Hedef İş (Bloke Olan)",
+    "type": "İlişki Türü",
+    "status": "Durum",
+    "colId": "ID",
+    "colWorkItem": "İş Öğesi",
+    "colState": "Durum",
+    "colPredecessors": "Öncüller",
+    "colSuccessors": "Ardıllar",
+    "colRisk": "Blok Riski",
+    "colAssignee": "Atanan",
+    "riskBlocked": "ENGELLİ",
+    "riskBlocking": "ENGELLİYOR",
+    "riskClear": "TEMİZ",
+    "blockers_one": "{{count}} engel",
+    "blockers_other": "{{count}} engel",
+    "doneCount_one": "{{count}} tamamlandı",
+    "doneCount_other": "{{count}} tamamlandı",
+    "successors_one": "{{count}} ardıl",
+    "successors_other": "{{count}} ardıl",
+    "none": "Yok",
+    "focusBadge": "Odak",
+    "tooltipBlocker": "• #{{id}} {{title}} ({{state}} - Engel)",
+    "tooltipDone": "• #{{id}} {{title}} ({{state}} - Tamamlandı)",
+    "tooltipSuccessor": "• #{{id}} {{title}} ({{state}})",
+    "noMatch": "Aktif matris filtresiyle eşleşen öğe yok.",
+    "showing_one": "Matriste {{count}} bağımlı öğe gösteriliyor",
+    "showing_other": "Matriste {{count}} bağımlı öğe gösteriliyor"
+  },
+  "legend": {
+    "left": "Sol: Öncül İşler",
+    "right": "Sağ: Ardıl İşler",
+    "overview": "Graf Özeti",
+    "center": "Merkez Odak",
+    "blocked": "Engellenen",
+    "blocking": "Engelliyor",
+    "active": "Aktif / Bitti",
+    "centerFocusedItem": "Merkez: Odaklanılan İş"
+  },
+  "node": {
+    "selected": "Seçili",
+    "focusTitle": "Grafı bu işe odakla",
+    "blockedTip": "Engelli: Tamamlanmamış öncül iş bekleniyor",
+    "blockingTip": "Engelliyor: Bu işi bekleyen ardıl işler var",
+    "unresolved": "Çözümlenemedi",
+    "unresolvedTitle": "Çözümlenemeyen iş",
+    "unresolvedTip": "Bu iş Azure DevOps'tan okunamadı (silinmiş, erişilemez veya henüz senkronize edilmemiş). Durumu bilinmiyor.",
+    "unresolvedPredecessor": "Çözümlenemeyen öncül",
+    "unresolvedPredecessorTip": "Bu işin durumu doğrulanamayan en az bir öncülü var. Engellenmiş olup olmadığı kesin değil."
+  },
+  "filters": {
+    "all": "Tümü"
+  }
+}

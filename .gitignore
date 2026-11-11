@@ -1,0 +1,81 @@
+# ---------- Secrets ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.token
+secrets/
+
+# ---------- Node ----------
+node_modules/
+dist/
+dist-ssr/
+build/
+coverage/
+.vite/
+.eslintcache
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ---------- Python ----------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------- Database / cache ----------
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+
+# ---------- Runtime ----------
+*.log
+logs/
+tmp/
+temp/
+*.pid
+
+# ---------- Backups & archives ----------
+backups/
+*.zip
+*.tgz
+*.tar.gz
+
+# ---------- Test artifacts ----------
+screenshots/
+playwright-report/
+test-results/
+.playwright-mcp/
+
+# ---------- IDE ----------
+.vs/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.sw?
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.superpowers/
+
+# ---------- Local agent workspaces / generated artifacts ----------
+.worktrees/
+.local/

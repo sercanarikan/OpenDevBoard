@@ -1,0 +1,70 @@
+{
+  "title": "Deployment Metrics",
+  "subtitle": "Ortam bazlı sürüm dağıtımları, sıklığı ve başarı metrikleri",
+  "summary": {
+    "totalDeployments": "Toplam Dağıtım",
+    "succeeded": "Başarılı Dağıtım",
+    "failed": "Hatalı Dağıtım",
+    "inProgress": "Devam Eden",
+    "successRate": "Başarı Oranı",
+    "period7d": "Son 7 Gün",
+    "period30d": "Son 30 Gün",
+    "environments": "Ortam Dağılımı"
+  },
+  "filters": {
+    "all": "Tümü",
+    "environmentLabel": "Ortam:",
+    "statusLabel": "Durum:",
+    "periodLabel": "Dönem:",
+    "searchPlaceholder": "Sürüm adı, pipeline veya ortam ara...",
+    "showAllEnvs": "Tüm Ortamları Göster ({{count}})",
+    "showLessEnvs": "Daha Az Göster",
+    "searchEnvsPlaceholder": "Ortam filtrele...",
+    "clearFilter": "Filtreyi Temizle"
+  },
+  "sections": {
+    "trend": "Günlük Dağıtım Trendi",
+    "projectBreakdown": "Proje Dağılımı",
+    "environments": "Hedef Ortam Filtreleri"
+  },
+  "columns": {
+    "release": "Sürüm (Release)",
+    "pipeline": "Release Pipeline",
+    "environment": "Hedef Ortam",
+    "project": "Proje",
+    "status": "Durum",
+    "duration": "Süre",
+    "deployedBy": "Dağıtımı Başlatan",
+    "date": "Tarih"
+  },
+  "status": {
+    "succeeded": "Başarılı",
+    "failed": "Hatalı",
+    "inProgress": "Devam Ediyor",
+    "notDeployed": "Dağıtılmadı",
+    "canceled": "İptal Edildi"
+  },
+  "inspector": {
+    "title": "Dağıtım Detayı",
+    "openInDevops": "Azure DevOps Release'te Aç",
+    "releaseInfo": "Sürüm Bilgileri",
+    "releaseName": "Release Adı",
+    "definition": "Tanım",
+    "environment": "Hedef Ortam",
+    "attempt": "Deneme (Attempt)",
+    "timing": "Zamanlama",
+    "startedOn": "Başlangıç",
+    "completedOn": "Tamamlanma",
+    "duration": "Dağıtım Süresi",
+    "deployedBy": "Tetikleyen Kullanıcı"
+  },
+  "sources": {
+    "supportedNote": "Desteklenen Kaynak: Classic Release Deployments (Azure DevOps VSRM API). YAML Environments organizasyonda yapılandırılmamışsa listelenmez."
+  },
+  "empty": {
+    "noDeployments": "Seçilen ortam ve döneme uygun dağıtım kaydı bulunamadı.",
+    "loading": "Dağıtım metrikleri yükleniyor…",
+    "loadFailed": "Dağıtım metrikleri yüklenemedi.",
+    "retry": "Tekrar Dene"
+  }
+}

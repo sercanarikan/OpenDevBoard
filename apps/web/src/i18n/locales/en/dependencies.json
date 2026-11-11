@@ -1,0 +1,115 @@
+{
+  "tabs": {
+    "graph": "Interactive Graph",
+    "matrix": "Dependency Matrix"
+  },
+  "hops": {
+    "oneHop": "1-Hop",
+    "twoHops": "2-Hops",
+    "fullChain": "Full Chain",
+    "connected": "Connected Network",
+    "fit": "Fit",
+    "centerOnFocus": "Center",
+    "centerOnFocusTitle": "Center viewport on focused item",
+    "label": "Hops:",
+    "hideCompleted": "Hide Completed",
+    "hideCompletedTitle": "Hide dependencies that are already completed",
+    "fitTitle": "Fit graph to view",
+    "fullChainTitle": "Full dependency chain (upstream and downstream)",
+    "connectedTitle": "Shows all work items directly or indirectly connected to the focused item, including sibling branches.",
+    "oneHopTitle": "Direct immediate dependencies (1 hop)",
+    "twoHopsTitle": "Extended 2-hop dependencies"
+  },
+  "focus": {
+    "centerFocus": "Center Focus",
+    "switchFocus": "Switch Focus",
+    "leftPredecessors": "Left: Predecessors",
+    "rightSuccessors": "Right: Successors",
+    "renderingInfo": "Graph rendering {{nodes}} connected nodes and {{edges}} dependency edges",
+    "hint": "Single-click selects and inspects details; Use \"Set as Center Focus\" to re-anchor graph",
+    "centerLabel": "Center Focus:",
+    "switchLabel": "Switch Focus:",
+    "searchMatrix": "Search matrix by title, ID, assignee...",
+    "inspecting": "Inspecting:",
+    "switchAria": "Switch focused work item in dependency graph",
+    "scopeTip": "This graph shows the dependency chain of the focused work item. Use the Dependency Matrix to explore dependencies across the organization.",
+    "scopeTipConnected": "Shows all work items directly or indirectly connected to the focused item, including sibling branches. Use the Dependency Matrix to explore other dependencies.",
+    "scopeTipFullChain": "Shows the full upstream predecessor and downstream successor impact chain. Use Connected Network for sibling branches.",
+    "scopeTipHops": "Shows direct dependencies of the focused item. Use Connected Network to explore sibling branches.",
+    "focusDetails": "Focus: #{{id}} · {{hopLabel}} · {{nodes}} Work Items · {{edges}} Dependencies",
+    "focusInGraph": "Focus in Graph",
+    "graphUpdating": "Updating graph…"
+  },
+  "graph": {
+    "noDependencies": "No dependencies found for this task in the current scope.",
+    "loading": "Loading relationship data…",
+    "loadFailed": "Could not load relationship data",
+    "retry": "Retry"
+  },
+  "alert": {
+    "title": "Circular Dependency Detected:",
+    "cycleLoop": "Cycle loop: {{path}}"
+  },
+  "overview": {
+    "title": "Graph Overview",
+    "center": "Center Focus",
+    "blocked": "Blocked",
+    "blocking": "Blocking",
+    "active": "Active / Done"
+  },
+  "matrix": {
+    "title": "Dependency Matrix",
+    "sourceItem": "Source Item (Blocking)",
+    "targetItem": "Target Item (Blocked)",
+    "type": "Relation Type",
+    "status": "Status",
+    "colId": "ID",
+    "colWorkItem": "Work Item",
+    "colState": "State",
+    "colPredecessors": "Predecessors",
+    "colSuccessors": "Successors",
+    "colRisk": "Block Risk",
+    "colAssignee": "Assignee",
+    "riskBlocked": "BLOCKED",
+    "riskBlocking": "BLOCKING",
+    "riskClear": "CLEAR",
+    "blockers_one": "{{count}} Blocker",
+    "blockers_other": "{{count}} Blockers",
+    "doneCount_one": "{{count}} Done",
+    "doneCount_other": "{{count}} Done",
+    "successors_one": "{{count}} Successor",
+    "successors_other": "{{count}} Successors",
+    "none": "None",
+    "focusBadge": "Focus",
+    "tooltipBlocker": "• #{{id}} {{title}} ({{state}} - Blocker)",
+    "tooltipDone": "• #{{id}} {{title}} ({{state}} - Done)",
+    "tooltipSuccessor": "• #{{id}} {{title}} ({{state}})",
+    "noMatch": "No items match the active matrix filter.",
+    "showing_one": "Showing {{count}} dependent item in matrix",
+    "showing_other": "Showing {{count}} dependent items in matrix"
+  },
+  "legend": {
+    "left": "Left: Predecessors",
+    "right": "Right: Successors",
+    "overview": "Graph Overview",
+    "center": "Center Focus",
+    "blocked": "Blocked",
+    "blocking": "Blocking",
+    "active": "Active / Done",
+    "centerFocusedItem": "Center: Focused Item"
+  },
+  "node": {
+    "selected": "Selected",
+    "focusTitle": "Focus Graph on this Task",
+    "blockedTip": "Blocked: Awaiting uncompleted predecessor task",
+    "blockingTip": "Blocking: Has successors waiting on this task",
+    "unresolved": "Unresolved",
+    "unresolvedTitle": "Unresolved work item",
+    "unresolvedTip": "This item could not be read from Azure DevOps (deleted, inaccessible or not synced yet). Its state is unknown.",
+    "unresolvedPredecessor": "Unresolved predecessor",
+    "unresolvedPredecessorTip": "At least one predecessor of this item could not be verified, so whether it is blocked is not certain."
+  },
+  "filters": {
+    "all": "All"
+  }
+}

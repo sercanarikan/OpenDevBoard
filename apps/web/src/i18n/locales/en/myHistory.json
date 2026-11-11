@@ -1,0 +1,33 @@
+{
+  "title": "My History",
+  "subtitle": "Your completed work items, commits, and code review activity across Azure DevOps",
+  "summary": {
+    "totalEvents": "Total Activity",
+    "completedWorkItems": "Completed Items",
+    "commits": "Commits",
+    "pullRequests": "Pull Requests",
+    "reviews": "Reviews",
+    "period7d": "Last 7 Days",
+    "period30d": "Last 30 Days"
+  },
+  "timeline": {
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "thisWeek": "This Week",
+    "earlier": "Earlier"
+  },
+  "filters": {
+    "all": "All Activities",
+    "workItem": "Work Items",
+    "commit": "Commits",
+    "pullRequest": "Pull Requests",
+    "review": "Reviews",
+    "searchPlaceholder": "Search activity, item ID, or commit..."
+  },
+  "empty": {
+    "noEvents": "No activity found for the selected filter and period.",
+    "loading": "Loading your personal activity history…",
+    "loadFailed": "Failed to load activity history.",
+    "retry": "Retry"
+  }
+}

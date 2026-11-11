@@ -1,0 +1,67 @@
+{
+  "title": "Pull Requests",
+  "subtitle": "Azure DevOps code reviews and active merge requests",
+  "filters": {
+    "needsMyReview": "Needs My Review",
+    "createdByMe": "Created by Me",
+    "involved": "Involved",
+    "all": "All",
+    "statusLabel": "Status:",
+    "searchPlaceholder": "Search by title, ID, author, or repository..."
+  },
+  "status": {
+    "active": "Active (Open)",
+    "completed": "Completed (Merged)",
+    "abandoned": "Abandoned (Closed)",
+    "all": "All Statuses",
+    "draft": "Draft"
+  },
+  "columns": {
+    "pr": "PR",
+    "title": "Title",
+    "repoBranch": "Repository & Branch",
+    "author": "Author",
+    "reviewers": "Reviewers",
+    "status": "Status",
+    "date": "Date"
+  },
+  "votes": {
+    "approved": "Approved",
+    "approvedWithSuggestions": "Approved with suggestions",
+    "waitingForAuthor": "Waiting for author",
+    "rejected": "Rejected",
+    "noVote": "Waiting for review"
+  },
+  "inspector": {
+    "title": "Pull Request Details",
+    "openInDevops": "Open in Azure DevOps",
+    "branches": "Branches & Merging",
+    "sourceBranch": "Source Branch",
+    "targetBranch": "Target Branch",
+    "mergeStatus": "Merge / Conflict Check",
+    "mergeNoConflicts": "No conflicts (Mergeable)",
+    "mergeHasConflicts": "Conflicts detected",
+    "mergeQueued": "Check queued",
+    "mergeNotSet": "Not checked",
+    "author": "Author",
+    "created": "Created",
+    "closed": "Closed",
+    "reviewers": "Reviewers",
+    "required": "Required",
+    "description": "Description",
+    "noDescription": "No description provided.",
+    "workItems": "Linked Work Items",
+    "noWorkItems": "No linked work items.",
+    "inspectWorkItem": "Inspect Work Item"
+  },
+  "empty": {
+    "noPRs": "No Pull Requests match the active filters.",
+    "loading": "Loading pull requests…",
+    "loadFailed": "Failed to load pull requests.",
+    "retry": "Retry"
+  },
+  "summary": {
+    "totalMatching": "Showing {{total}} pull requests",
+    "reviewPendingCount": "{{count}} awaiting review"
+  }
+}

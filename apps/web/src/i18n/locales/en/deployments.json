@@ -1,0 +1,70 @@
+{
+  "title": "Deployment Metrics",
+  "subtitle": "Environment-based release deployments, frequency, and success metrics",
+  "summary": {
+    "totalDeployments": "Total Deployments",
+    "succeeded": "Successful Deployments",
+    "failed": "Failed Deployments",
+    "inProgress": "In Progress",
+    "successRate": "Success Rate",
+    "period7d": "Last 7 Days",
+    "period30d": "Last 30 Days",
+    "environments": "Environment Distribution"
+  },
+  "filters": {
+    "all": "All",
+    "environmentLabel": "Environment:",
+    "statusLabel": "Status:",
+    "periodLabel": "Period:",
+    "searchPlaceholder": "Search by release name, pipeline, or environment...",
+    "showAllEnvs": "Show All Environments ({{count}})",
+    "showLessEnvs": "Show Less",
+    "searchEnvsPlaceholder": "Filter environments...",
+    "clearFilter": "Clear Filter"
+  },
+  "sections": {
+    "trend": "Daily Deployment Trend",
+    "projectBreakdown": "Project Breakdown",
+    "environments": "Target Environment Filters"
+  },
+  "columns": {
+    "release": "Release",
+    "pipeline": "Release Pipeline",
+    "environment": "Target Environment",
+    "project": "Project",
+    "status": "Status",
+    "duration": "Duration",
+    "deployedBy": "Deployed By",
+    "date": "Date"
+  },
+  "status": {
+    "succeeded": "Succeeded",
+    "failed": "Failed",
+    "inProgress": "In Progress",
+    "notDeployed": "Not Deployed",
+    "canceled": "Canceled"
+  },
+  "inspector": {
+    "title": "Deployment Details",
+    "openInDevops": "Open in Azure DevOps Release",
+    "releaseInfo": "Release Information",
+    "releaseName": "Release Name",
+    "definition": "Definition",
+    "environment": "Target Environment",
+    "attempt": "Attempt",
+    "timing": "Timing",
+    "startedOn": "Started On",
+    "completedOn": "Completed On",
+    "duration": "Deployment Duration",
+    "deployedBy": "Deployed By"
+  },
+  "sources": {
+    "supportedNote": "Supported Source: Classic Release Deployments (Azure DevOps VSRM API). If YAML Environments are not configured in your organization, they will not be listed."
+  },
+  "empty": {
+    "noDeployments": "No deployment records match the active environment and period.",
+    "loading": "Loading deployment metrics…",
+    "loadFailed": "Failed to load deployment metrics.",
+    "retry": "Retry"
+  }
+}
