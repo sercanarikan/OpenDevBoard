@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Search,
@@ -46,13 +46,28 @@ export const DeploymentExplorer: React.FC = () => {
   const [page, setPage] = useState(1);
   const pageSize = 25;
 
-  const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
-  const [total, setTotal] = useState(0);
-  const [summary, setSummary] = useState<DeploymentSummary | null>(null);
-
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [selectionScope, setSelectionScope] = useState<string | null>(null);
+  const scope = JSON.stringify([filters.selectedProject, envFilter, statusFilter, debouncedSearch, days, page]);
+  // A selection belongs to one continuous visit to a scope, not future visits to the same scope.
+  if (selectionScope !== null && selectionScope !== scope) {
+    setSelectionScope(null);
+  }
+  const request = useMemo(() => ({ scope, api, refreshToken, refreshNonce }), [scope, api, refreshToken, refreshNonce]);
+  const [result, setResult] = useState<{
+    request: typeof request;
+    scope: string;
+    deployments: DeploymentRecord[];
+    total: number;
+    summary: DeploymentSummary | null;
+    error: string | null;
+  } | null>(null);
+  const sameScope = result?.scope === scope;
+  const deployments = sameScope ? result.deployments : [];
+  const total = sameScope ? result.total : 0;
+  const summary = sameScope ? result.summary : null;
+  const loading = result?.request !== request;
+  const error = loading ? null : result?.error ?? null;
 
   // Debounce search
   useEffect(() => {
@@ -63,41 +78,35 @@ export const DeploymentExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const fetchDeployments = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const offset = (page - 1) * pageSize;
-      const res = await api.deployments(
-        {
-          project: filters.selectedProject,
-          environment: envFilter,
-          status: statusFilter,
-          search: debouncedSearch,
-          days,
-          limit: pageSize,
-          offset
-        },
-        signal
-      );
-      setDeployments(res.items);
-      setTotal(res.total);
-      if (res.summary) {
-        setSummary(res.summary);
-      }
-      setLoading(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setError(e?.message || 'Failed to load deployment records');
-      setLoading(false);
-    }
-  }, [api, filters.selectedProject, envFilter, statusFilter, debouncedSearch, days, page]);
-
   useEffect(() => {
     const ctrl = new AbortController();
-    fetchDeployments(ctrl.signal);
+    const offset = (page - 1) * pageSize;
+    api.deployments({
+      project: filters.selectedProject,
+      environment: envFilter,
+      status: statusFilter,
+      search: debouncedSearch,
+      days,
+      limit: pageSize,
+      offset
+    }, ctrl.signal).then(res => {
+      if (ctrl.signal.aborted) return;
+      setResult(previous => ({
+        request, scope, deployments: res.items, total: res.total,
+        summary: res.summary ?? (previous?.scope === scope ? previous.summary : null), error: null
+      }));
+    }).catch((e: any) => {
+      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+      setResult(previous => ({
+        request, scope,
+        deployments: previous?.scope === scope ? previous.deployments : [],
+        total: previous?.scope === scope ? previous.total : 0,
+        summary: previous?.scope === scope ? previous.summary : null,
+        error: e?.message || 'Failed to load deployment records'
+      }));
+    });
     return () => ctrl.abort();
-  }, [fetchDeployments, refreshToken, refreshNonce]);
+  }, [api, filters.selectedProject, envFilter, statusFilter, debouncedSearch, days, page, request, scope]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -521,12 +530,12 @@ export const DeploymentExplorer: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                   {deployments.map(dep => {
-                    const isSelected = selectedDeployment?.id === dep.id;
+                    const isSelected = selectionScope === scope && selectedDeployment?.id === dep.id;
 
                     return (
                       <tr
                         key={dep.id}
-                        onClick={() => setSelectedDeployment(dep)}
+                        onClick={() => { setSelectionScope(scope); setSelectedDeployment(dep); }}
                         data-testid="deployment-row"
                         data-id={dep.id}
                         className={`cursor-pointer transition-colors ${
@@ -584,7 +593,7 @@ export const DeploymentExplorer: React.FC = () => {
         </div>
 
         {/* Right Detail Inspector */}
-        {selectedDeployment && (
+        {selectedDeployment && selectionScope === scope && (
           <DeploymentInspector deployment={selectedDeployment} onClose={() => setSelectedDeployment(null)} />
         )}
       </div>

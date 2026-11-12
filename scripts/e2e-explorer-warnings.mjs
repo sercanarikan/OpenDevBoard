@@ -44,6 +44,135 @@ try {
   console.error(error);
   total++;
 } finally {
+  await page.close();
+}
+// Hold synthetic responses even after abort to exercise stale-response guards.
+const controlled = await browser.newPage();
+await controlled.addInitScript(() => {
+  const fetchOriginal = window.fetch.bind(window);
+  window.deploymentRequests = [];
+  window.fetch = (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    if (url.pathname !== '/api/deployments') return fetchOriginal(input, init);
+    return new Promise(resolve => window.deploymentRequests.push({ resolve, signal: init?.signal, url: url.href }));
+  };
+  window.answerDeployment = (index, status, body) => window.deploymentRequests[index].resolve(
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  );
+});
+const waitRequest = n => controlled.waitForFunction(n => window.deploymentRequests.length >= n, n);
+const answer = (index, status, body) => controlled.evaluate(({ index, status, body }) => window.answerDeployment(index, status, body), { index, status, body });
+const response = (name, total = 1) => ({
+  items: [{ id: name, releaseName: name, definitionName: name, project: 'Fixture', environmentName: 'Environment 1', status: 'succeeded', durationSeconds: 1, requestedBy: 'Fixture', startedOn: '' }],
+  total, limit: 25, offset: 0, hasMore: total > 25,
+  summary: { periodDays: 30, totalDeployments: total, succeeded: total, failed: 0, inProgress: 0, successRate: 100,
+    environments: [{ name: 'Environment 1', total, succeeded: total, failed: 0, inProgress: 0, successRate: 100 }], dailyStats: [] }, dataScope: 'fixture'
+});
+try {
+  await controlled.goto(`${web}/deployments`, { waitUntil: 'domcontentloaded' });
+  await waitRequest(1);
+  check('initial request displays loading', await controlled.getByTestId('deployment-loading').isVisible());
+  await answer(0, 200, response('Initial', 50));
+  await controlled.getByText('Initial', { exact: true }).first().waitFor();
+  await controlled.getByTestId('env-chip').filter({ hasText: 'Environment 1' }).click();
+  await waitRequest(2);
+  check('filter change hides previous scope while loading', await controlled.getByText('Initial', { exact: true }).count() === 0);
+  await answer(1, 200, response('Filtered', 50));
+  await controlled.getByText('Filtered', { exact: true }).first().waitFor();
+  await controlled.getByTestId('deployment-row').first().click();
+  await controlled.getByTestId('deployment-inspector').waitFor();
+  await controlled.getByTitle('Yenile', { exact: true }).last().click();
+  await waitRequest(3);
+  check('same-scope refresh retains rows and selected deployment', await controlled.getByTestId('deployment-row').first().isVisible() && await controlled.getByTestId('deployment-inspector').isVisible());
+  await controlled.getByTitle('Yenile', { exact: true }).last().click();
+  await waitRequest(4);
+  await answer(3, 200, response('Newest', 50));
+  await controlled.getByText('Newest', { exact: true }).first().waitFor();
+  await answer(2, 200, response('Stale'));
+  await controlled.waitForTimeout(100);
+  check('late success cannot overwrite newer response', await controlled.getByText('Newest', { exact: true }).count() > 0 && await controlled.getByText('Stale', { exact: true }).count() === 0);
+  check('selected environment survives refresh', await controlled.getByTestId('env-chip').filter({ hasText: 'Environment 1' }).count() === 1 && await controlled.getByText('Filtreyi Temizle').count() === 1);
+  await controlled.getByTitle('Yenile', { exact: true }).last().click();
+  await waitRequest(5);
+  await controlled.getByTitle('Yenile', { exact: true }).last().click();
+  await waitRequest(6);
+  await answer(5, 200, response('Latest', 50));
+  await controlled.getByText('Latest', { exact: true }).first().waitFor();
+  await answer(4, 500, { error: 'Stale error' });
+  await controlled.waitForTimeout(100);
+  check('late failure cannot replace newer response', await controlled.getByTestId('deployment-error').count() === 0 && await controlled.getByText('Latest', { exact: true }).count() > 0);
+  await controlled.getByLabel('Next Page').click();
+  await waitRequest(7);
+  check('pagination hides previous page while loading', await controlled.getByText('Latest', { exact: true }).count() === 0);
+  await answer(6, 500, { error: 'Fixture error' });
+  await controlled.getByTestId('deployment-error').waitFor();
+  check('request error is visible', await controlled.getByTestId('deployment-error').isVisible());
+  await controlled.getByTestId('deployment-error').getByRole('button').click();
+  await waitRequest(8);
+  await answer(7, 200, response('Retried'));
+  await controlled.getByText('Retried', { exact: true }).first().waitFor();
+  check('retry recovers', true);
+  const projects = controlled.getByTestId('header').locator('select').first();
+  await controlled.waitForFunction(() => [...document.querySelectorAll('[data-testid="header"] select option')].some(o => o.value !== 'all'));
+  const project = await projects.locator('option').evaluateAll(options => options.find(o => o.value !== 'all').value);
+  await projects.selectOption(project);
+  await waitRequest(9);
+  check('project change hides prior project data', await controlled.getByText('Retried', { exact: true }).count() === 0);
+  await controlled.getByTestId('nav-explorer').click();
+  await controlled.waitForURL(url => url.pathname === '/tasks');
+  await controlled.waitForFunction(() => window.deploymentRequests[8].signal.aborted);
+  check('unmount aborts pending request', true);
+  await answer(8, 500, { error: 'Unmounted error' });
+} catch (error) {
+  console.error(error);
+  total++;
+}
+// Selection is invalidated by leaving its scope, even if that scope is later revisited.
+try {
+  await controlled.goto(`${web}/deployments`, { waitUntil: 'domcontentloaded' });
+  await waitRequest(1);
+  await answer(0, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().click();
+  await controlled.getByTestId('deployment-inspector').waitFor();
+  await controlled.getByTestId('env-chip').first().click();
+  await waitRequest(2);
+  check('filter change hides the inspector', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await answer(1, 200, response('Selection B', 50));
+  await controlled.getByTestId('env-chip').first().click();
+  await waitRequest(3);
+  await answer(2, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().waitFor();
+  check('returning to a filter does not resurrect selection', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await controlled.getByTestId('deployment-row').first().click();
+  await controlled.getByLabel('Next Page').click();
+  await waitRequest(4);
+  await answer(3, 200, response('Page 2', 50));
+  await controlled.getByLabel('Previous Page').click();
+  await waitRequest(5);
+  await answer(4, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().waitFor();
+  check('returning to a page does not resurrect selection', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await controlled.getByTestId('deployment-row').first().click();
+  const projects = controlled.getByTestId('header').locator('select').first();
+  await controlled.waitForFunction(() => [...document.querySelectorAll('[data-testid="header"] select option')].some(o => o.value !== 'all'));
+  const project = await projects.locator('option').evaluateAll(options => options.find(o => o.value !== 'all').value);
+  await projects.selectOption(project);
+  await waitRequest(6);
+  await answer(5, 200, response('Other project', 50));
+  await projects.selectOption('all');
+  await waitRequest(7);
+  await answer(6, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().waitFor();
+  check('returning to a project does not resurrect selection', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await controlled.getByTestId('deployment-row').first().click();
+  await controlled.getByTestId('nav-dashboard').click();
+  await controlled.waitForURL(url => url.pathname === '/dashboard');
+  check('dashboard retains the shared explicitly selected deployment', await controlled.getByTestId('deployment-inspector').isVisible());
+} catch (error) {
+  console.error(error);
+  total++;
+} finally {
+  await controlled.close();
   await browser.close();
 }
 console.log(`SUMMARY ${passed}/${total}`);
