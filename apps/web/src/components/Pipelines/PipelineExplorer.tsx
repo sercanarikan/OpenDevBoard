@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   PlayCircle,
@@ -38,8 +38,7 @@ export const PipelineExplorer: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<PipelineSummary | null>(null);
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Debounce search
@@ -51,40 +50,40 @@ export const PipelineExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const fetchPipelines = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const offset = (page - 1) * pageSize;
-      const res = await api.pipelines(
-        {
-          project: filters.selectedProject,
-          result: resultFilter,
-          search: debouncedSearch,
-          days,
-          limit: pageSize,
-          offset
-        },
-        signal
-      );
-      setRuns(res.items);
-      setTotal(res.total);
-      if (res.summary) {
-        setSummary(res.summary);
-      }
-      setLoading(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setError(e?.message || 'Failed to load pipeline runs');
-      setLoading(false);
-    }
+  const fetchPipelines = useCallback((signal: AbortSignal) => {
+    const offset = (page - 1) * pageSize;
+    return api.pipelines(
+      {
+        project: filters.selectedProject,
+        result: resultFilter,
+        search: debouncedSearch,
+        days,
+        limit: pageSize,
+        offset
+      },
+      signal
+    );
   }, [api, filters.selectedProject, resultFilter, debouncedSearch, days, page]);
+
+  // A changed request is loading until that specific request settles.
+  const request = useMemo(() => ({ fetchPipelines, refreshToken, refreshNonce }), [fetchPipelines, refreshToken, refreshNonce]);
+  const loading = settled?.request !== request;
+  const error = loading ? null : settled.error;
 
   useEffect(() => {
     const ctrl = new AbortController();
-    fetchPipelines(ctrl.signal);
+    request.fetchPipelines(ctrl.signal).then(res => {
+      if (ctrl.signal.aborted) return;
+      setRuns(res.items);
+      setTotal(res.total);
+      if (res.summary) setSummary(res.summary);
+      setSettled({ request, error: null });
+    }, (e: any) => {
+      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+      setSettled({ request, error: e?.message || 'Failed to load pipeline runs' });
+    });
     return () => ctrl.abort();
-  }, [fetchPipelines, refreshToken, refreshNonce]);
+  }, [request]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
