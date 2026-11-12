@@ -399,7 +399,7 @@ export const PipelineExplorer: React.FC = () => {
       {/* 4. Footer Pagination Bar */}
       <div className="h-9 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] px-5 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 select-none shrink-0">
         <div className="flex items-center gap-3">
-          <span>{loading && runs.length === 0 ? '—' : `${total} pipeline koşumu gösteriliyor`}</span>
+          <span>{loading && runs.length === 0 ? '—' : t('runCount', { count: total })}</span>
           {filters.selectedProject !== 'all' && (
             <span>• {t('filters.project', { ns: 'kanban', project: filters.selectedProject })}</span>
           )}

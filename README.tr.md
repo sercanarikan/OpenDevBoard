@@ -4,6 +4,8 @@
 
 Azure DevOps için açık kaynaklı gösterge paneli. OpenDevBoard; iş öğelerini, pull request'leri, pipeline'ları, dağıtımları, ekip etkinliğini ve geçmişi yerel önbellekle desteklenen modern bir web arayüzünde sunar. Azure DevOps ile tüm etkileşimler salt okunurdur.
 
+![Dashboard — koyu tema](docs/screenshots/dashboard-dark-tr.png)
+
 ## Özellikler
 
 - Azure DevOps iş öğelerini ve pull request'leri görüntüleme.
@@ -12,16 +14,15 @@ Azure DevOps için açık kaynaklı gösterge paneli. OpenDevBoard; iş öğeler
 - Türkçe veya İngilizce arayüzü, açık ya da koyu temayla kullanma.
 - Deterministik demo verisiyle çalıştırma veya Azure DevOps organizasyonuna bağlanma.
 
-## Mimari
+## Ekran Görüntüleri
 
-Public Edition; React 19, TypeScript, Vite ve Tailwind kullanan bir frontend ile Python 3.12 Flask backend'inden oluşur. Frontend nginx üzerinden sunulur ve `/api` isteklerini ters vekil aracılığıyla backend'e iletir. Azure DevOps ile bağlantı kuran ve SQLite önbelleğini tutan tek bileşen backend'dir. Docker Compose `web` ve `api` servislerini çalıştırır; API portu host'a açılmaz.
+Görüntüler sentetik fixture verileriyle oluşturulmuştur.
 
-## Gereksinimler
-
-- Tam yığını çalıştırmak için Docker Engine ve Docker Compose v2 (önerilir)
-- Yerel frontend geliştirme için Node.js 22 ve npm
-- Yerel backend geliştirme için Python 3.12
-- Canlı Azure DevOps verisi için organizasyon URL'si ve en az yetkili, salt okunur Personal Access Token (PAT)
+| Dashboard Açık Tema | Görev Gezgini |
+| --- | --- |
+| ![Dashboard açık tema](docs/screenshots/dashboard-light-tr.png) | ![Görev Gezgini](docs/screenshots/task-explorer-tr.png) |
+| Kanban | Pipeline'lar |
+| ![Kanban](docs/screenshots/kanban-tr.png) | ![Pipeline'lar](docs/screenshots/pipelines-tr.png) |
 
 ## Docker Compose ile hızlı başlangıç
 
@@ -34,6 +35,17 @@ docker compose up --build -d
 <http://localhost:5174> adresini açın. Servis sağlığını `docker compose ps`, backend günlüklerini `docker compose logs api` ile kontrol edin. Yığını `docker compose down` ile durdurun; bu komut projeye ait SQLite cache volume'ünü korur. Canlı Azure DevOps verisi için yok sayılan kök `.env` dosyasında `DEVOPS_FIXTURE_MODE=0`, `AZURE_DEVOPS_ORG_URL` ve salt okunur `AZURE_DEVOPS_PAT` değerlerini ayarlayın. Dağıtılan `.env.example` dosyasında placeholder değer bulunmaz.
 
 Servis ve ortam ayrıntıları için [Docker kurulum kılavuzuna](docs/docker-setup.tr.md) bakın.
+
+## Mimari
+
+Public Edition; React 19, TypeScript, Vite ve Tailwind kullanan bir frontend ile Python 3.12 Flask backend'inden oluşur. Frontend nginx üzerinden sunulur ve `/api` isteklerini ters vekil aracılığıyla backend'e iletir. Azure DevOps ile bağlantı kuran ve SQLite önbelleğini tutan tek bileşen backend'dir. Docker Compose `web` ve `api` servislerini çalıştırır; API portu host'a açılmaz.
+
+## Gereksinimler
+
+- Tam yığını çalıştırmak için Docker Engine ve Docker Compose v2 (önerilir)
+- Yerel frontend geliştirme için Node.js 22 ve npm
+- Yerel backend geliştirme için Python 3.12
+- Canlı Azure DevOps verisi için organizasyon URL'si ve en az yetkili, salt okunur Personal Access Token (PAT)
 
 ## Azure DevOps salt okunur PAT
 

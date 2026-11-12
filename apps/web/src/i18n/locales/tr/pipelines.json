@@ -1,4 +1,6 @@
 {
+  "runCount_one": "{{count}} pipeline koşumu gösteriliyor",
+  "runCount_other": "{{count}} pipeline koşumu gösteriliyor",
   "title": "Pipeline Health",
   "subtitle": "CI/CD derleme ve test pipeline çalıştırmalarının sağlık durumu",
   "summary": {

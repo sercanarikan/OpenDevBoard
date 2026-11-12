@@ -4,6 +4,8 @@
 
 Open-Source Dashboard for Azure DevOps. OpenDevBoard is a read-only dashboard for Azure DevOps teams. It presents work items, pull requests, pipelines, deployments, team activity, and history through a modern web interface backed by a local cache.
 
+![Dashboard — dark theme](docs/screenshots/dashboard-dark-en.png)
+
 ## Features
 
 - Browse Azure DevOps work items and pull requests.
@@ -12,16 +14,15 @@ Open-Source Dashboard for Azure DevOps. OpenDevBoard is a read-only dashboard fo
 - Use the interface in Turkish or English, with light and dark themes.
 - Run against deterministic demo data or connect to an Azure DevOps organization.
 
-## Architecture
+## Screenshots
 
-The Public Edition consists of a React 19, TypeScript, Vite, and Tailwind frontend and a Python 3.12 Flask backend. The frontend is served by nginx and sends `/api` requests through its reverse proxy to the backend. The backend is the only component that contacts Azure DevOps and stores its cache in SQLite. Docker Compose runs the `web` and `api` services; the API port is not published to the host.
+Screenshots use synthetic fixture data.
 
-## Requirements
-
-- Docker Engine with Docker Compose v2 (recommended for the complete stack)
-- For local frontend development: Node.js 22 and npm
-- For local backend development: Python 3.12
-- For live Azure DevOps data: an organization URL and a minimally privileged, read-only Personal Access Token (PAT)
+| Dashboard Light | Task Explorer |
+| --- | --- |
+| ![Dashboard light theme](docs/screenshots/dashboard-light-en.png) | ![Task Explorer](docs/screenshots/task-explorer-en.png) |
+| Kanban | Pipelines |
+| ![Kanban](docs/screenshots/kanban-en.png) | ![Pipelines](docs/screenshots/pipelines-en.png) |
 
 ## Quick start with Docker Compose
 
@@ -34,6 +35,17 @@ docker compose up --build -d
 Open <http://localhost:5174>. Check service health with `docker compose ps` and backend logs with `docker compose logs api`. Stop the stack with `docker compose down`; this preserves the project-scoped SQLite cache volume. For live Azure DevOps data, set `DEVOPS_FIXTURE_MODE=0`, `AZURE_DEVOPS_ORG_URL`, and a read-only `AZURE_DEVOPS_PAT` in the ignored root `.env`. Placeholder values are not included in the shipped template.
 
 See [Docker setup](docs/docker-setup.md) for service and environment details.
+
+## Architecture
+
+The Public Edition consists of a React 19, TypeScript, Vite, and Tailwind frontend and a Python 3.12 Flask backend. The frontend is served by nginx and sends `/api` requests through its reverse proxy to the backend. The backend is the only component that contacts Azure DevOps and stores its cache in SQLite. Docker Compose runs the `web` and `api` services; the API port is not published to the host.
+
+## Requirements
+
+- Docker Engine with Docker Compose v2 (recommended for the complete stack)
+- For local frontend development: Node.js 22 and npm
+- For local backend development: Python 3.12
+- For live Azure DevOps data: an organization URL and a minimally privileged, read-only Personal Access Token (PAT)
 
 ## Azure DevOps read-only PAT
 
