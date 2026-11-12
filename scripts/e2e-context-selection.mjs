@@ -6,7 +6,69 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 let passed = 0;
 let total = 0;
 const check = (name, ok) => { total++; if (ok) passed++; console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); };
+async function checkWorkItemSummaries() {
+  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const warnings = [];
+  p.on('console', message => { if (message.type() === 'warning') warnings.push(message.text()); });
+  try {
+    await p.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.workSummaries = [];
+      window.fetch = (input, init) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        if (url.pathname !== '/api/work-items/summary') return originalFetch(input, init);
+        // Deliberately ignore abort: old responses can still resolve after scope changes.
+        return new Promise(resolve => window.workSummaries.push({ resolve, signal: init?.signal, project: url.searchParams.get('project') || 'all' }));
+      };
+      window.answerWorkSummary = (index, count, status = 200) => {
+        const project = window.workSummaries[index].project;
+        const body = status === 200 ? {
+          scope: { project, total: count, myTasks: count, unassigned: 0, blocked: 0, blocking: 0, bugs: 0 },
+          facets: { types: {}, states: {}, priorities: {} },
+          projects: [{ name: 'Alpha', total: 20 }, { name: 'Beta', total: 30 }], completed: 0, dataVersion: 'fixture'
+        } : { error: 'Synthetic summary failure' };
+        window.workSummaries[index].resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
+      };
+    });
+    await p.goto(`${process.env.WEB_URL}/tasks`, { waitUntil: 'domcontentloaded' });
+    const waitRequest = (project, count) => p.waitForFunction(({ project, count }) => window.workSummaries.filter(r => r.project === project).length >= count, { project, count });
+    const indexOf = (project, occurrence) => p.evaluate(({ project, occurrence }) => window.workSummaries.map((r, i) => ({ ...r, i })).filter(r => r.project === project)[occurrence].i, { project, occurrence });
+    const answer = (index, count, status = 200) => p.evaluate(({ index, count, status }) => window.answerWorkSummary(index, count, status), { index, count, status });
+    const counter = p.getByTestId('nav-explorer');
+    await waitRequest('all', 1);
+    await answer(await indexOf('all', 0), 101);
+    await counter.getByText('101', { exact: true }).waitFor();
+    const select = p.getByTestId('header').locator('select').first();
+    await select.selectOption('Alpha');
+    await waitRequest('Alpha', 1);
+    check('project switch does not show the previous scope counters', await counter.getByText('101', { exact: true }).count() === 0);
+    await answer(await indexOf('Alpha', 0), 201);
+    await counter.getByText('201', { exact: true }).waitFor();
+    await p.getByTestId('sync-now').click();
+    await waitRequest('Alpha', 2);
+    const old = await indexOf('Alpha', 1);
+    check('refresh keeps the last successful counters for the same project', await counter.getByText('201', { exact: true }).count() === 1);
+    await select.selectOption('Beta');
+    await waitRequest('Beta', 1);
+    check('switching projects hides the old project counters while loading', await counter.getByText('201', { exact: true }).count() === 0);
+    check('superseded work-item summary receives an abort signal', await p.evaluate(index => window.workSummaries[index].signal.aborted, old));
+    await answer(await indexOf('Beta', 0), 301);
+    await counter.getByText('301', { exact: true }).waitFor();
+    await answer(old, 999);
+    await p.waitForTimeout(200);
+    check('late aborted work-item summary cannot replace the new project counters', await counter.getByText('301', { exact: true }).count() === 1 && await counter.getByText('999', { exact: true }).count() === 0);
+    await p.getByTestId('sync-now').click();
+    await waitRequest('Beta', 2);
+    await answer(await indexOf('Beta', 1), 0, 500);
+    await p.waitForTimeout(200);
+    check('summary failure retains the successful counters and reports the error', await counter.getByText('301', { exact: true }).count() === 1 && warnings.some(w => w.includes('summary failed:')));
+  } finally {
+    await p.close();
+  }
+}
+
 try {
+  await checkWorkItemSummaries();
   await page.addInitScript(() => {
     const originalFetch = window.fetch.bind(window);
     window.pendingSummaries = [];

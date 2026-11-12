@@ -151,7 +151,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentUserName, setCurrentUserName] = useState<string>('');
   const [userKnown, setUserKnown] = useState<boolean>(false);
 
-  const [summary, setSummary] = useState<SummaryResponse | null>(null);
+  const [summaryResult, setSummaryResult] = useState<{
+    data: SummaryResponse; project: string; user: string; api: WorkItemsApi;
+  } | null>(null);
+  const summary = summaryResult?.project === filters.selectedProject && summaryResult.user === currentUserName && summaryResult.api === api
+    ? summaryResult.data : null;
   const orgScope = useMemo(() => ({ booting, source }), [booting, source]);
   const [orgResult, setOrgResult] = useState<{ scope: typeof orgScope | null; names: string[] }>({ scope: null, names: [] });
   const orgProjects = orgResult.scope === orgScope ? orgResult.names : EMPTY_PROJECTS;
@@ -241,10 +245,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     api
       .summary(filters.selectedProject, currentUserName, ctrl.signal)
       .then(s => {
-        setSummary(s);
+        if (!ctrl.signal.aborted) {
+          setSummaryResult({ data: s, project: filters.selectedProject, user: currentUserName, api });
+        }
       })
       .catch(e => {
-        if (!(e instanceof ApiError && e.isAbort)) console.warn('summary failed:', errMessage(e));
+        if (!ctrl.signal.aborted && !(e instanceof ApiError && e.isAbort)) console.warn('summary failed:', errMessage(e));
       });
     return () => ctrl.abort();
   }, [api, booting, filters.selectedProject, currentUserName, refreshToken]);
@@ -479,11 +485,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const projects = useMemo(() => {
-    const base = summary?.projects ?? [];
+    const base = summaryResult?.data.projects ?? [];
     const known = new Set(base.map(p => p.name));
     const extra = orgProjects.filter(n => !known.has(n)).map(name => ({ name, total: 0 }));
     return [...base, ...extra].sort((a, b) => a.name.localeCompare(b.name));
-  }, [summary, orgProjects]);
+  }, [summaryResult, orgProjects]);
 
   const value: AppContextType = {
     theme,
