@@ -98,3 +98,5 @@ npm --prefix scripts run e2e
 On Windows PowerShell, use `npm.cmd --prefix scripts run e2e`.
 
 The runner builds and starts its own isolated Compose project, runs the sequential synthetic fixture suite including API outage/restart/recovery checks, and stops only its own containers afterward. It does not need a PAT or live Azure DevOps access. On Linux/macOS, install scripts dependencies with `npm ci --prefix scripts` and Chromium with `npm --prefix scripts exec -- playwright install chromium`. On Windows PowerShell, use `npm.cmd ci --prefix scripts` and `npm.cmd --prefix scripts exec -- playwright install chromium`. The fixture volume and other Compose projects are left untouched.
+
+The API image installs Python packages as root during its isolated build, so pip may report its root-user warning. This does not install packages on the host. The runtime user and SQLite volume permissions have not been changed merely to remove the warning; switching users requires a separate permissions and deployment review.

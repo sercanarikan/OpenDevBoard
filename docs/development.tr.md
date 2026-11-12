@@ -98,3 +98,5 @@ npm --prefix scripts run e2e
 Windows PowerShell'de `npm.cmd --prefix scripts run e2e` kullanın.
 
 Runner kendi yalıtılmış Compose projesini derleyip başlatır; API kesintisi/restart/recovery kontrolleri dahil sentetik fixture testlerini sıralı çalıştırır ve sonrasında yalnızca kendi container'larını durdurur. PAT veya canlı Azure DevOps erişimi gerekmez. Linux/macOS'ta script bağımlılıklarını `npm ci --prefix scripts`, Chromium'u `npm --prefix scripts exec -- playwright install chromium` ile kurun. Windows PowerShell'de `npm.cmd ci --prefix scripts` ve `npm.cmd --prefix scripts exec -- playwright install chromium` kullanın. Fixture volume'ü ve diğer Compose projeleri etkilenmez.
+
+API imajı, yalıtılmış derleme sırasında Python paketlerini root olarak kurduğu için pip root-user uyarısı verebilir. Bu işlem host üzerine paket kurmaz. Yalnızca uyarıyı kaldırmak için runtime kullanıcısı ve SQLite volume izinleri değiştirilmemiştir; kullanıcı değişikliği ayrı bir izin ve dağıtım incelemesi gerektirir.
