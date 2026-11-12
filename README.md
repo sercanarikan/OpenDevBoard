@@ -115,6 +115,10 @@ Report suspected vulnerabilities privately to the repository maintainer rather t
 
 The Public Edition root is distributed under the MIT License. See [LICENSE](LICENSE). That license applies only to original OpenDevBoard contributions the maintainer is authorized to license; third-party components and assets remain subject to their own terms. See [Third-party notices](docs/THIRD_PARTY_NOTICES.md).
 
+## Releases
+
+See the [release and versioning policy](docs/release-plan.md) for release criteria and publication scope.
+
 ## Contributing
 
 Contributions are welcome. Before opening a change, run the relevant frontend, backend, and fixture E2E checks; preserve the read-only Azure DevOps contract, keep secrets out of the repository, and update user-facing documentation when behavior or configuration changes. Keep changes focused and include tests for behavior changes.

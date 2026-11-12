@@ -90,6 +90,10 @@ API Compose ağı içinde kalmalıdır; güvenilmeyen ağlara doğrudan açmayı
 
 Public Edition kök dizini MIT Lisansı ile dağıtılır. Bkz. [LICENSE](LICENSE). Lisans yalnızca sorumlusunun lisanslama yetkisi olan özgün OpenDevBoard katkıları için geçerlidir; üçüncü taraf bileşen ve varlıklar kendi koşullarına tabidir. [Üçüncü taraf bildirimlerine](docs/THIRD_PARTY_NOTICES.md) bakın.
 
+## Sürümler
+
+Release kriterleri ve yayın kapsamı için [Release ve sürüm yönetimi politikasına](docs/release-plan.md) bakın.
+
 ## Katkıda bulunma
 
 Katkılarınızı bekliyoruz. Değişiklik göndermeden önce ilgili frontend, backend ve fixture E2E kontrollerini çalıştırın; Azure DevOps salt okunur sözleşmesini koruyun, secret'ları repository dışında tutun ve davranış veya yapılandırma değiştiğinde kullanıcı dokümantasyonunu güncelleyin. Değişiklikleri odaklı tutun ve davranış değişikliklerine test ekleyin.
