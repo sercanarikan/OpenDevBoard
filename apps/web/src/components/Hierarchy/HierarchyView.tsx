@@ -14,7 +14,7 @@ import {
   RotateCcw,
   ArrowDownLeft
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { computeCanonicalProgressMap, type RollupProgress } from '../../utils/progress';
@@ -27,6 +27,7 @@ import { hasMoreToRight } from '../../utils/layout';
 // became wider than the viewport (1386 px in a 960 px box), so `sticky left-0` could not hold it and the right-hand
 // columns scrolled away empty.
 const HIER_TITLE_MIN = 'min-w-[340px] [contain:inline-size]';
+const EMPTY_ITEMS: WorkItem[] = [];
 
 // Tree Node Component
 interface HierarchyNodeProps {
@@ -37,7 +38,6 @@ interface HierarchyNodeProps {
   toggleExpand: (id: number) => void;
   onSelect: (item: WorkItem) => void;
   selectedId?: number;
-  isInspectorOpen: boolean;
 }
 
 const HierarchyNode: React.FC<HierarchyNodeProps> = ({
@@ -47,8 +47,7 @@ const HierarchyNode: React.FC<HierarchyNodeProps> = ({
   progressMap,
   toggleExpand,
   onSelect,
-  selectedId,
-  isInspectorOpen
+  selectedId
 }) => {
   const { t } = useTranslation();
   const hasChildren = item.children && item.children.length > 0;
@@ -241,7 +240,6 @@ const HierarchyNode: React.FC<HierarchyNodeProps> = ({
               toggleExpand={toggleExpand}
               onSelect={onSelect}
               selectedId={selectedId}
-              isInspectorOpen={isInspectorOpen}
             />
           ))}
         </div>
@@ -276,8 +274,8 @@ export const HierarchyView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [quickTab, setQuickTab] = useState<'all' | 'my-tasks' | 'blocked' | 'unassigned'>('all');
 
-  const allItems: WorkItem[] = poolData?.flat_items || [];
-  const fullHierarchy: WorkItem[] = poolData?.hierarchy || [];
+  const allItems: WorkItem[] = poolData?.flat_items || EMPTY_ITEMS;
+  const fullHierarchy: WorkItem[] = poolData?.hierarchy || EMPTY_ITEMS;
 
   // Scoped hierarchy roots by selected project
   const projectHierarchy = useMemo(() => {
@@ -378,12 +376,14 @@ export const HierarchyView: React.FC = () => {
     return { filteredHierarchy: filtered, autoExpandMap: autoExpand };
   }, [projectHierarchy, quickTab, searchQuery, currentUserName]);
 
-  // Sync expandedMap with initial defaults or autoExpandMap
-  useEffect(() => {
+  // Reset expansion when the loaded tree or filter-derived ancestor paths change.
+  // Manual expansion remains in effect until one of those inputs changes.
+  const [expansionInputs, setExpansionInputs] = useState({ allItems: EMPTY_ITEMS, autoExpandMap });
+  if (expansionInputs.allItems !== allItems || expansionInputs.autoExpandMap !== autoExpandMap) {
+    setExpansionInputs({ allItems, autoExpandMap });
     if (Object.keys(autoExpandMap).length > 0) {
-      setExpandedMap(prev => ({ ...prev, ...autoExpandMap }));
+      setExpandedMap({ ...expandedMap, ...autoExpandMap });
     } else {
-      // Default: expand Epics, Features, and Stories so tasks are immediately visible
       const initial: Record<number, boolean> = {};
       allItems.forEach(i => {
         if (i.type === 'Epic' || i.type === 'Feature' || i.type === 'User Story' || i.type === 'Product Backlog Item') {
@@ -392,7 +392,7 @@ export const HierarchyView: React.FC = () => {
       });
       setExpandedMap(initial);
     }
-  }, [allItems, autoExpandMap]);
+  }
 
   // Sync selected item: if selectedWorkItem is no longer present in filtered hierarchy, close inspector
   useEffect(() => {
@@ -426,9 +426,15 @@ export const HierarchyView: React.FC = () => {
 
   const expandAll = () => {
     const full: Record<number, boolean> = {};
-    allItems.forEach(i => {
-      if (i.children && i.children.length > 0) full[i.id] = true;
-    });
+    const visit = (items: WorkItem[]) => {
+      for (const item of items) {
+        if (item.children?.length) {
+          full[item.id] = true;
+          visit(item.children);
+        }
+      }
+    };
+    visit(fullHierarchy);
     setExpandedMap(full);
   };
 
@@ -468,7 +474,6 @@ export const HierarchyView: React.FC = () => {
   const blockedCount = summary?.scope.blocked ?? 0;
   const unassignedCount = summary?.scope.unassigned ?? 0;
 
-  const isInspectorOpen = !!selectedWorkItem;
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
@@ -698,8 +703,7 @@ export const HierarchyView: React.FC = () => {
                     toggleExpand={toggleExpand}
                     onSelect={setSelectedWorkItem}
                     selectedId={selectedWorkItem?.id}
-                    isInspectorOpen={isInspectorOpen}
-                  />
+                        />
                 ))}
               </div>
             </div>

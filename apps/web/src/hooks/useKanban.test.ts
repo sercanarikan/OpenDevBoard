@@ -186,6 +186,18 @@ describe('kanbanReducer', () => {
     expect(s.extraCards[cell].map(i => i.id)).toEqual([1, 2, 3]);
   });
 
+  it('ignores continuation results from a previous board after the filter changes', () => {
+    let s = started('project-a');
+    s = kanbanReducer(s, { type: 'boardSuccess', key: 'project-a', board: board([lane('1')]) });
+    const cell = cellId('1', 'todo');
+    s = kanbanReducer(s, { type: 'cellStart', key: 'project-a', cell });
+    s = kanbanReducer(s, { type: 'boardStart', key: 'project-b' });
+    s = kanbanReducer(s, { type: 'boardSuccess', key: 'project-b', board: board([lane('2')]) });
+    const after = kanbanReducer(s, { type: 'cellSuccess', key: 'project-a', cell, items: [item(99)] });
+    expect(after).toBe(s);
+    expect(composeBoard(after.board, after.extraLanes, after.extraCards)?.lanes.map(l => l.key)).toEqual(['2']);
+  });
+
   it('records a per-cell error without touching the board', () => {
     let s = started('a');
     s = kanbanReducer(s, { type: 'boardSuccess', key: 'a', board: board([lane('1')]) });

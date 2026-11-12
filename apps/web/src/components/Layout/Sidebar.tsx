@@ -21,7 +21,7 @@ import {
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import { UserAvatar } from '../Common/UserAvatar';
 import { BrandLogo } from '../Common/BrandLogo';
 import type { ViewMode } from '../../types';
@@ -190,13 +190,16 @@ export const Sidebar: React.FC = () => {
     }
   ];
 
-  // Auto-expand group if current viewMode belongs to it
-  useEffect(() => {
+  // Reopen the destination group on navigation, while allowing the user to
+  // close the current group explicitly.
+  const [previousView, setPreviousView] = useState<ViewMode | null>(null);
+  if (previousView !== viewMode) {
+    setPreviousView(viewMode);
     const activeGroup = navGroups.find(g => g.items.some(i => i.id === viewMode));
     if (activeGroup && !openGroups[activeGroup.id]) {
-      setOpenGroups(prev => ({ ...prev, [activeGroup.id]: true }));
+      setOpenGroups({ ...openGroups, [activeGroup.id]: true });
     }
-  }, [viewMode]);
+  }
 
   // Global counts priority
   const isScopeReady = !booting && summary !== null && scope !== undefined;

@@ -1,16 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, Layers, Kanban, GitFork, Network, User, AlertCircle, ArrowRight, CornerDownLeft, X, LayoutDashboard, GitPullRequest, PlayCircle, Server, Users, History } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import { TypeBadge, StateBadge } from '../Common/Badge';
 import { useDebounced } from '../../hooks/useDebounced';
 import { createLatestRunner } from '../../utils/latestRunner';
 
 export const CommandPalette: React.FC = () => {
+  const { isCommandPaletteOpen } = useApp();
+  return isCommandPaletteOpen ? <OpenCommandPalette /> : null;
+};
+
+const OpenCommandPalette: React.FC = () => {
   const { t } = useTranslation();
   const {
-    isCommandPaletteOpen,
     setIsCommandPaletteOpen,
     api,
     booting,
@@ -32,11 +36,9 @@ export const CommandPalette: React.FC = () => {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(false);
   const runnerRef = useRef(createLatestRunner());
-  const projectRef = useRef(filters.selectedProject);
-  projectRef.current = filters.selectedProject;
 
   useEffect(() => {
-    if (!isCommandPaletteOpen || booting) return;
+    if (booting) return;
     runnerRef.current.run(
       signal =>
         api.list(
@@ -44,7 +46,7 @@ export const CommandPalette: React.FC = () => {
             search: debouncedQuery,
             limit: debouncedQuery === '' ? 8 : 15,
             offset: 0,
-            project: projectRef.current,
+            project: filters.selectedProject,
             currentUser: currentUserName,
             sortBy: 'changedDate',
             sortOrder: 'desc'
@@ -61,7 +63,7 @@ export const CommandPalette: React.FC = () => {
         onSettled: () => setSearching(false)
       }
     );
-  }, [isCommandPaletteOpen, booting, api, debouncedQuery, currentUserName]);
+  }, [booting, api, debouncedQuery, currentUserName, filters.selectedProject]);
 
   useEffect(() => {
     const runner = runnerRef.current;
@@ -69,14 +71,9 @@ export const CommandPalette: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (isCommandPaletteOpen) {
-      setQuery('');
-      setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  }, [isCommandPaletteOpen]);
-
-  if (!isCommandPaletteOpen) return null;
+    const timer = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(timer);
+  }, []);
 
   const filteredItems: WorkItem[] = found;
 

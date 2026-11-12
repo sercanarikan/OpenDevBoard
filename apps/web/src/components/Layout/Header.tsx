@@ -12,7 +12,7 @@ import {
   AlertTriangle,
   MoreHorizontal
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import { getHeaderTitleKey } from '../../utils/routeState';
 import { LanguageSelector } from '../Common/LanguageSelector';
 

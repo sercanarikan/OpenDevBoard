@@ -13,7 +13,7 @@ import {
   X,
   AlertTriangle
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type {
   TeamActivitySummary,
   TeamContributor,

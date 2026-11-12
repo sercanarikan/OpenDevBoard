@@ -20,7 +20,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import { usePagedList } from '../../hooks/usePagedList';
 import { explorerListParams } from '../../utils/listParams';

@@ -30,7 +30,7 @@ import {
   Target,
   Share2
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import { WorkItemNode } from './WorkItemNode';
 import { stateLabel } from '../../i18n/labels';

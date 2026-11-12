@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import type { WorkItem } from '../types';
 import type { KanbanColumnKey, KanbanLane, KanbanParams, KanbanResponse, ListParams } from '../types/paging';
 import { createLatestRunner, isAbortError } from '../utils/latestRunner';
@@ -202,12 +202,10 @@ export function useKanban(params: KanbanParams) {
   const [state, dispatch] = useReducer(kanbanReducer, INITIAL_KANBAN_STATE);
   const [retryNonce, setRetryNonce] = useState(0);
 
-  const effectiveRef = useRef(effective);
-  effectiveRef.current = effective;
+  const [request, setRequest] = useState(() => ({ key, effective }));
+  if (request.key !== key) setRequest({ key, effective });
   /** Params of the board request that produced `state.board`: continuation must use exactly these. */
   const boardParamsRef = useRef<KanbanParams>(effective);
-  const stateRef = useRef(state);
-  stateRef.current = state;
 
   const runnerRef = useRef(createLatestRunner());
   /** Bumped on every reload: continuation responses from an older epoch are dropped. */
@@ -223,7 +221,7 @@ export function useKanban(params: KanbanParams) {
   useEffect(() => {
     if (!enabled) return;
     abortInflight();
-    const requested = effectiveRef.current;
+    const requested = request.effective;
     runnerRef.current.run(
       signal =>
         api.kanban({ ...requested, laneOffset: 0, laneLimit: KANBAN_LANE_LIMIT, cardLimit: KANBAN_CARD_LIMIT }, signal),
@@ -236,14 +234,15 @@ export function useKanban(params: KanbanParams) {
         onError: err => dispatch({ type: 'boardError', key, message: errorMessage(err) })
       }
     );
-  }, [enabled, api, key, refreshToken, retryNonce, abortInflight]);
+  }, [enabled, api, key, refreshToken, retryNonce, abortInflight, request]);
 
   useEffect(() => {
     const runner = runnerRef.current;
     const inflight = inflightRef.current;
+    const epoch = epochRef;
     return () => {
       runner.cancel();
-      epochRef.current++;
+      epoch.current++;
       for (const controller of inflight.values()) controller.abort();
       inflight.clear();
     };
@@ -254,7 +253,7 @@ export function useKanban(params: KanbanParams) {
     const inflight = inflightRef.current;
     if (inflight.has(cell)) return;
 
-    const current = stateRef.current;
+    const current = state;
     if (current.loading) return;
     const lane = composeBoard(current.board, current.extraLanes, current.extraCards)?.lanes.find(
       l => l.key === laneKey
@@ -289,11 +288,11 @@ export function useKanban(params: KanbanParams) {
       .finally(() => {
         if (inflight.get(cell) === controller) inflight.delete(cell);
       });
-  }, [api]);
+  }, [api, state]);
 
   const loadMoreLanes = useCallback(() => {
     const inflight = inflightRef.current;
-    const current = stateRef.current;
+    const current = state;
     if (!current.board || current.loading || inflight.has(LANES_SLOT)) return;
     if (current.nextLaneOffset >= current.board.laneTotal) return;
 
@@ -324,7 +323,7 @@ export function useKanban(params: KanbanParams) {
       .finally(() => {
         if (inflight.get(LANES_SLOT) === controller) inflight.delete(LANES_SLOT);
       });
-  }, [api]);
+  }, [api, state]);
 
   const retry = useCallback(() => setRetryNonce(n => n + 1), []);
 

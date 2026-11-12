@@ -8,7 +8,7 @@ import json
 import logging
 import random
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import sync_service
 
@@ -378,7 +378,7 @@ def _seed_locked(conn, rows, summary):
     if row_count:
         raise RuntimeError('refusing to seed fixture over non-fixture data')
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     meta = {
         'watermark': summary['max_changed_date'],
         'last_full_sync': now,
@@ -418,7 +418,7 @@ def seed_fixture(conn=None):
 
     Returns expected_invariants() plus 'seeded' (bool) and 'rows_written'.
     """
-    rows = build_fixture(synced_at=datetime.utcnow().isoformat())
+    rows = build_fixture(synced_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
     summary = expected_invariants(rows)
     own_conn = conn is None
     if own_conn:

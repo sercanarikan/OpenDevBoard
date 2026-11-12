@@ -14,7 +14,7 @@ import {
   User,
   Inbox
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { PullRequest, PRQuickFilter, PRStatus, PullRequestReviewer } from '../../types/paging';
 import { PullRequestInspector } from './PullRequestInspector';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';

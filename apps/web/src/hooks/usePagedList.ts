@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import type { ListParams, ListResponse } from '../types/paging';
 import { createLatestRunner } from '../utils/latestRunner';
 import { queryKey } from '../utils/listParams';
@@ -52,13 +52,15 @@ export function usePagedList(params: ListParams, opts: { initialPageSize?: numbe
   const [retryNonce, setRetryNonce] = useState(0);
 
   const runnerRef = useRef(createLatestRunner());
-  const effectiveRef = useRef(effective);
-  effectiveRef.current = effective;
+  // Keep the request object stable for equivalent queries without reading a ref
+  // during render. A changed query resets the page and starts a new request.
+  const [request, setRequest] = useState(() => ({ key, effective }));
+  if (request.key !== key) setRequest({ key, effective });
 
   useEffect(() => {
     if (!enabled) return;
     runnerRef.current.run(
-      signal => api.list({ ...effectiveRef.current, limit: pageSize, offset }, signal),
+      signal => api.list({ ...request.effective, limit: pageSize, offset }, signal),
       {
         onStart: () => setState(s => ({ ...s, loading: true, error: null })),
         onSuccess: data => {
@@ -73,7 +75,7 @@ export function usePagedList(params: ListParams, opts: { initialPageSize?: numbe
         onError: err => setState(s => ({ ...s, loading: false, error: err as Error }))
       }
     );
-  }, [enabled, api, key, offset, pageSize, refreshToken, retryNonce]);
+  }, [enabled, api, key, offset, pageSize, refreshToken, retryNonce, request]);
 
   useEffect(() => {
     const runner = runnerRef.current;

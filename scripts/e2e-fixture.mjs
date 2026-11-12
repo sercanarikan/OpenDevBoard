@@ -468,6 +468,14 @@ await nav(web, 'Story & Tasks');
 await wait(web, 2500);
 check('pool is loaded lazily when Story & Tasks opens', web.api.filter(c => c.path === '/api/work-items-pool').length > poolBefore);
 check('Story & Tasks renders the hierarchy', (await has(web, 'Tümünü Genişlet')) || (await has(web, 'Tüm Hiyerarşiler')));
+const hierarchyRows = web.locator(T('hierarchy-row'));
+const expandedRows = await hierarchyRows.count();
+await web.getByRole('button', { name: 'Tümünü Daralt' }).click();
+const collapsedRows = await hierarchyRows.count();
+check('collapsing the hierarchy hides descendants', collapsedRows > 0 && collapsedRows < expandedRows, `${expandedRows} -> ${collapsedRows}`);
+await web.getByRole('button', { name: 'Tümünü Genişlet' }).click();
+check('expanding the hierarchy restores descendants', await hierarchyRows.count() > collapsedRows);
+
 await shot(web, 'pag-10-story-tasks.png');
 
 await nav(web, 'Dependency Graph');
@@ -585,6 +593,18 @@ const paletteHits = await web.locator('button:has-text("needle"), button:has-tex
 check('palette finds items by searching the server (not only a loaded page)', paletteHits > 0, String(paletteHits));
 await shot(web, 'pag-12-palette.png');
 await web.keyboard.press('Escape');
+await web.keyboard.press('Control+k');
+const paletteInput = web.locator(T('command-palette')).locator('input');
+await paletteInput.waitFor({ state: 'visible' });
+await wait(web, 100);
+check('palette reopens with empty, focused input', await paletteInput.inputValue() === '' && await paletteInput.evaluate(el => document.activeElement === el));
+await web.keyboard.press('Escape');
+
+const densityBefore = await web.locator('html').getAttribute('data-density');
+await web.locator(T('header-density')).first().click();
+const densityAfter = await web.locator('html').getAttribute('data-density');
+check('density toggle updates global state and storage', densityAfter !== densityBefore && await web.evaluate(() => localStorage.getItem('devopsflow_density')) === densityAfter);
+await web.locator(T('header-density')).first().click();
 
 // ======================================================================================================
 console.log('\n## Light / Dark');

@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
 from base64 import b64encode
 from flask_cors import CORS
@@ -168,7 +168,9 @@ def get_devops_info():
         if cache_data:
             try:
                 cache_dt = dtparser.parse(cache_time)
-                if (datetime.utcnow() - cache_dt).total_seconds() < max_age_sec:
+                if cache_dt.tzinfo is None:
+                    cache_dt = cache_dt.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - cache_dt).total_seconds() < max_age_sec:
                     return jsonify(json.loads(cache_data))
             except Exception:
                 pass
@@ -824,7 +826,9 @@ def get_project_work_item_stats():
             if cache_data:
                 try:
                     cache_dt = dtparser.parse(cache_time)
-                    if (datetime.utcnow() - cache_dt).total_seconds() < max_age_sec:
+                    if cache_dt.tzinfo is None:
+                        cache_dt = cache_dt.replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - cache_dt).total_seconds() < max_age_sec:
                         return jsonify(json.loads(cache_data)), 200
                 except Exception:
                     pass
@@ -1063,7 +1067,9 @@ def get_work_items_pool():
             if cache_data:
                 try:
                     cache_dt = dtparser.parse(cache_time)
-                    if (datetime.utcnow() - cache_dt).total_seconds() < max_age_sec:
+                    if cache_dt.tzinfo is None:
+                        cache_dt = cache_dt.replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - cache_dt).total_seconds() < max_age_sec:
                         return jsonify(json.loads(cache_data)), 200
                 except Exception:
                     pass

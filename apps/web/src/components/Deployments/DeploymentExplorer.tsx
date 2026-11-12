@@ -16,7 +16,7 @@ import {
   X,
   Inbox
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { DeploymentEnvironmentStat, DeploymentRecord, DeploymentSummary } from '../../types/paging';
 import { DeploymentInspector } from './DeploymentInspector';
 
