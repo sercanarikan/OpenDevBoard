@@ -516,7 +516,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [deploymentSummary, setDeploymentSummary] = useState<DeploymentSummary | null>(null);
   const [deploymentSummaryLoading, setDeploymentSummaryLoading] = useState<boolean>(true);
   const [deploymentSummaryError, setDeploymentSummaryError] = useState<string | null>(null);
-  const [selectedDeployment, setSelectedDeployment] = useState<DeploymentRecord | null>(null);
+  const [deploymentSelection, setDeploymentSelection] = useState<{ deployment: DeploymentRecord; project: string } | null>(null);
+  if (deploymentSelection && deploymentSelection.project !== filters.selectedProject) {
+    setDeploymentSelection(null);
+  }
+  const selectedDeployment = deploymentSelection?.project === filters.selectedProject ? deploymentSelection.deployment : null;
+  const setSelectedDeployment = useCallback((deployment: DeploymentRecord | null) => {
+    setDeploymentSelection(deployment ? { deployment, project: filters.selectedProject } : null);
+  }, [filters.selectedProject]);
 
   useEffect(() => {
     if (booting) return;
