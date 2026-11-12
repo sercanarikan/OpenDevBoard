@@ -17,6 +17,7 @@ import { useApp } from '../../context/AppContext';
 import type { HistoryEvent, HistorySummary } from '../../types/paging';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { PullRequestInspector } from '../PullRequests/PullRequestInspector';
+import { groupTimelineEvents } from './timelineGroups';
 
 export const MyHistoryTimeline: React.FC = () => {
   const { t } = useTranslation(['myHistory', 'common']);
@@ -38,7 +39,8 @@ export const MyHistoryTimeline: React.FC = () => {
   const [page, setPage] = useState(1);
   const pageSize = 25;
 
-  const [events, setEvents] = useState<HistoryEvent[]>([]);
+  const [timeline, setTimeline] = useState<{ events: HistoryEvent[]; asOf: number }>({ events: [], asOf: 0 });
+  const { events, asOf } = timeline;
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<HistorySummary | null>(null);
 
@@ -80,7 +82,7 @@ export const MyHistoryTimeline: React.FC = () => {
       if (sum.totalMatchingEvents !== undefined && sum.totalMatchingEvents !== res.total) {
         throw new Error(`History scope mismatch: summary=${sum.totalMatchingEvents}, timeline=${res.total}`);
       }
-      setEvents(res.items);
+      setTimeline({ events: res.items, asOf: Date.now() });
       setTotal(res.total);
       setLoading(false);
     } catch (e: any) {
@@ -100,40 +102,7 @@ export const MyHistoryTimeline: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   // Chronological grouping
-  const timelineGroups = useMemo(() => {
-    const now = new Date();
-    const todayStr = now.toISOString().slice(0, 10);
-    const yesterday = new Date(now.getTime() - 86400000);
-    const yesterdayStr = yesterday.toISOString().slice(0, 10);
-    const weekAgo = new Date(now.getTime() - 7 * 86400000);
-
-    const groups: { [key: string]: HistoryEvent[] } = {
-      today: [],
-      yesterday: [],
-      thisWeek: [],
-      earlier: []
-    };
-
-    for (const ev of events) {
-      if (!ev.occurredAt) {
-        groups.earlier.push(ev);
-        continue;
-      }
-      const dStr = ev.occurredAt.slice(0, 10);
-      const evDate = new Date(ev.occurredAt);
-
-      if (dStr === todayStr) {
-        groups.today.push(ev);
-      } else if (dStr === yesterdayStr) {
-        groups.yesterday.push(ev);
-      } else if (evDate >= weekAgo) {
-        groups.thisWeek.push(ev);
-      } else {
-        groups.earlier.push(ev);
-      }
-    }
-    return groups;
-  }, [events]);
+  const timelineGroups = useMemo(() => groupTimelineEvents(events, asOf), [events, asOf]);
 
   const handleEventClick = async (ev: HistoryEvent) => {
     if (ev.entity.type === 'workItem' && typeof ev.entity.id === 'number') {
