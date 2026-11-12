@@ -58,6 +58,20 @@ try {
   release();
   await page.waitForTimeout(500);
   check('late refresh preserves the newer selected item', await page.getByTestId('inspector').getAttribute('data-id') === second);
+
+  let poolRequests = 0;
+  await page.route('**/api/work-items-pool**', async route => {
+    poolRequests++;
+    if (poolRequests === 1) await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Fixture pool failure' }) });
+    else await route.continue();
+  });
+  await page.getByTestId('nav-hierarchy').click();
+  await page.getByTestId('hierarchy-error').waitFor({ timeout: 30000 });
+  check('pool failure is visible and offers retry', await page.getByTestId('hierarchy-retry').isVisible());
+  await page.getByTestId('hierarchy-retry').click();
+  await page.getByTestId('hierarchy-row').first().waitFor({ timeout: 30000 });
+  check('pool retry loads the hierarchy after a failed request', poolRequests >= 2);
+
 } catch (error) {
   console.error(error);
   total++;
