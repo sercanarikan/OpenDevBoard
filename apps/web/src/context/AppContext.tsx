@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { AppContext, type AppContextType } from './useApp';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { WorkItem, WorkItemsPoolResponse, ViewMode, FilterOptions } from '../types';
 import { getViewFromPath, getPathForView, ROUTE_PATH_MAP } from '../utils/routes';
@@ -8,95 +9,18 @@ import {
   type SyncReportResponse,
   type WorkItemsApi,
   type PullRequest,
-  type PullRequestsSummary,
-  type PipelineSummary,
   type PipelineRun,
-  type DeploymentSummary,
   type DeploymentRecord
 } from '../types/paging';
 import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent } from '../services/liveApi';
 import { demoApi } from '../services/demoApi';
 import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockData';
-import { deriveSyncIndicator, type DataSourceKind, type SyncIndicator } from '../utils/syncState';
+import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
 import i18n from '../i18n';
 
 export const SYNC_POLL_MS = 20000;
 const LOST_AFTER_FAILURES = 2;
 
-interface AppContextType {
-  theme: 'dark' | 'light';
-  toggleTheme: () => void;
-  viewMode: ViewMode | null;
-  setViewMode: (mode: ViewMode) => void;
-
-  /** Inspector selection. Independent of any list: it may point at an item no list currently shows. */
-  selectedWorkItem: WorkItem | null;
-  setSelectedWorkItem: (item: WorkItem | null) => void;
-  /** Opens any work item by id (fetched from the API when it is not on screen). */
-  openWorkItem: (id: number) => Promise<boolean>;
-
-  /** Data access for the current source. Demo and live never mix: it is decided once per (re)connect. */
-  api: WorkItemsApi;
-  source: DataSourceKind;
-  booting: boolean;
-  isLive: boolean;      // live backend or fixture backend
-  isDemo: boolean;
-  connectionError: string | null;
-  isBannerDismissed: boolean;
-  dismissConnectionBanner: () => void;
-  retryConnection: () => Promise<void>;
-
-  currentUserName: string;
-  userKnown: boolean;
-
-  /** Canonical counters for the selected project scope (same definitions the list endpoints use). */
-  summary: SummaryResponse | null;
-  projects: { name: string; total: number }[];
-  /** Increments whenever the served data changed (sync finished, manual refresh). */
-  refreshToken: number;
-  refreshData: () => Promise<void>;
-
-  syncReport: SyncReportResponse | null;
-  syncIndicator: SyncIndicator;
-  isSyncing: boolean;
-  triggerSync: (mode?: 'incremental' | 'full') => Promise<void>;
-
-  /** Full hierarchy + relations. Loaded lazily, only for Story & Tasks / Dependency Explorer. */
-  poolData: WorkItemsPoolResponse | null;
-  poolLoading: boolean;
-  poolError: string | null;
-  ensurePool: () => void;
-  retryPool: () => void;
-
-  density: 'comfortable' | 'compact';
-  setDensity: (density: 'comfortable' | 'compact') => void;
-  toggleDensity: () => void;
-
-  filters: FilterOptions;
-  setFilters: React.Dispatch<React.SetStateAction<FilterOptions>>;
-  resetFilters: () => void;
-  isCommandPaletteOpen: boolean;
-  setIsCommandPaletteOpen: (open: boolean) => void;
-
-  prSummary: PullRequestsSummary | null;
-  prSummaryLoading: boolean;
-  prSummaryError: string | null;
-  selectedPR: PullRequest | null;
-  setSelectedPR: (pr: PullRequest | null) => void;
-  openPR: (id: number) => Promise<boolean>;
-
-  pipelineSummary: PipelineSummary | null;
-  pipelineSummaryLoading: boolean;
-  pipelineSummaryError: string | null;
-  selectedPipelineRun: PipelineRun | null;
-  setSelectedPipelineRun: (run: PipelineRun | null) => void;
-
-  deploymentSummary: DeploymentSummary | null;
-  deploymentSummaryLoading: boolean;
-  deploymentSummaryError: string | null;
-  selectedDeployment: DeploymentRecord | null;
-  setSelectedDeployment: (dep: DeploymentRecord | null) => void;
-}
 
 const defaultFilters: FilterOptions = {
   searchQuery: '',
@@ -111,14 +35,42 @@ const defaultFilters: FilterOptions = {
   density: 'compact'
 };
 
-const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const errMessage = (e: unknown): string => {
   if (e instanceof ApiError) return e.isNetwork ? i18n.t('api.connectionRefused') : e.message;
   return (e as Error)?.message || i18n.t('api.unexpectedConnectionError');
 };
 
+/** Keeps the previous summary visible during a new request and ignores aborted responses. */
+function useScopedSummary<T>(
+  request: (signal: AbortSignal) => Promise<T>, enabled: boolean, refreshToken: number, label: string
+) {
+  const requestKey = useMemo(() => ({ request, enabled, refreshToken }), [request, enabled, refreshToken]);
+  const [result, setResult] = useState<{ key: typeof requestKey | null; data: T | null; error: string | null }>({
+    key: null, data: null, error: null
+  });
+  useEffect(() => {
+    if (!enabled) return;
+    const ctrl = new AbortController();
+    request(ctrl.signal).then(data => {
+      if (!ctrl.signal.aborted) setResult({ key: requestKey, data, error: null });
+    }).catch(e => {
+      if (ctrl.signal.aborted || (e instanceof ApiError && e.isAbort)) return;
+      const message = errMessage(e);
+      setResult(prev => ({ key: requestKey, data: prev.data, error: message }));
+      console.warn(`${label} summary failed:`, message);
+    });
+    return () => ctrl.abort();
+  }, [request, enabled, requestKey, label]);
+  return {
+    data: result.data,
+    loading: !enabled ? result.key === null : result.key !== requestKey,
+    error: result.key === requestKey ? result.error : null
+  };
+}
+
 const DENSITY_STORAGE_KEY = 'devopsflow_density';
+const EMPTY_PROJECTS: string[] = [];
 const readDensityPref = (): 'comfortable' | 'compact' => {
   try {
     const val = localStorage.getItem(DENSITY_STORAGE_KEY);
@@ -134,37 +86,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return 'light';
   });
 
-  const [density, setDensityState] = useState<'comfortable' | 'compact'>(readDensityPref);
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-density', density);
-    try {
-      localStorage.setItem(DENSITY_STORAGE_KEY, density);
-    } catch {}
-  }, [density]);
-
-  const setDensity = useCallback((d: 'comfortable' | 'compact') => {
-    setDensityState(d);
-    setFilters(prev => ({ ...prev, density: d }));
-  }, []);
-
-  const toggleDensity = useCallback(() => {
-    setDensityState(d => {
-      const next = d === 'compact' ? 'comfortable' : 'compact';
-      setFilters(prev => ({ ...prev, density: next }));
-      return next;
-    });
-  }, []);
-
   const location = useLocation();
   const navigate = useNavigate();
-
-  const currentPathView = getViewFromPath(location.pathname);
-  const [viewMode, setViewModeState] = useState<ViewMode | null>(() => currentPathView);
+  const viewMode = getViewFromPath(location.pathname);
   const [selectedWorkItem, setSelectedWorkItemState] = useState<WorkItem | null>(null);
 
   const [filters, setFilters] = useState<FilterOptions>(() => {
-    const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    const params = new URLSearchParams(location.search);
     const proj = params.get('project');
     const qf = params.get('quickFilter') || params.get('view');
     const initial = { ...defaultFilters, density: readDensityPref() };
@@ -179,39 +107,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
 
-  // Synchronize viewMode when browser pathname changes (Back / Forward)
+  const density = filters.density;
   useEffect(() => {
-    const v = getViewFromPath(location.pathname);
-    if (v !== viewMode) {
-      setViewModeState(v);
-    }
-  }, [location.pathname]);
+    document.documentElement.setAttribute('data-density', density);
+    try {
+      localStorage.setItem(DENSITY_STORAGE_KEY, density);
+    } catch {}
+  }, [density]);
 
-  // Handle programmatical view navigation
+  const setDensity = useCallback((d: 'comfortable' | 'compact') => {
+    setFilters(prev => ({ ...prev, density: d }));
+  }, []);
+  const toggleDensity = useCallback(() => {
+    setFilters(prev => ({ ...prev, density: prev.density === 'compact' ? 'comfortable' : 'compact' }));
+  }, []);
+
   const setViewMode = useCallback((mode: ViewMode) => {
-    setViewModeState(mode);
-    const targetUrl = getPathForView(mode, location.search);
     if (location.pathname !== ROUTE_PATH_MAP[mode]) {
-      navigate(targetUrl);
+      navigate(getPathForView(mode, location.search));
     }
   }, [location.pathname, location.search, navigate]);
-
-  // Synchronize URL search params (e.g. ?project=alms, ?quickFilter=blocked) on mount
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const proj = params.get('project');
-    const qf = params.get('quickFilter') || params.get('view');
-    const updates: Partial<FilterOptions> = {};
-    if (proj && proj !== 'all') {
-      updates.selectedProject = proj;
-    }
-    if (qf && ['all', 'my-tasks', 'unassigned', 'blocked', 'bugs'].includes(qf)) {
-      updates.quickFilter = qf as any;
-    }
-    if (Object.keys(updates).length > 0) {
-      setFilters(prev => ({ ...prev, ...updates }));
-    }
-  }, []);
 
   // Synchronize selectedProject to URL search parameters
   useEffect(() => {
@@ -237,21 +152,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [userKnown, setUserKnown] = useState<boolean>(false);
 
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
-  const [orgProjects, setOrgProjects] = useState<string[]>([]);
+  const orgScope = useMemo(() => ({ booting, source }), [booting, source]);
+  const [orgResult, setOrgResult] = useState<{ scope: typeof orgScope | null; names: string[] }>({ scope: null, names: [] });
+  const orgProjects = orgResult.scope === orgScope ? orgResult.names : EMPTY_PROJECTS;
   const [refreshToken, setRefreshToken] = useState<number>(0);
   const [syncReport, setSyncReport] = useState<SyncReportResponse | null>(null);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  const [poolData, setPoolData] = useState<WorkItemsPoolResponse | null>(null);
-  const [poolLoading, setPoolLoading] = useState<boolean>(false);
-  const [poolError, setPoolError] = useState<string | null>(null);
+  const [livePoolData, setLivePoolData] = useState<WorkItemsPoolResponse | null>(null);
   const [poolWanted, setPoolWanted] = useState<boolean>(false);
   const [poolNonce, setPoolNonce] = useState<number>(0);
+  const poolKey = useMemo(() => ({ poolWanted, booting, source, refreshToken, poolNonce }),
+    [poolWanted, booting, source, refreshToken, poolNonce]);
+  const [poolResult, setPoolResult] = useState<{ key: typeof poolKey | null; error: string | null }>({ key: null, error: null });
+  const poolEnabled = poolWanted && !booting && source !== 'demo' && source !== 'lost';
+  const poolLoading = poolEnabled && poolResult.key !== poolKey;
+  const poolError = poolResult.key === poolKey ? poolResult.error : null;
+  const demoPool = useMemo(() => poolWanted && !booting && source === 'demo' ? generateMockPoolResponse() : null,
+    [poolWanted, booting, source]);
+  const poolData = source === 'demo' ? demoPool : livePoolData;
 
   const failuresRef = useRef(0);
   const dataVersionRef = useRef<string>('');
   const sourceRef = useRef<DataSourceKind>('live');
-  sourceRef.current = source;
+  useEffect(() => { sourceRef.current = source; }, [source]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -274,16 +198,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUserKnown(true);
     setConnectionError(reason);
     setSyncReport(null);
-    setPoolData(null);
-    setPoolError(null);
+    setLivePoolData(null);
     setBooting(false);
   }, []);
 
   /** Decides the data source: live (or fixture) backend when reachable, otherwise explicit Demo Mode. */
-  const connect = useCallback(async () => {
-    setBooting(true);
-    try {
-      const me = await liveApi.me();
+  const connectRef = useRef<AbortController | null>(null);
+  const connect = useCallback(() => {
+    connectRef.current?.abort();
+    const ctrl = new AbortController();
+    connectRef.current = ctrl;
+    return liveApi.me(ctrl.signal).then(me => {
+      if (ctrl.signal.aborted) return false;
       failuresRef.current = 0;
       setApi(liveApi);
       setSource(me.source === 'fixture' ? 'fixture' : 'live');
@@ -293,13 +219,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setUserKnown(!!name);
       if (!name) setFilters(f => (f.quickFilter === 'my-tasks' ? { ...f, quickFilter: 'all' } : f));
       setBooting(false);
-    } catch (e) {
+      return true;
+    }).catch(e => {
+      if (ctrl.signal.aborted) return false;
       enterDemo(errMessage(e));
-    }
+      return true;
+    });
   }, [enterDemo]);
 
   useEffect(() => {
     connect();
+    return () => connectRef.current?.abort();
   }, [connect]);
 
   const isBackend = source === 'live' || source === 'fixture' || source === 'lost';
@@ -321,26 +251,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Org projects (including ones without active items); live only, the fixture/demo have no org.
   useEffect(() => {
-    if (booting || source !== 'live') {
-      setOrgProjects([]);
-      return;
-    }
+    if (booting || source !== 'live') return;
     let cancelled = false;
-    fetchOrgProjects().then(names => !cancelled && setOrgProjects(names));
+    fetchOrgProjects().then(names => { if (!cancelled) setOrgResult({ scope: orgScope, names }); });
     return () => {
       cancelled = true;
     };
-  }, [booting, source, refreshToken]);
+  }, [booting, source, refreshToken, orgScope]);
 
   // Poll the sync state: detects finished syncs (data version change), running syncs and a lost backend.
   useEffect(() => {
     if (booting || !isBackend) return;
-    let stopped = false;
+    const controller = new AbortController();
 
     const tick = async () => {
       try {
         const report = await fetchSyncReport();
-        if (stopped) return;
+        if (controller.signal.aborted) return;
         failuresRef.current = 0;
         setSyncReport(report);
         if (sourceRef.current === 'lost') {
@@ -352,7 +279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (dataVersionRef.current && v && v !== dataVersionRef.current) setRefreshToken(n => n + 1);
         if (v) dataVersionRef.current = v;
       } catch (e) {
-        if (stopped) return;
+        if (controller.signal.aborted) return;
         failuresRef.current += 1;
         if (failuresRef.current >= LOST_AFTER_FAILURES && sourceRef.current !== 'lost') {
           setSource('lost');
@@ -365,7 +292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     tick();
     const id = setInterval(tick, SYNC_POLL_MS);
     return () => {
-      stopped = true;
+      controller.abort();
       clearInterval(id);
     };
   }, [booting, isBackend]);
@@ -388,11 +315,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // While the backend is unreachable, probe quickly so recovery is noticed within seconds.
   useEffect(() => {
     if (source !== 'lost') return;
-    let stopped = false;
+    const controller = new AbortController();
     const id = setInterval(async () => {
       try {
         const report = await fetchSyncReport();
-        if (stopped) return;
+        if (controller.signal.aborted) return;
         failuresRef.current = 0;
         setSyncReport(report);
         setSource(report.source === 'fixture' ? 'fixture' : 'live');
@@ -403,7 +330,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }, 3000);
     return () => {
-      stopped = true;
+      controller.abort();
       clearInterval(id);
     };
   }, [source]);
@@ -432,10 +359,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const retryConnection = useCallback(async () => {
+    setBooting(true);
     setIsBannerDismissed(false);
     failuresRef.current = 0;
-    await connect();
-    setRefreshToken(n => n + 1);
+    if (await connect()) setRefreshToken(n => n + 1);
   }, [connect]);
 
   const dismissConnectionBanner = useCallback(() => setIsBannerDismissed(true), []);
@@ -445,29 +372,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const retryPool = useCallback(() => setPoolNonce(n => n + 1), []);
 
   useEffect(() => {
-    if (!poolWanted || booting) return;
-    if (source === 'demo') {
-      setPoolData(generateMockPoolResponse());
-      setPoolError(null);
-      return;
-    }
-    if (source === 'lost') return;
-
+    if (!poolEnabled) return;
     const ctrl = new AbortController();
-    setPoolLoading(true);
-    setPoolError(null);
     fetchPool(ctrl.signal)
       .then(p => {
-        setPoolData(p);
-        setPoolLoading(false);
+        if (ctrl.signal.aborted) return;
+        setLivePoolData(p);
+        setPoolResult({ key: poolKey, error: null });
       })
       .catch(e => {
-        if (e instanceof ApiError && e.isAbort) return;
-        setPoolError(errMessage(e));
-        setPoolLoading(false);
+        if (ctrl.signal.aborted || (e instanceof ApiError && e.isAbort)) return;
+        setPoolResult({ key: poolKey, error: errMessage(e) });
       });
     return () => ctrl.abort();
-  }, [poolWanted, booting, source, refreshToken, poolNonce]);
+  }, [poolEnabled, poolKey]);
 
   // ---- Inspector -----------------------------------------------------------------------------
   const setSelectedWorkItem = useCallback((item: WorkItem | null) => setSelectedWorkItemState(item), []);
@@ -489,33 +407,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Keep the open item fresh after a sync without ever closing it because a list no longer contains it.
   const selectedIdRef = useRef<number | null>(null);
-  selectedIdRef.current = selectedWorkItem?.id ?? null;
+  useEffect(() => { selectedIdRef.current = selectedWorkItem?.id ?? null; }, [selectedWorkItem?.id]);
   useEffect(() => {
     const id = selectedIdRef.current;
     if (!id || refreshToken === 0 || booting) return;
+    const ctrl = new AbortController();
     api
-      .item(id)
+      .item(id, ctrl.signal)
       .then(fresh => {
-        if (fresh && selectedIdRef.current === id) setSelectedWorkItemState(fresh);
+        if (fresh && !ctrl.signal.aborted) setSelectedWorkItemState(current => current?.id === id ? fresh : current);
       })
       .catch(() => undefined);
+    return () => ctrl.abort();
   }, [refreshToken, api, booting]);
 
-  const resetFilters = useCallback(() => setFilters(defaultFilters), []);
+  const resetFilters = useCallback(() => setFilters(prev => ({ ...defaultFilters, density: prev.density })), []);
 
-  const [prSummary, setPrSummary] = useState<PullRequestsSummary | null>(null);
-  const [prSummaryLoading, setPrSummaryLoading] = useState<boolean>(true);
-  const [prSummaryError, setPrSummaryError] = useState<string | null>(null);
+  const prRequest = useCallback((signal: AbortSignal) => api.pullRequestsSummary(filters.selectedProject, signal), [api, filters.selectedProject]);
+  const pipelineRequest = useCallback((signal: AbortSignal) => api.pipelinesSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
+  const deploymentRequest = useCallback((signal: AbortSignal) => api.deploymentsSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
+  const { data: prSummary, loading: prSummaryLoading, error: prSummaryError } = useScopedSummary(prRequest, !booting, refreshToken, 'PR');
+  const { data: pipelineSummary, loading: pipelineSummaryLoading, error: pipelineSummaryError } = useScopedSummary(pipelineRequest, !booting, refreshToken, 'Pipeline');
+  const { data: deploymentSummary, loading: deploymentSummaryLoading, error: deploymentSummaryError } = useScopedSummary(deploymentRequest, !booting, refreshToken, 'Deployment');
   const [selectedPR, setSelectedPR] = useState<PullRequest | null>(null);
-
-  const [pipelineSummary, setPipelineSummary] = useState<PipelineSummary | null>(null);
-  const [pipelineSummaryLoading, setPipelineSummaryLoading] = useState<boolean>(true);
-  const [pipelineSummaryError, setPipelineSummaryError] = useState<string | null>(null);
   const [selectedPipelineRun, setSelectedPipelineRun] = useState<PipelineRun | null>(null);
 
-  const [deploymentSummary, setDeploymentSummary] = useState<DeploymentSummary | null>(null);
-  const [deploymentSummaryLoading, setDeploymentSummaryLoading] = useState<boolean>(true);
-  const [deploymentSummaryError, setDeploymentSummaryError] = useState<string | null>(null);
   const [deploymentSelection, setDeploymentSelection] = useState<{ deployment: DeploymentRecord; project: string } | null>(null);
   if (deploymentSelection && deploymentSelection.project !== filters.selectedProject) {
     setDeploymentSelection(null);
@@ -524,72 +440,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setSelectedDeployment = useCallback((deployment: DeploymentRecord | null) => {
     setDeploymentSelection(deployment ? { deployment, project: filters.selectedProject } : null);
   }, [filters.selectedProject]);
-
-  useEffect(() => {
-    if (booting) return;
-    setPrSummaryLoading(true);
-    setPrSummaryError(null);
-    const ctrl = new AbortController();
-    api
-      .pullRequestsSummary(filters.selectedProject, ctrl.signal)
-      .then(s => {
-        setPrSummary(s);
-        setPrSummaryLoading(false);
-      })
-      .catch(e => {
-        if (!(e instanceof ApiError && e.isAbort)) {
-          const msg = errMessage(e);
-          setPrSummaryError(msg);
-          setPrSummaryLoading(false);
-          console.warn('PR summary failed:', msg);
-        }
-      });
-    return () => ctrl.abort();
-  }, [api, booting, filters.selectedProject, refreshToken]);
-
-  useEffect(() => {
-    if (booting) return;
-    setPipelineSummaryLoading(true);
-    setPipelineSummaryError(null);
-    const ctrl = new AbortController();
-    api
-      .pipelinesSummary(30, filters.selectedProject, ctrl.signal)
-      .then(s => {
-        setPipelineSummary(s);
-        setPipelineSummaryLoading(false);
-      })
-      .catch(e => {
-        if (!(e instanceof ApiError && e.isAbort)) {
-          const msg = errMessage(e);
-          setPipelineSummaryError(msg);
-          setPipelineSummaryLoading(false);
-          console.warn('Pipeline summary failed:', msg);
-        }
-      });
-    return () => ctrl.abort();
-  }, [api, booting, filters.selectedProject, refreshToken]);
-
-  useEffect(() => {
-    if (booting) return;
-    setDeploymentSummaryLoading(true);
-    setDeploymentSummaryError(null);
-    const ctrl = new AbortController();
-    api
-      .deploymentsSummary(30, filters.selectedProject, ctrl.signal)
-      .then(s => {
-        setDeploymentSummary(s);
-        setDeploymentSummaryLoading(false);
-      })
-      .catch(e => {
-        if (!(e instanceof ApiError && e.isAbort)) {
-          const msg = errMessage(e);
-          setDeploymentSummaryError(msg);
-          setDeploymentSummaryLoading(false);
-          console.warn('Deployment summary failed:', msg);
-        }
-      });
-    return () => ctrl.abort();
-  }, [api, booting, filters.selectedProject, refreshToken]);
 
   const openPR = useCallback(
     async (id: number): Promise<boolean> => {
@@ -694,12 +544,4 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
-};
-
-export const useApp = () => {
-  const context = useContext(AppContext);
-  if (!context) {
-    throw new Error('useApp must be used within an AppProvider');
-  }
-  return context;
 };

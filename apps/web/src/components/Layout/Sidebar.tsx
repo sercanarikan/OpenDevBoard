@@ -21,7 +21,7 @@ import {
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import { UserAvatar } from '../Common/UserAvatar';
 import { BrandLogo } from '../Common/BrandLogo';
 import type { ViewMode } from '../../types';

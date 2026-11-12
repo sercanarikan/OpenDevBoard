@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext';
+import { useApp } from '../context/useApp';
 import type { WorkItem } from '../types';
 import type { KanbanColumnKey, KanbanLane, KanbanParams, KanbanResponse, ListParams } from '../types/paging';
 import { createLatestRunner, isAbortError } from '../utils/latestRunner';

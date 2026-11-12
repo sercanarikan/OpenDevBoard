@@ -12,7 +12,7 @@ import {
   GitBranch,
   Inbox
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { PipelineRun, PipelineSummary } from '../../types/paging';
 import { PipelineInspector } from './PipelineInspector';
 

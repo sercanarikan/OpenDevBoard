@@ -14,7 +14,7 @@ import {
   FolderGit2,
   ChevronRight
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import { TypeBadge, StateBadge, PriorityBadge } from '../Common/Badge';
 import { UserAvatar } from '../Common/UserAvatar';
 

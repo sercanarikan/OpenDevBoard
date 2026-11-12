@@ -13,7 +13,7 @@ import {
   Inbox,
   AlertTriangle
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { HistoryEvent, HistorySummary } from '../../types/paging';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { PullRequestInspector } from '../PullRequests/PullRequestInspector';

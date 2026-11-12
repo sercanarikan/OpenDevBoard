@@ -13,7 +13,7 @@ import {
   ChevronRight,
   Crosshair
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import { isWorkItemCompleted, getWorkItemStateCategory } from '../../utils/workState';
 import { UserAvatar } from '../Common/UserAvatar';

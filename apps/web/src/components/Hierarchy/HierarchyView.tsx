@@ -14,7 +14,7 @@ import {
   RotateCcw,
   ArrowDownLeft
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { computeCanonicalProgressMap, type RollupProgress } from '../../utils/progress';

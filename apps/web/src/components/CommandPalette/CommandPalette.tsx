@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, Layers, Kanban, GitFork, Network, User, AlertCircle, ArrowRight, CornerDownLeft, X, LayoutDashboard, GitPullRequest, PlayCircle, Server, Users, History } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import { TypeBadge, StateBadge } from '../Common/Badge';
 import { useDebounced } from '../../hooks/useDebounced';

@@ -23,7 +23,7 @@ import {
   ArrowUpRight,
   CheckCircle2
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem } from '../../types';
 import type { KanbanLane, KanbanParams, KanbanResponse } from '../../types/paging';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';

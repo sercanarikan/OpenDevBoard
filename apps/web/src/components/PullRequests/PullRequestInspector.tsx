@@ -13,7 +13,7 @@ import {
   Link as LinkIcon
 } from 'lucide-react';
 import type { PullRequest, PullRequestReviewer } from '../../types/paging';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 
 interface PullRequestInspectorProps {
   pr: PullRequest;

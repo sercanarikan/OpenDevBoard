@@ -20,7 +20,7 @@ import {
   Users,
   History
 } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useApp } from '../../context/useApp';
 import type { WorkItem, ViewMode } from '../../types';
 import type { PullRequest, HistoryEvent, TeamActivitySummary } from '../../types/paging';
 import { PriorityBadge, TypeBadge } from '../Common/Badge';
