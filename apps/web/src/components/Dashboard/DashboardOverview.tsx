@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   UserCheck,
@@ -29,6 +29,8 @@ import { PullRequestInspector } from '../PullRequests/PullRequestInspector';
 import { PipelineInspector } from '../Pipelines/PipelineInspector';
 import { DeploymentInspector } from '../Deployments/DeploymentInspector';
 import { stateLabel } from '../../i18n/labels';
+
+type LoadState = { request: object; error: string | null; successfulScope?: string };
 
 export const DashboardOverview: React.FC = () => {
   const { t } = useTranslation(['dashboard', 'common']);
@@ -65,120 +67,86 @@ export const DashboardOverview: React.FC = () => {
   const [recentItems, setRecentItems] = useState<WorkItem[]>([]);
   const [pendingPRs, setPendingPRs] = useState<PullRequest[]>([]);
 
-  const [loadingTasks, setLoadingTasks] = useState(true);
-  const [loadingPRs, setLoadingPRs] = useState(true);
-  const [loadingHistory, setLoadingHistory] = useState(true);
-  const [loadingTeam, setLoadingTeam] = useState(true);
+  const [tasksState, setTasksState] = useState<LoadState | null>(null);
+  const [prsState, setPrsState] = useState<LoadState | null>(null);
+  const [historyState, setHistoryState] = useState<LoadState | null>(null);
+  const [teamState, setTeamState] = useState<LoadState | null>(null);
 
   const [recentEvents, setRecentEvents] = useState<HistoryEvent[]>([]);
   const [teamSnapshot, setTeamSnapshot] = useState<TeamActivitySummary | null>(null);
 
-  const [errorTasks, setErrorTasks] = useState<string | null>(null);
-  const [errorPRs, setErrorPRs] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
-  // Fetch priority work and recently changed items
-  const loadDashboardTasks = useCallback(async (signal?: AbortSignal) => {
-    if (!currentUserName) return;
-    setLoadingTasks(true);
-    setErrorTasks(null);
-    try {
-      // 1. Priority items: P1 and P2 items assigned to me
-      const resPriority = await api.list(
-        {
-          project: filters.selectedProject,
-          currentUser: currentUserName,
-          quickFilter: 'my-tasks',
-          sortBy: 'priority',
-          sortOrder: 'asc',
-          limit: 5
-        },
-        signal
-      );
-      setPriorityItems(resPriority.items);
-
-      // 2. Recent items: recently changed items assigned to me
-      const resRecent = await api.list(
-        {
-          project: filters.selectedProject,
-          currentUser: currentUserName,
-          quickFilter: 'my-tasks',
-          sortBy: 'changedDate',
-          sortOrder: 'desc',
-          limit: 5
-        },
-        signal
-      );
-      setRecentItems(resRecent.items);
-      setLoadingTasks(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setErrorTasks(e?.message || 'Failed to load priority items');
-      setLoadingTasks(false);
-    }
-  }, [api, filters.selectedProject, currentUserName]);
-
-  // Fetch pending PR reviews
-  const loadPendingPRs = useCallback(async (signal?: AbortSignal) => {
-    setLoadingPRs(true);
-    setErrorPRs(null);
-    try {
-      const res = await api.pullRequests(
-        {
-          project: filters.selectedProject,
-          quickFilter: 'needs-my-review',
-          status: 'active',
-          limit: 5
-        },
-        signal
-      );
-      setPendingPRs(res.items);
-      setLoadingPRs(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setErrorPRs(e?.message || 'Failed to load pending reviews');
-      setLoadingPRs(false);
-    }
-  }, [api, filters.selectedProject]);
-
-  const loadRecentHistory = useCallback(async (signal?: AbortSignal) => {
-    setLoadingHistory(true);
-    try {
-      const res = await api.myHistoryTimeline({ limit: 5, project: filters.selectedProject }, signal);
-      setRecentEvents(res.items);
-      setLoadingHistory(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setLoadingHistory(false);
-    }
-  }, [api, filters.selectedProject]);
-
-  const loadTeamSnapshot = useCallback(async (signal?: AbortSignal) => {
-    setLoadingTeam(true);
-    try {
-      const res = await api.teamActivitySummary(7, filters.selectedProject, signal);
-      setTeamSnapshot(res);
-      setLoadingTeam(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setLoadingTeam(false);
-    }
-  }, [api, filters.selectedProject]);
+  // Each panel settles independently; keep successful data only within its original scope.
+  const request = useMemo(() => ({ api, project: filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce }),
+    [api, filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce]);
+  const taskScope = JSON.stringify([request.project, request.currentUserName]);
+  const tasksAvailable = !!currentUserName && tasksState?.successfulScope === taskScope;
+  const prsAvailable = prsState?.successfulScope === request.project;
+  const historyAvailable = historyState?.successfulScope === request.project;
+  const teamAvailable = teamState?.successfulScope === request.project;
+  const loadingTasks = booting ? !tasksAvailable : !!currentUserName && tasksState?.request !== request;
+  const loadingPRs = booting ? !prsAvailable : prsState?.request !== request;
+  const loadingHistory = booting ? !historyAvailable : historyState?.request !== request;
+  const loadingTeam = booting ? !teamAvailable : teamState?.request !== request;
+  const errorTasks = !loadingTasks && currentUserName && tasksState?.request === request ? tasksState.error : null;
+  const errorPRs = !loadingPRs && prsState?.request === request ? prsState.error : null;
 
   useEffect(() => {
-    if (booting) return;
+    if (request.booting) return;
     const ctrl = new AbortController();
+    const { api, project, currentUserName } = request;
+    const scope = JSON.stringify([project, currentUserName]);
+
     if (currentUserName) {
-      loadDashboardTasks(ctrl.signal);
+      api.list({ project, currentUser: currentUserName, quickFilter: 'my-tasks', sortBy: 'priority', sortOrder: 'asc', limit: 5 }, ctrl.signal)
+        .then(async priority => {
+          if (ctrl.signal.aborted) return;
+          setPriorityItems(priority.items);
+          const recent = await api.list({ project, currentUser: currentUserName, quickFilter: 'my-tasks', sortBy: 'changedDate', sortOrder: 'desc', limit: 5 }, ctrl.signal);
+          if (ctrl.signal.aborted) return;
+          setRecentItems(recent.items);
+          setTasksState({ request, error: null, successfulScope: scope });
+        }).catch((e: any) => {
+          if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+          setTasksState(prev => ({ request, error: e?.message || 'Failed to load priority items', successfulScope: prev?.successfulScope }));
+        });
     }
-    loadPendingPRs(ctrl.signal);
-    loadRecentHistory(ctrl.signal);
-    loadTeamSnapshot(ctrl.signal);
+
+    api.pullRequests({ project, quickFilter: 'needs-my-review', status: 'active', limit: 5 }, ctrl.signal)
+      .then(res => {
+        if (ctrl.signal.aborted) return;
+        setPendingPRs(res.items);
+        setPrsState({ request, error: null, successfulScope: project });
+      }, (e: any) => {
+        if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+        setPrsState(prev => ({ request, error: e?.message || 'Failed to load pending reviews', successfulScope: prev?.successfulScope }));
+      });
+
+    api.myHistoryTimeline({ limit: 5, project }, ctrl.signal)
+      .then(res => {
+        if (ctrl.signal.aborted) return;
+        setRecentEvents(res.items);
+        setHistoryState({ request, error: null, successfulScope: project });
+      }, (e: any) => {
+        if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+        setHistoryState(prev => ({ request, error: null, successfulScope: prev?.successfulScope }));
+      });
+
+    api.teamActivitySummary(7, project, ctrl.signal)
+      .then(res => {
+        if (ctrl.signal.aborted) return;
+        setTeamSnapshot(res);
+        setTeamState({ request, error: null, successfulScope: project });
+      }, (e: any) => {
+        if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+        setTeamState(prev => ({ request, error: null, successfulScope: prev?.successfulScope }));
+      });
     return () => ctrl.abort();
-  }, [loadDashboardTasks, loadPendingPRs, loadRecentHistory, loadTeamSnapshot, refreshToken, refreshNonce, booting, currentUserName]);
+  }, [request]);
 
   const scope = summary?.scope;
-  const isScopeReady = !booting && !loadingTasks && typeof scope?.myTasks === 'number';
+  const isScopeReady = !booting && !!currentUserName && (!loadingTasks || tasksAvailable) && typeof scope?.myTasks === 'number';
   const isPRReady = !booting && !prSummaryLoading && !prSummaryError && prSummary !== null;
 
   const lastSyncText = syncIndicator?.lastSuccessAt
@@ -351,7 +319,7 @@ export const DashboardOverview: React.FC = () => {
               </button>
             </div>
 
-            {loadingTasks ? (
+            {loadingTasks && !tasksAvailable ? (
               <div className="py-12 flex justify-center text-slate-400">
                 <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
@@ -359,6 +327,8 @@ export const DashboardOverview: React.FC = () => {
               <div className="p-4 text-center text-xs text-rose-500">
                 {errorTasks}
               </div>
+            ) : !currentUserName ? (
+              <div className="py-10 text-center text-slate-400 text-xs">—</div>
             ) : priorityItems.length === 0 ? (
               <div className="py-10 text-center text-slate-400 text-xs italic flex flex-col items-center gap-2">
                 <Inbox className="w-8 h-8 text-slate-300 dark:text-slate-700" />
@@ -414,7 +384,7 @@ export const DashboardOverview: React.FC = () => {
               </button>
             </div>
 
-            {loadingPRs ? (
+            {loadingPRs && !prsAvailable ? (
               <div className="py-12 flex justify-center text-slate-400">
                 <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
@@ -422,7 +392,7 @@ export const DashboardOverview: React.FC = () => {
               <div className="p-4 text-center text-xs text-rose-500">
                 {errorPRs}
               </div>
-            ) : pendingPRs.length === 0 ? (
+            ) : !prsAvailable || pendingPRs.length === 0 ? (
               <div className="py-10 text-center text-slate-400 text-xs italic flex flex-col items-center gap-2">
                 <Inbox className="w-8 h-8 text-slate-300 dark:text-slate-700" />
                 <span>{t('empty.noPendingReviews')}</span>
@@ -641,11 +611,11 @@ export const DashboardOverview: React.FC = () => {
               </button>
             </div>
 
-            {loadingHistory ? (
+            {loadingHistory && !historyAvailable ? (
               <div className="py-6 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
-            ) : recentEvents.length === 0 ? (
+            ) : !historyAvailable || recentEvents.length === 0 ? (
               <div className="py-6 text-center text-slate-400 text-xs italic">
                 {t('sections.noRecentPersonalActivity')}
               </div>
@@ -707,11 +677,11 @@ export const DashboardOverview: React.FC = () => {
               </button>
             </div>
 
-            {loadingTeam ? (
+            {loadingTeam && !teamAvailable ? (
               <div className="py-6 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
-            ) : !teamSnapshot ? (
+            ) : !teamAvailable || !teamSnapshot ? (
               <div className="py-6 text-center text-slate-400 text-xs italic">
                 {t('sections.noTeamActivity')}
               </div>
@@ -771,11 +741,13 @@ export const DashboardOverview: React.FC = () => {
               )}
             </div>
 
-            {loadingTasks ? (
+            {loadingTasks && !tasksAvailable ? (
               <div className="py-8 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
-            ) : recentItems.length === 0 ? (
+            ) : !currentUserName ? (
+              <div className="py-8 text-center text-slate-400 text-xs">—</div>
+            ) : !tasksAvailable || recentItems.length === 0 ? (
               <div className="py-8 text-center text-slate-400 text-xs italic">
                 {t('empty.noRecentActivity')}
               </div>
