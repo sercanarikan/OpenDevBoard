@@ -67,7 +67,84 @@ async function checkWorkItemSummaries() {
   }
 }
 
+async function checkScopedSummaries() {
+  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await p.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.scopedRequests = [];
+      window.fetch = (input, init) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        const kind = ({ '/api/pull-requests/summary': 'pr', '/api/pipelines/summary': 'pipeline', '/api/deployments/summary': 'deployment' })[url.pathname];
+        if (!kind) return originalFetch(input, init);
+        return new Promise(resolve => window.scopedRequests.push({ kind, project: url.searchParams.get('project') || 'all', signal: init?.signal, resolve }));
+      };
+      window.answerScoped = (kind, project, occurrence, number, status = 200) => {
+        const req = window.scopedRequests.filter(r => r.kind === kind && r.project === project)[occurrence];
+        const bodies = {
+          pr: { needsMyReview: number, createdByMe: number, involved: 0, totalActive: number },
+          pipeline: { periodDays: 30, totalPipelines: 1, totalRuns: number, succeeded: number, failed: number, partiallySucceeded: 0, inProgress: 0, canceled: 0, successRate: number, failedRuns: [], dailyStats: [] },
+          deployment: { periodDays: 30, totalDeployments: number, succeeded: number, failed: 0, inProgress: 0, successRate: number, environments: [], dailyStats: [] }
+        };
+        req.resolve(new Response(JSON.stringify(status === 200 ? bodies[kind] : { error: 'Synthetic summary failure' }), { status, headers: { 'Content-Type': 'application/json' } }));
+      };
+    });
+    await p.goto(`${process.env.WEB_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
+    const kinds = ['pr', 'pipeline', 'deployment'];
+    const waitScope = (project, count) => p.waitForFunction(({ project, count }) => ['pr', 'pipeline', 'deployment'].every(kind => window.scopedRequests.filter(r => r.kind === kind && r.project === project).length >= count), { project, count });
+    const answer = (kind, project, occurrence, number, status = 200) => p.evaluate(args => window.answerScoped(...args), [kind, project, occurrence, number, status]);
+    const answerAll = async (project, occurrence, number, status = 200) => { for (const kind of kinds) await answer(kind, project, occurrence, number, status); };
+    const prNav = p.getByTestId('nav-pull-requests');
+    const pipeline = p.getByTestId('dash-pipeline-card');
+    const deployment = p.getByTestId('dash-deployment-card');
+    const select = p.getByTestId('header').locator('select').first();
+    await p.waitForFunction(() => [...document.querySelectorAll('[data-testid="header"] select option')].some(o => o.value === 'Alpha') && [...document.querySelectorAll('[data-testid="header"] select option')].some(o => o.value === 'Beta'));
+    await select.selectOption('Alpha');
+    await waitScope('Alpha', 1);
+    await answerAll('Alpha', 0, 11);
+    await prNav.getByText('11', { exact: true }).waitFor();
+    await pipeline.getByText('%11', { exact: true }).waitFor();
+    await deployment.getByText('%11', { exact: true }).waitFor();
+    check('all three Alpha summaries are visible', true);
+    await p.getByTestId('sync-now').click();
+    await waitScope('Alpha', 2);
+    check('same-project refresh retains all three summaries', await prNav.getByText('11', { exact: true }).count() === 1 && await pipeline.getByText('%11', { exact: true }).count() === 1 && await deployment.getByText('%11', { exact: true }).count() === 1);
+    await select.selectOption('Beta');
+    await waitScope('Beta', 1);
+    check('project change hides all three previous summaries', await prNav.getByText('11', { exact: true }).count() === 0 && await pipeline.getByText('%11', { exact: true }).count() === 0 && await deployment.getByText('%11', { exact: true }).count() === 0);
+    check('all superseded summary requests are aborted', await p.evaluate(() => ['pr', 'pipeline', 'deployment'].every(kind => window.scopedRequests.filter(r => r.kind === kind && r.project === 'Alpha')[1].signal.aborted)));
+    await answerAll('Beta', 0, 22);
+    await prNav.getByText('22', { exact: true }).waitFor();
+    await pipeline.getByText('%22', { exact: true }).waitFor();
+    await deployment.getByText('%22', { exact: true }).waitFor();
+    check('all three Beta summaries appear', true);
+    await answerAll('Alpha', 1, 99);
+    await p.waitForTimeout(200);
+    check('late aborted responses cannot overwrite Beta summaries', await prNav.getByText('22', { exact: true }).count() === 1 && await pipeline.getByText('%22', { exact: true }).count() === 1 && await deployment.getByText('%22', { exact: true }).count() === 1);
+    await p.getByTestId('sync-now').click();
+    await waitScope('Beta', 2);
+    await answerAll('Beta', 1, 0, 500);
+    await p.waitForTimeout(200);
+    check('same-project errors preserve prior summary data', await prNav.getByText('22', { exact: true }).count() === 1 && await pipeline.getByText('%22', { exact: true }).count() === 1 && await deployment.getByText('%22', { exact: true }).count() === 1);
+    await p.getByTestId('sync-now').click();
+    await waitScope('Beta', 3);
+    check('retry keeps prior data while requests are pending', await prNav.getByText('22', { exact: true }).count() === 1 && await pipeline.getByText('%22', { exact: true }).count() === 1 && await deployment.getByText('%22', { exact: true }).count() === 1);
+    await answerAll('Beta', 2, 33);
+    await prNav.getByText('33', { exact: true }).waitFor();
+    await pipeline.getByText('%33', { exact: true }).waitFor();
+    await deployment.getByText('%33', { exact: true }).waitFor();
+    check('retry publishes all three new summaries', true);
+    await select.selectOption('Alpha');
+    await waitScope('Alpha', 3);
+    await answerAll('Alpha', 2, 0, 500);
+    await p.waitForTimeout(200);
+    check('first error in a new scope never reveals the previous scope data', await prNav.getByText('33', { exact: true }).count() === 0 && await pipeline.getByText('%33', { exact: true }).count() === 0 && await deployment.getByText('%33', { exact: true }).count() === 0);
+
+  } finally { await p.close(); }
+}
+
 try {
+  await checkScopedSummaries();
   await checkWorkItemSummaries();
   await page.addInitScript(() => {
     const originalFetch = window.fetch.bind(window);

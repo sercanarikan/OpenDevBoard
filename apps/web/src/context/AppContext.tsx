@@ -41,7 +41,7 @@ const errMessage = (e: unknown): string => {
   return (e as Error)?.message || i18n.t('api.unexpectedConnectionError');
 };
 
-/** Keeps the previous summary visible during a new request and ignores aborted responses. */
+/** Retains same-scope data during refresh and ignores aborted responses. */
 function useScopedSummary<T>(
   request: (signal: AbortSignal) => Promise<T>, enabled: boolean, refreshToken: number, label: string
 ) {
@@ -57,13 +57,13 @@ function useScopedSummary<T>(
     }).catch(e => {
       if (ctrl.signal.aborted || (e instanceof ApiError && e.isAbort)) return;
       const message = errMessage(e);
-      setResult(prev => ({ key: requestKey, data: prev.data, error: message }));
+      setResult(prev => ({ key: requestKey, data: prev.key?.request === request ? prev.data : null, error: message }));
       console.warn(`${label} summary failed:`, message);
     });
     return () => ctrl.abort();
   }, [request, enabled, requestKey, label]);
   return {
-    data: result.data,
+    data: result.key?.request === request ? result.data : null,
     loading: !enabled ? result.key === null : result.key !== requestKey,
     error: result.key === requestKey ? result.error : null
   };
