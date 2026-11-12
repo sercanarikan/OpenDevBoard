@@ -49,6 +49,10 @@ export const DeploymentExplorer: React.FC = () => {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [selectionScope, setSelectionScope] = useState<string | null>(null);
   const scope = JSON.stringify([filters.selectedProject, envFilter, statusFilter, debouncedSearch, days, page]);
+  // A selection belongs to one continuous visit to a scope, not future visits to the same scope.
+  if (selectionScope !== null && selectionScope !== scope) {
+    setSelectionScope(null);
+  }
   const request = useMemo(() => ({ scope, api, refreshToken, refreshNonce }), [scope, api, refreshToken, refreshNonce]);
   const [result, setResult] = useState<{
     request: typeof request;
@@ -526,7 +530,7 @@ export const DeploymentExplorer: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                   {deployments.map(dep => {
-                    const isSelected = selectedDeployment?.id === dep.id;
+                    const isSelected = selectionScope === scope && selectedDeployment?.id === dep.id;
 
                     return (
                       <tr

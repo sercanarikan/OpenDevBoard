@@ -126,6 +126,51 @@ try {
 } catch (error) {
   console.error(error);
   total++;
+}
+// Selection is invalidated by leaving its scope, even if that scope is later revisited.
+try {
+  await controlled.goto(`${web}/deployments`, { waitUntil: 'domcontentloaded' });
+  await waitRequest(1);
+  await answer(0, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().click();
+  await controlled.getByTestId('deployment-inspector').waitFor();
+  await controlled.getByTestId('env-chip').first().click();
+  await waitRequest(2);
+  check('filter change hides the inspector', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await answer(1, 200, response('Selection B', 50));
+  await controlled.getByTestId('env-chip').first().click();
+  await waitRequest(3);
+  await answer(2, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().waitFor();
+  check('returning to a filter does not resurrect selection', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await controlled.getByTestId('deployment-row').first().click();
+  await controlled.getByLabel('Next Page').click();
+  await waitRequest(4);
+  await answer(3, 200, response('Page 2', 50));
+  await controlled.getByLabel('Previous Page').click();
+  await waitRequest(5);
+  await answer(4, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().waitFor();
+  check('returning to a page does not resurrect selection', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await controlled.getByTestId('deployment-row').first().click();
+  const projects = controlled.getByTestId('header').locator('select').first();
+  await controlled.waitForFunction(() => [...document.querySelectorAll('[data-testid="header"] select option')].some(o => o.value !== 'all'));
+  const project = await projects.locator('option').evaluateAll(options => options.find(o => o.value !== 'all').value);
+  await projects.selectOption(project);
+  await waitRequest(6);
+  await answer(5, 200, response('Other project', 50));
+  await projects.selectOption('all');
+  await waitRequest(7);
+  await answer(6, 200, response('Selection A', 50));
+  await controlled.getByTestId('deployment-row').first().waitFor();
+  check('returning to a project does not resurrect selection', await controlled.getByTestId('deployment-inspector').count() === 0);
+  await controlled.getByTestId('deployment-row').first().click();
+  await controlled.getByTestId('nav-dashboard').click();
+  await controlled.waitForURL(url => url.pathname === '/dashboard');
+  check('dashboard retains the shared explicitly selected deployment', await controlled.getByTestId('deployment-inspector').isVisible());
+} catch (error) {
+  console.error(error);
+  total++;
 } finally {
   await controlled.close();
   await browser.close();
