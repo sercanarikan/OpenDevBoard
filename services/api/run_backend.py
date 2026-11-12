@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
 from dotenv import load_dotenv
@@ -36,7 +36,10 @@ def _full_sync_due(last_full):
     if RECONCILE_INTERVAL_SEC <= 0:
         return False
     try:
-        age = (datetime.utcnow() - datetime.fromisoformat(last_full).replace(tzinfo=None)).total_seconds()
+        last = datetime.fromisoformat(last_full)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - last).total_seconds()
     except ValueError:
         return True
     return age >= RECONCILE_INTERVAL_SEC
