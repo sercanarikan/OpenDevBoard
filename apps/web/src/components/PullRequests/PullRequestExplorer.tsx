@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   GitPullRequest,
@@ -43,8 +43,7 @@ export const PullRequestExplorer: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState({ needsMyReview: 0, createdByMe: 0, involved: 0, totalActive: 0 });
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Debounce search
@@ -57,40 +56,40 @@ export const PullRequestExplorer: React.FC = () => {
   }, [searchQuery]);
 
   // Fetch PRs
-  const fetchPRs = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const offset = (page - 1) * pageSize;
-      const res = await api.pullRequests(
-        {
-          project: filters.selectedProject,
-          status: statusFilter,
-          quickFilter,
-          search: debouncedSearch,
-          limit: pageSize,
-          offset
-        },
-        signal
-      );
-      setPrs(res.items);
-      setTotal(res.total);
-      if (res.summary) {
-        setSummary(res.summary);
-      }
-      setLoading(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setError(e?.message || 'Failed to load pull requests');
-      setLoading(false);
-    }
+  const fetchPRs = useCallback((signal: AbortSignal) => {
+    const offset = (page - 1) * pageSize;
+    return api.pullRequests(
+      {
+        project: filters.selectedProject,
+        status: statusFilter,
+        quickFilter,
+        search: debouncedSearch,
+        limit: pageSize,
+        offset
+      },
+      signal
+    );
   }, [api, filters.selectedProject, statusFilter, quickFilter, debouncedSearch, page, pageSize]);
+
+  // A changed request is loading until that specific request settles.
+  const request = useMemo(() => ({ fetchPRs, refreshToken, refreshNonce }), [fetchPRs, refreshToken, refreshNonce]);
+  const loading = settled?.request !== request;
+  const error = loading ? null : settled.error;
 
   useEffect(() => {
     const ctrl = new AbortController();
-    fetchPRs(ctrl.signal);
+    request.fetchPRs(ctrl.signal).then(res => {
+      if (ctrl.signal.aborted) return;
+      setPrs(res.items);
+      setTotal(res.total);
+      if (res.summary) setSummary(res.summary);
+      setSettled({ request, error: null });
+    }, (e: any) => {
+      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+      setSettled({ request, error: e?.message || 'Failed to load pull requests' });
+    });
     return () => ctrl.abort();
-  }, [fetchPRs, refreshToken, refreshNonce]);
+  }, [request]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const renderPrCount = (val: number): number | string => (loading && prs.length === 0 ? '—' : val);
