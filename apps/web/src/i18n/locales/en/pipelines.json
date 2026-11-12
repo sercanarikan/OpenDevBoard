@@ -1,4 +1,6 @@
 {
+  "runCount_one": "{{count}} pipeline run shown",
+  "runCount_other": "{{count}} pipeline runs shown",
   "title": "Pipeline Health",
   "subtitle": "Health status of CI/CD build and test pipeline executions",
   "summary": {
