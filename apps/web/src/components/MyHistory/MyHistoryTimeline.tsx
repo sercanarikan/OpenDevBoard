@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CheckCircle2,
@@ -44,8 +44,7 @@ export const MyHistoryTimeline: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<HistorySummary | null>(null);
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Debounce search
@@ -57,46 +56,45 @@ export const MyHistoryTimeline: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const loadHistory = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const sum = await api.myHistorySummary(days, filters.selectedProject, signal, {
-        activityType,
-        search: debouncedSearch
-      });
+  const request = useMemo(() => ({ api, days, project: filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce }),
+    [api, days, filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce]);
+  const loading = settled?.request !== request;
+  const error = loading ? null : settled.error;
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    request.api.myHistorySummary(request.days, request.project, ctrl.signal, {
+      activityType: request.activityType,
+      search: request.debouncedSearch
+    }).then(async sum => {
+      if (ctrl.signal.aborted) return;
       setSummary(sum);
 
-      const offset = (page - 1) * pageSize;
-      const res = await api.myHistoryTimeline(
+      const offset = (request.page - 1) * pageSize;
+      const res = await request.api.myHistoryTimeline(
         {
-          project: filters.selectedProject,
-          activityType,
-          search: debouncedSearch,
-          days,
+          project: request.project,
+          activityType: request.activityType,
+          search: request.debouncedSearch,
+          days: request.days,
           limit: pageSize,
           offset
         },
-        signal
+        ctrl.signal
       );
+      if (ctrl.signal.aborted) return;
       if (sum.totalMatchingEvents !== undefined && sum.totalMatchingEvents !== res.total) {
         throw new Error(`History scope mismatch: summary=${sum.totalMatchingEvents}, timeline=${res.total}`);
       }
       setTimeline({ events: res.items, asOf: Date.now() });
       setTotal(res.total);
-      setLoading(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setError(e?.message || 'Failed to load activity history');
-      setLoading(false);
-    }
-  }, [api, days, filters.selectedProject, activityType, debouncedSearch, page]);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    loadHistory(ctrl.signal);
+      setSettled({ request, error: null });
+    }).catch((e: any) => {
+      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+      setSettled({ request, error: e?.message || 'Failed to load activity history' });
+    });
     return () => ctrl.abort();
-  }, [loadHistory, refreshToken, refreshNonce]);
+  }, [request]);
 
   const isReady = !loading && summary !== null;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));

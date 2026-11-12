@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Users,
@@ -48,8 +48,7 @@ export const TeamActivityExplorer: React.FC = () => {
   const [commits, setCommits] = useState<TeamCommit[]>([]);
   const [commitsTotal, setCommitsTotal] = useState(0);
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Debounce search
@@ -61,40 +60,39 @@ export const TeamActivityExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const loadData = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const sum = await api.teamActivitySummary(days, filters.selectedProject, signal);
-      setSummary(sum);
-
-      const offset = (commitPage - 1) * pageSize;
-      const cRes = await api.teamCommits(
-        {
-          project: filters.selectedProject,
-          search: debouncedSearch,
-          days,
-          limit: pageSize,
-          offset
-        },
-        signal
-      );
-      setCommits(cRes.items);
-      setCommitsTotal(cRes.total);
-
-      setLoading(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError' || e?.isAbort) return;
-      setError(e?.message || 'Failed to load team activity');
-      setLoading(false);
-    }
-  }, [api, days, filters.selectedProject, debouncedSearch, commitPage]);
+  const request = useMemo(() => ({ api, days, project: filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce }),
+    [api, days, filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce]);
+  const loading = settled?.request !== request;
+  const error = loading ? null : settled.error;
 
   useEffect(() => {
     const ctrl = new AbortController();
-    loadData(ctrl.signal);
+    request.api.teamActivitySummary(request.days, request.project, ctrl.signal).then(async sum => {
+      if (ctrl.signal.aborted) return;
+      setSummary(sum);
+
+      const offset = (request.commitPage - 1) * pageSize;
+      const cRes = await request.api.teamCommits(
+        {
+          project: request.project,
+          search: request.debouncedSearch,
+          days: request.days,
+          limit: pageSize,
+          offset
+        },
+        ctrl.signal
+      );
+      if (ctrl.signal.aborted) return;
+      setCommits(cRes.items);
+      setCommitsTotal(cRes.total);
+
+      setSettled({ request, error: null });
+    }).catch((e: any) => {
+      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
+      setSettled({ request, error: e?.message || 'Failed to load team activity' });
+    });
     return () => ctrl.abort();
-  }, [loadData, refreshToken, refreshNonce]);
+  }, [request]);
 
   const isReady = summary !== null;
 
