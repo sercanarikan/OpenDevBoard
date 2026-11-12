@@ -165,9 +165,49 @@ try {
   await controlled.getByTestId('deployment-row').first().waitFor();
   check('returning to a project does not resurrect selection', await controlled.getByTestId('deployment-inspector').count() === 0);
   await controlled.getByTestId('deployment-row').first().click();
+  check('new selection opens the correct deployment', await controlled.getByTestId('deployment-inspector').getAttribute('data-id') === 'Selection A');
   await controlled.getByTestId('nav-dashboard').click();
   await controlled.waitForURL(url => url.pathname === '/dashboard');
   check('dashboard retains the shared explicitly selected deployment', await controlled.getByTestId('deployment-inspector').isVisible());
+  await controlled.getByTestId('deployment-inspector').getByRole('button').first().click();
+  await controlled.getByTestId('nav-explorer').click();
+  await controlled.waitForURL(url => url.pathname === '/tasks');
+  await controlled.getByTestId('nav-dashboard').click();
+  await controlled.waitForURL(url => url.pathname === '/dashboard');
+  await controlled.getByTestId('dash-card-my-tasks').waitFor();
+  check('closing the inspector clears shared selection across navigation', await controlled.getByTestId('deployment-inspector').count() === 0);
+  // A row can be selected while a changed search is still waiting for debounce.
+  await controlled.goto(`${web}/deployments`, { waitUntil: 'domcontentloaded' });
+  await waitRequest(1);
+  await answer(0, 200, response('Before search', 50));
+  await controlled.getByTestId('deployment-row').first().waitFor();
+  await controlled.getByPlaceholder('Sürüm adı, pipeline veya ortam ara...').fill('new search');
+  await controlled.getByTestId('deployment-row').first().click();
+  await waitRequest(2);
+  await controlled.getByTestId('nav-dashboard').click();
+  await controlled.waitForURL(url => url.pathname === '/dashboard');
+  await controlled.getByTestId('dash-card-my-tasks').waitFor();
+  check('debounced search invalidates a selection made while waiting', await controlled.getByTestId('deployment-inspector').count() === 0);
+  for (const kind of ['filter', 'page', 'project']) {
+    await controlled.goto(`${web}/deployments`, { waitUntil: 'domcontentloaded' });
+    await waitRequest(1);
+    await answer(0, 200, response('Invalid selection', 50));
+    await controlled.getByTestId('deployment-row').first().click();
+    await controlled.getByTestId('deployment-inspector').waitFor();
+    if (kind === 'filter') await controlled.getByTestId('env-chip').first().click();
+    if (kind === 'page') await controlled.getByLabel('Next Page').click();
+    if (kind === 'project') {
+      const selector = controlled.getByTestId('header').locator('select').first();
+      await controlled.waitForFunction(() => [...document.querySelectorAll('[data-testid="header"] select option')].some(o => o.value !== 'all'));
+      const project = await selector.locator('option').evaluateAll(options => options.find(o => o.value !== 'all').value);
+      await selector.selectOption(project);
+    }
+    await waitRequest(2);
+    await controlled.getByTestId('nav-dashboard').click();
+    await controlled.waitForURL(url => url.pathname === '/dashboard');
+    await controlled.getByTestId('dash-card-my-tasks').waitFor();
+    check(`dashboard hides selection invalidated by ${kind}`, await controlled.getByTestId('deployment-inspector').count() === 0);
+  }
 } catch (error) {
   console.error(error);
   total++;
