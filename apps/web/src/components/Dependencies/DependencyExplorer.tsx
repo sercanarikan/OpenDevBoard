@@ -44,6 +44,8 @@ const nodeTypes = {
   workItemNode: WorkItemNode as any
 };
 
+const emptyWorkItems: WorkItem[] = [];
+
 export const DependencyExplorer: React.FC = () => {
   const {
     poolData,
@@ -67,7 +69,7 @@ export const DependencyExplorer: React.FC = () => {
     ensurePool();
   }, [ensurePool]);
 
-  const allItems: WorkItem[] = poolData?.flat_items || [];
+  const allItems: WorkItem[] = poolData?.flat_items || emptyWorkItems;
   // Graph lookups also need completed items and context rows (relation targets), never only the active scope.
   const graphItems: WorkItem[] = poolData?.graphItems || allItems;
 
