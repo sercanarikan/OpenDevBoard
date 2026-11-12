@@ -100,7 +100,7 @@ export const DependencyExplorer: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Focused node ID (the anchor around which Predecessors and Successors are drawn)
-  const [focusId, setFocusId] = useState<number | null>(null);
+  const [focus, setFocus] = useState<{ project: string; id: number | null }>(() => ({ project: filters.selectedProject, id: null }));
 
   // ReactFlow instance
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
@@ -120,17 +120,18 @@ export const DependencyExplorer: React.FC = () => {
     });
   }, [scopedItems]);
 
-  // Set initial focusId if none is set
-  useEffect(() => {
-    if (!focusId && dependentItems.length > 0) {
-      if (selectedWorkItem && dependentItems.some(i => i.id === selectedWorkItem.id)) {
-        setFocusId(selectedWorkItem.id);
-      } else {
-        const firstBlocked = dependentItems.find(i => i.isBlocked);
-        setFocusId(firstBlocked ? firstBlocked.id : dependentItems[0].id);
-      }
-    }
-  }, [focusId, dependentItems, selectedWorkItem]);
+  // Remember the initial choice per visit to a project; selection and graph focus are independent.
+  const currentProject = filters.selectedProject;
+  const inCurrentProject = focus.project === currentProject;
+  const focusId = inCurrentProject ? focus.id : null;
+  if (!inCurrentProject) {
+    setFocus({ project: currentProject, id: null });
+  } else if (focus.id === null && dependentItems.length > 0) {
+    const initial = selectedWorkItem && dependentItems.some(i => i.id === selectedWorkItem.id)
+      ? selectedWorkItem
+      : dependentItems.find(i => i.isBlocked) ?? dependentItems[0];
+    setFocus({ project: currentProject, id: initial.id });
+  }
 
   // True only when pool data is actually loaded and ready (never show 0 during loading)
   const hasLoadedPool = poolData !== null && !booting && !poolLoading;
@@ -193,12 +194,12 @@ export const DependencyExplorer: React.FC = () => {
   // Set Focus handler
   const handleSetFocus = useCallback((targetId: number) => {
     setIsGraphUpdating(true);
-    setFocusId(targetId);
+    setFocus({ project: currentProject, id: targetId });
     const targetItem = graphItems.find(i => i.id === targetId);
     if (targetItem) {
       setSelectedWorkItem(targetItem);
     }
-  }, [graphItems, setSelectedWorkItem]);
+  }, [graphItems, setSelectedWorkItem, currentProject]);
 
   // Convert graphData to ReactFlow Nodes & Edges
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
