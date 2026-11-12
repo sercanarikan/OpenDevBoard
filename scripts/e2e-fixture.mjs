@@ -468,6 +468,14 @@ await nav(web, 'Story & Tasks');
 await wait(web, 2500);
 check('pool is loaded lazily when Story & Tasks opens', web.api.filter(c => c.path === '/api/work-items-pool').length > poolBefore);
 check('Story & Tasks renders the hierarchy', (await has(web, 'Tümünü Genişlet')) || (await has(web, 'Tüm Hiyerarşiler')));
+const hierarchyRows = web.locator(T('hierarchy-row'));
+const expandedRows = await hierarchyRows.count();
+await web.getByRole('button', { name: 'Tümünü Daralt' }).click();
+const collapsedRows = await hierarchyRows.count();
+check('collapsing the hierarchy hides descendants', collapsedRows > 0 && collapsedRows < expandedRows, `${expandedRows} -> ${collapsedRows}`);
+await web.getByRole('button', { name: 'Tümünü Genişlet' }).click();
+check('expanding the hierarchy restores descendants', await hierarchyRows.count() > collapsedRows);
+
 await shot(web, 'pag-10-story-tasks.png');
 
 await nav(web, 'Dependency Graph');
