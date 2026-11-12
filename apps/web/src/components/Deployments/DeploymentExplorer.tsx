@@ -17,8 +17,10 @@ import {
   Inbox
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import type { DeploymentRecord, DeploymentSummary } from '../../types/paging';
+import type { DeploymentEnvironmentStat, DeploymentRecord, DeploymentSummary } from '../../types/paging';
 import { DeploymentInspector } from './DeploymentInspector';
+
+const emptyEnvironments: DeploymentEnvironmentStat[] = [];
 
 export const DeploymentExplorer: React.FC = () => {
   const { t } = useTranslation(['deployments', 'common']);
@@ -151,7 +153,7 @@ export const DeploymentExplorer: React.FC = () => {
   const isReady = !loading && summary !== null;
 
   // Filtered and visible environments
-  const allEnvironments = summary?.environments ?? [];
+  const allEnvironments = summary?.environments ?? emptyEnvironments;
   const visibleEnvironments = useMemo(() => {
     let list = allEnvironments;
     if (envSearchQuery.trim()) {
