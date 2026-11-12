@@ -126,6 +126,7 @@ async function checkScopedSummaries() {
     await answerAll('Beta', 1, 0, 500);
     await p.waitForTimeout(200);
     check('same-project errors preserve prior summary data', await prNav.getByText('22', { exact: true }).count() === 1 && await pipeline.getByText('%22', { exact: true }).count() === 1 && await deployment.getByText('%22', { exact: true }).count() === 1);
+    check('all three summary errors remain visible', await p.getByTestId('dash-pr-summary-error').count() > 0 && await pipeline.getByText('Synthetic summary failure', { exact: true }).count() === 1 && await deployment.getByText('Synthetic summary failure', { exact: true }).count() === 1);
     await p.getByTestId('sync-now').click();
     await waitScope('Beta', 3);
     check('retry keeps prior data while requests are pending', await prNav.getByText('22', { exact: true }).count() === 1 && await pipeline.getByText('%22', { exact: true }).count() === 1 && await deployment.getByText('%22', { exact: true }).count() === 1);
