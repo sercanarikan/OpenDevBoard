@@ -37,9 +37,60 @@ try {
   await page.getByText('Daha Az Göster').click();
   check('selected environment stays visible', await page.getByTestId('env-chip').filter({ hasText: 'Environment 8' }).count() === 1);
 
-  await page.goto(`${web}/dependencies`, { waitUntil: 'networkidle' });
+  let releasePool;
+  const poolGate = new Promise(resolve => { releasePool = resolve; });
+  let poolRequests = 0;
+  await page.route('**/api/work-items-pool', async route => {
+    poolRequests++;
+    if (poolRequests === 1) {
+      await poolGate;
+      await route.fulfill({ status: 500, json: { error: 'Synthetic pool failure' } });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.goto(`${web}/dependencies`, { waitUntil: 'domcontentloaded' });
+  await page.getByTestId('dependency-loading').waitFor();
+  check('pool loading does not create a focus', await page.locator('[data-testid="graph-node"][data-focused="true"]').count() === 0);
+  releasePool();
+  await page.getByTestId('dependency-error').waitFor();
+  check('pool error is visible without a focus', await page.locator('[data-testid="graph-node"][data-focused="true"]').count() === 0);
+  await page.getByTestId('dependency-retry').click();
   await page.waitForSelector('[data-testid="graph-node"][data-focused="true"]', { timeout: 30000 });
+  check('retry recovers the pool', poolRequests === 2);
   check('dependency data loads with exactly one focused node', await page.locator('[data-testid="graph-node"][data-focused="true"]').count() === 1);
+  const focusPicker = page.getByLabel('Grafikte odaklanılan işi değiştir');
+  const initialFocus = await focusPicker.inputValue();
+  check('initial focus corresponds to a selectable dependency', await focusPicker.locator(`option[value="${initialFocus}"]`).count() === 1);
+  const choices = await focusPicker.locator('option').evaluateAll(options => options.map(option => option.value));
+  if (choices.length < 2) throw new Error('Synthetic fixture must provide two dependency choices');
+  const manualFocus = choices.find(value => value !== initialFocus);
+  await focusPicker.selectOption(manualFocus);
+  await page.waitForFunction(id => document.querySelector('[data-testid="graph-node"][data-focused="true"]')?.getAttribute('data-id') === id, manualFocus);
+  await page.getByRole('button', { name: 'Bağımlılık Matrisi' }).first().click();
+  await page.getByRole('button', { name: 'İnteraktif Graf' }).click();
+  await page.waitForSelector(`[data-testid="graph-node"][data-focused="true"][data-id="${manualFocus}"]`);
+  check('manual focus survives graph and matrix switching', await focusPicker.inputValue() === manualFocus);
+  await page.getByTitle('Zaten tamamlanmış bağımlılıkları gizle').click();
+  await page.getByTestId('hops-connected').click();
+  await page.waitForTimeout(300);
+  check('graph options preserve the chosen focus', await focusPicker.inputValue() === manualFocus);
+  const projectSelect = page.getByTestId('header').locator('select').first();
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="header"] select option')].some(o => o.value !== 'all'));
+  const projects = await projectSelect.locator('option').evaluateAll(options => options.filter(o => o.value !== 'all').map(o => o.value));
+  let checkedProject = false;
+  for (const project of projects) {
+    await projectSelect.selectOption(project);
+    await page.waitForTimeout(300);
+    const focused = await page.locator('[data-testid="graph-node"][data-focused="true"]').getAttribute('data-id').catch(() => null);
+    const selectable = await focusPicker.locator('option').evaluateAll(options => options.map(o => o.value));
+    if (selectable.length && !selectable.includes(manualFocus)) {
+      check('project change selects a focus in the new scope', focused !== null && selectable.includes(focused));
+      checkedProject = true;
+      break;
+    }
+  }
+  if (!checkedProject) throw new Error('Synthetic fixture lacks a project excluding the manual focus');
 } catch (error) {
   console.error(error);
   total++;
