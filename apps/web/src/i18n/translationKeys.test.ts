@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import i18n from './index';
+import pullRequestsTR from './locales/tr/pullRequests.json';
+import pullRequestsEN from './locales/en/pullRequests.json';
 
 const sources = import.meta.glob('../**/*.{ts,tsx}', {
   query: '?raw',
@@ -56,4 +58,14 @@ describe('every literal t() key resolves in both languages', () => {
       });
     }
   }
+});
+
+describe('pull request reviewer requirement labels', () => {
+  it('provides required and optional labels in both supported languages', () => {
+    for (const [language, translations] of [['tr', pullRequestsTR], ['en', pullRequestsEN]] as const) {
+      const labels = translations.inspector;
+      expect(labels.required, `${language} required label`).toBeTruthy();
+      expect(labels.optional, `${language} optional label`).toBeTruthy();
+    }
+  });
 });

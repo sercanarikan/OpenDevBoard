@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   GitPullRequest,
@@ -18,6 +18,7 @@ import { useApp } from '../../context/useApp';
 import type { PullRequest, PRQuickFilter, PRStatus, PullRequestReviewer } from '../../types/paging';
 import { PullRequestInspector } from './PullRequestInspector';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
+import { ReviewerRequirementBadge } from './ReviewerRequirementBadge';
 
 export const PullRequestExplorer: React.FC = () => {
   const { t } = useTranslation(['pullRequests', 'common']);
@@ -47,6 +48,7 @@ export const PullRequestExplorer: React.FC = () => {
 
   const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const forcedRefreshNonce = useRef(0);
 
   // Debounce search
   useEffect(() => {
@@ -60,6 +62,8 @@ export const PullRequestExplorer: React.FC = () => {
   // Fetch PRs
   const fetchPRs = useCallback((signal: AbortSignal) => {
     const offset = (page - 1) * pageSize;
+    const refresh = refreshNonce > forcedRefreshNonce.current;
+    if (refresh) forcedRefreshNonce.current = refreshNonce;
     return api.pullRequests(
       {
         project: filters.selectedProject,
@@ -67,11 +71,12 @@ export const PullRequestExplorer: React.FC = () => {
         quickFilter,
         search: debouncedSearch,
         limit: pageSize,
-        offset
+        offset,
+        refresh
       },
       signal
     );
-  }, [api, filters.selectedProject, statusFilter, quickFilter, debouncedSearch, page, pageSize]);
+  }, [api, filters.selectedProject, statusFilter, quickFilter, debouncedSearch, page, pageSize, refreshNonce]);
 
   // A changed request is loading until that specific request settles.
   const request = useMemo(() => ({ fetchPRs, refreshToken, refreshNonce }), [fetchPRs, refreshToken, refreshNonce]);
@@ -365,7 +370,11 @@ export const PullRequestExplorer: React.FC = () => {
                         <td className="py-2.5 px-3">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {pr.reviewers.slice(0, 3).map((r, idx) => (
-                              <div key={idx} className="flex items-center gap-0.5" title={`${r.displayName}: ${r.voteLabel}`}>
+                              <div
+                                key={idx}
+                                className="flex items-center gap-0.5"
+                                title={`${r.displayName}: ${r.voteLabel} · ${t(r.isRequired ? 'inspector.required' : 'inspector.optional')}`}
+                              >
                                 {r.avatar ? (
                                   <img src={r.avatar} alt={r.displayName} className="w-4 h-4 rounded-full object-cover" />
                                 ) : (
@@ -374,6 +383,10 @@ export const PullRequestExplorer: React.FC = () => {
                                   </div>
                                 )}
                                 {getVoteIcon(r)}
+                                <ReviewerRequirementBadge
+                                  isRequired={Boolean(r.isRequired)}
+                                  label={t(r.isRequired ? 'inspector.required' : 'inspector.optional')}
+                                />
                               </div>
                             ))}
                             {pr.reviewers.length > 3 && (

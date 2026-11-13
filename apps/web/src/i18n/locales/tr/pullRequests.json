@@ -53,6 +53,7 @@
     "closed": "Kapatılma",
     "reviewers": "İnceleyenler",
     "required": "Zorunlu",
+    "optional": "Opsiyonel",
     "description": "Açıklama",
     "noDescription": "Açıklama belirtilmemiş.",
     "workItems": "İlişkili İş Öğeleri",

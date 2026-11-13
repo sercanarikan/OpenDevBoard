@@ -152,6 +152,10 @@ export function prQuery(p: PullRequestParams): URLSearchParams {
   return q;
 }
 
+export function pullRequestSnapshotParams(project?: string): PullRequestParams {
+  return { project, status: 'all', quickFilter: 'all', limit: 1, offset: 0, refresh: true };
+}
+
 export function pipelineQuery(p: PipelineParams): URLSearchParams {
   const q = new URLSearchParams();
   if (p.limit !== undefined) q.set('limit', String(p.limit));

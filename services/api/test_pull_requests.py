@@ -337,6 +337,30 @@ class TestPullRequestsService(unittest.TestCase):
         self.assertEqual(filtered["total"], 1)
         self.assertEqual(summary["needsMyReview"], 1)
 
+    def test_optional_reviewer_with_no_vote_appears_in_needs_my_review(self):
+        raw_pr = {
+            "pullRequestId": 9,
+            "title": "Synthetic optional reviewer PR",
+            "status": "active",
+            "repository": {"name": "fixture-repo", "project": {"name": "Fixture Project"}},
+            "createdBy": {"id": "other-user", "displayName": "Other User"},
+            "reviewers": [{
+                "id": self.user["id"],
+                "displayName": self.user["displayName"],
+                "vote": 0,
+                "isRequired": False,
+            }],
+        }
+
+        parsed = pr_service.parse_azure_pr(raw_pr, "https://dev.azure.com/fixture")
+        result = pr_service.query_pull_requests(
+            [parsed], {"project": "all", "status": "active", "quickFilter": "needs-my-review"}, self.user
+        )
+
+        self.assertFalse(parsed["reviewers"][0]["isRequired"])
+        self.assertEqual(result["total"], 1)
+        self.assertTrue(result["items"][0]["needsMyReview"])
+
     def test_pr_upstream_failures_keep_categories_for_auth_rate_limit_timeout_and_refusal(self):
         cases = [
             (type('Response', (), {'status_code': 403, 'json': lambda self: {}})(), 'auth'),

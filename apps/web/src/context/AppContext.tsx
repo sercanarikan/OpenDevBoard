@@ -12,7 +12,7 @@ import {
   type PipelineRun,
   type DeploymentRecord
 } from '../types/paging';
-import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent } from '../services/liveApi';
+import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent, pullRequestSnapshotParams } from '../services/liveApi';
 import { demoApi } from '../services/demoApi';
 import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockData';
 import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
@@ -351,6 +351,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         await postSync(mode);
         try {
+          await api.pullRequests(pullRequestSnapshotParams(filters.selectedProject));
+        } catch {
+          // The following summary/list refresh surfaces the API's stale or failed cache state.
+        }
+        try {
           setSyncReport(await fetchSyncReport());
         } catch {
           /* the poll reports a lost backend */
@@ -360,7 +365,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsSyncing(false);
       }
     },
-    [source]
+    [source, api, filters.selectedProject]
   );
 
   const retryConnection = useCallback(async () => {

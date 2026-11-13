@@ -53,6 +53,7 @@
     "closed": "Closed",
     "reviewers": "Reviewers",
     "required": "Required",
+    "optional": "Optional",
     "description": "Description",
     "noDescription": "No description provided.",
     "workItems": "Linked Work Items",
