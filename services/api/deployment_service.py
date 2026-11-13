@@ -7,6 +7,7 @@ SQLite caching, and deterministic offline fixture support.
 import json
 import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import requests
@@ -252,43 +253,43 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
             entry["status"] = status
         if entry not in upstream_errors:
             upstream_errors.append(entry)
-    request_budget = DEPLOYMENT_MAX_PAGES * max(1, min(len(projects), 100))
-    requests_made = 0
-    for proj in projects:
+    def fetch_project(proj):
+        records = []
+        errors = []
         try:
             vsrm_url = f"https://vsrm.dev.azure.com/{org_name}/{proj}/_apis/release/deployments"
             token = None
             seen_tokens = set()
-            project_complete = False
             for _ in range(DEPLOYMENT_MAX_PAGES):
-                if requests_made >= request_budget:
-                    break
                 params = {"minStartedTime": start_date_iso, "$top": DEPLOYMENT_PAGE_SIZE, "$expand": "releaseEnvironment", "api-version": "7.0"}
                 if token:
                     params["continuationToken"] = token
-                r = requests.get(vsrm_url, headers=headers, params=params, timeout=10)
-                requests_made += 1
-                if r.status_code != 200:
-                    record_error(status=r.status_code)
+                response = requests.get(vsrm_url, headers=headers, params=params, timeout=10)
+                if response.status_code != 200:
+                    errors.append((response.status_code, None))
                     break
-                for d in r.json().get('value', []):
-                    all_raw.append((d, proj))
-                next_token = (getattr(r, 'headers', {}) or {}).get('x-ms-continuationtoken')
+                records.extend((item, proj) for item in response.json().get('value', []))
+                next_token = (getattr(response, 'headers', {}) or {}).get('x-ms-continuationtoken')
                 if not next_token:
-                    project_complete = True
-                    break
+                    return proj, records, True, errors
                 if next_token in seen_tokens:
                     break
                 seen_tokens.add(next_token)
                 token = next_token
-            project_outcomes[proj] = project_complete
-            if not project_complete:
-                projects_fetch_ok = False
         except Exception as ex:
-            projects_fetch_ok = False
-            project_outcomes[proj] = False
-            record_error(error=ex)
-            logger.debug("Project %s deployment fetch error: %s", proj, ex)
+            errors.append((None, ex))
+            logger.debug("Deployment fetch failed for a project: %s", type(ex).__name__)
+        return proj, records, False, errors
+
+    # Limit concurrent read-only requests; one slow project must not block every other project.
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for proj, records, complete, errors in executor.map(fetch_project, projects):
+            all_raw.extend(records)
+            project_outcomes[proj] = complete
+            if not complete:
+                projects_fetch_ok = False
+            for status, error in errors:
+                record_error(status=status, error=error)
 
     normalized = []
     for raw, proj in all_raw:

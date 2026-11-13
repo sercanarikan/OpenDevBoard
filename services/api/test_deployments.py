@@ -64,6 +64,24 @@ class TestDeploymentMetricsService(unittest.TestCase):
     def _ok(value):
         return type('Response', (), {'status_code': 200, 'json': lambda self: {'value': value}})()
 
+    def test_project_requests_do_not_wait_for_each_other(self):
+        import threading
+        barrier = threading.Barrier(2, timeout=2)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'parallel.db')):
+                deployment_service.init_deployment_db()
+                with sync_service.get_db_connection() as conn:
+                    conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+                    conn.executemany('INSERT INTO work_items (project, deleted_at) VALUES (?, NULL)', [('Alpha',), ('Beta',)])
+                def fetch(*args, **kwargs):
+                    barrier.wait()
+                    return self._ok([])
+                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
+                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(deployment_service.requests, 'get', side_effect=fetch):
+                    result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'synthetic', force_refresh=True, include_cache_status=True)
+                self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+
     def test_deployment_successful_empty_response_is_reported_complete(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-deployment.db')):

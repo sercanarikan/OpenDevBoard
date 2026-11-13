@@ -15,9 +15,22 @@ afterEach(() => {
   off?.();
   off = null;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('getJson network reporting', () => {
+  it('allows deployment summaries more than 20 seconds and still times out', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_u: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    })));
+    const request = liveApi.deploymentsSummary();
+    const result = expect(request).rejects.toMatchObject({ message: 'timeout' });
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(30000);
+    await result;
+  });
   it('returns the fixture sync result so the UI can refresh the fixture status', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'success', fixture: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
