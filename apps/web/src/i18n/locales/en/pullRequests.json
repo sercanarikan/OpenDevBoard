@@ -1,6 +1,11 @@
 {
   "title": "Pull Requests",
   "subtitle": "Azure DevOps code reviews and active merge requests",
+  "identity": {
+    "groupMembershipUnavailable": "Team/group membership could not be checked; PRs assigned through a group may be missing.",
+    "cachedData": "Last successful PR data: {{when}}. This list may be stale.",
+    "unknownTime": "unknown time"
+  },
   "filters": {
     "needsMyReview": "Needs My Review",
     "createdByMe": "Created by Me",
@@ -48,6 +53,7 @@
     "closed": "Closed",
     "reviewers": "Reviewers",
     "required": "Required",
+    "optional": "Optional",
     "description": "Description",
     "noDescription": "No description provided.",
     "workItems": "Linked Work Items",

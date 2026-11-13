@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { PullRequest, PullRequestReviewer } from '../../types/paging';
 import { useApp } from '../../context/useApp';
+import { ReviewerRequirementBadge } from './ReviewerRequirementBadge';
 
 interface PullRequestInspectorProps {
   pr: PullRequest;
@@ -261,11 +262,10 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
                     <span className="font-medium text-slate-800 dark:text-slate-200 truncate" title={r.displayName}>
                       {r.displayName}
                     </span>
-                    {r.isRequired && (
-                      <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/80 dark:text-amber-400 border border-amber-200 dark:border-amber-900 shrink-0">
-                        {t('inspector.required')}
-                      </span>
-                    )}
+                    <ReviewerRequirementBadge
+                      isRequired={Boolean(r.isRequired)}
+                      label={t(r.isRequired ? 'inspector.required' : 'inspector.optional')}
+                    />
                   </div>
                   <div className="shrink-0">{getVoteBadge(r)}</div>
                 </div>

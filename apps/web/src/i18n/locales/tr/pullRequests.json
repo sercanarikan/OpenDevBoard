@@ -1,6 +1,11 @@
 {
   "title": "Pull Requests",
   "subtitle": "Azure DevOps kod incelemeleri ve aktif birleştirme talepleri",
+  "identity": {
+    "groupMembershipUnavailable": "Ekip/grup üyeliği doğrulanamadı; ekip üzerinden atanmış PR'lar eksik görünebilir.",
+    "cachedData": "Son başarılı PR verisi: {{when}}. Liste güncel olmayabilir.",
+    "unknownTime": "zaman bilinmiyor"
+  },
   "filters": {
     "needsMyReview": "İncelememi Bekleyenler",
     "createdByMe": "Oluşturduklarım",
@@ -48,6 +53,7 @@
     "closed": "Kapatılma",
     "reviewers": "İnceleyenler",
     "required": "Zorunlu",
+    "optional": "Opsiyonel",
     "description": "Açıklama",
     "noDescription": "Açıklama belirtilmemiş.",
     "workItems": "İlişkili İş Öğeleri",

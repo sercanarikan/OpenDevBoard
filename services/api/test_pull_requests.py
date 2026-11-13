@@ -13,6 +13,7 @@ import sync_service
 class TestPullRequestsService(unittest.TestCase):
     def setUp(self):
         pr_service.init_pr_db()
+        pr_service._user_group_cache.clear()
         self.fixture_prs = pr_service.build_fixture_prs()
         self.user = {
             "id": "00000000-0000-0000-0000-000000000001",
@@ -71,14 +72,15 @@ class TestPullRequestsService(unittest.TestCase):
                     rows = conn.execute('SELECT id, project FROM pull_requests').fetchall()
                 finally:
                     conn.close()
-                self.assertEqual({row['project'] for row in result['items']}, {'Alpha'})
+                self.assertEqual({row['project'] for row in result['items']}, {'Alpha', 'Beta'})
                 self.assertEqual(result['cacheStatus']['outcome'], 'partial')
                 self.assertFalse(result['cacheStatus']['complete'])
-                self.assertEqual(result['cacheStatus']['dateScope'], 'creationDate')
-                self.assertEqual(result['cacheStatus']['completenessScope'], 'creationDate-window')
+                self.assertEqual(result['cacheStatus']['dateScope'], 'all')
+                self.assertEqual(result['cacheStatus']['completenessScope'], 'organization-pr-query')
                 self.assertFalse(result['cacheStatus']['projectDiscoveryComplete'])
                 self.assertFalse(result['cacheStatus']['organizationSnapshotComplete'])
-                self.assertFalse(result['cacheStatus']['stale'])
+                self.assertTrue(result['cacheStatus']['stale'])
+                self.assertEqual(result['cacheStatus']['errors'], [{'kind': 'upstream_http', 'status': 500}])
                 self.assertIn((seed['id'], seed['project']), [tuple(row) for row in rows])
                 conn = sync_service.get_db_connection()
                 try:
@@ -89,20 +91,43 @@ class TestPullRequestsService(unittest.TestCase):
                 self.assertIsNotNone(state['completed_at'])
                 gc.collect()
 
-    def test_successful_empty_pr_fetch_is_not_reported_complete_due_to_top_limit(self):
+    def test_successful_empty_pr_fetch_is_reported_as_empty_not_failed(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-pr.db')):
                 pr_service.init_pr_db()
+                with sync_service.get_db_connection() as conn:
+                    conn.execute("INSERT INTO pull_requests (id, project, repository, title, status, creation_date, reviewers_json, work_items_json, last_synced_at) VALUES (7, 'Alpha', 'repo', 'cached', 'active', '2026-11-01', '[]', '[]', '2026-11-01')")
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', return_value=type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})()):
                     result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['items'], [])
-                self.assertEqual(result['cacheStatus']['outcome'], 'partial')
-                self.assertFalse(result['cacheStatus']['complete'])
+                self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+                self.assertTrue(result['cacheStatus']['complete'])
+                with sync_service.get_db_connection() as conn:
+                    self.assertEqual(conn.execute('SELECT COUNT(*) FROM pull_requests').fetchone()[0], 0)
                 gc.collect()
 
-    def test_pr_fetch_uses_created_time_window_and_paginates_with_skip(self):
+    def test_failed_refresh_preserves_last_successful_empty_pr_timestamp(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-pr-recovery.db')):
+                pr_service.init_pr_db()
+                with sync_service.get_db_connection() as conn:
+                    conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+                responses = [
+                    type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})(),
+                    type('Response', (), {'status_code': 403, 'json': lambda self: {}})(),
+                ]
+                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
+                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(pr_service.requests, 'get', side_effect=responses):
+                    first = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                    failed = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                self.assertEqual(failed['cacheStatus']['outcome'], 'failed')
+                self.assertEqual(failed['cacheStatus']['lastSyncedAt'], first['cacheStatus']['lastSyncedAt'])
+                self.assertTrue(failed['cacheStatus']['hasSnapshot'])
+
+    def test_pr_fetch_includes_old_active_prs_and_paginates_without_date_window(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'paged-pr.db')):
                 pr_service.init_pr_db()
@@ -121,11 +146,11 @@ class TestPullRequestsService(unittest.TestCase):
                 self.assertEqual(len(result['items']), 400)
                 self.assertIn(2, {item['id'] for item in result['items']})
                 self.assertEqual([call.kwargs['params']['$skip'] for call in get.call_args_list], [0, 200, 400])
-                self.assertTrue(all(call.kwargs['params']['searchCriteria.queryTimeRangeType'] == 'Created' for call in get.call_args_list))
-                self.assertEqual(result['cacheStatus']['outcome'], 'partial')
-                self.assertFalse(result['cacheStatus']['complete'])
-                self.assertEqual(result['cacheStatus']['dateScope'], 'creationDate')
-                self.assertEqual(result['cacheStatus']['completenessScope'], 'creationDate-window')
+                self.assertTrue(all('searchCriteria.minTime' not in call.kwargs['params'] for call in get.call_args_list))
+                self.assertTrue(all('searchCriteria.maxTime' not in call.kwargs['params'] for call in get.call_args_list))
+                self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+                self.assertTrue(result['cacheStatus']['complete'])
+                self.assertEqual(result['cacheStatus']['completenessScope'], 'organization-pr-query')
                 self.assertFalse(result['cacheStatus']['organizationSnapshotComplete'])
 
     def test_partial_pr_cache_expires_after_ttl(self):
@@ -134,7 +159,7 @@ class TestPullRequestsService(unittest.TestCase):
                 pr_service.init_pr_db()
                 now = pr_service._utcnow()
                 with sync_service.get_db_connection() as conn:
-                    conn.execute("INSERT INTO pr_cache_state VALUES (1, ?, ?, 'partial', '[]')", ((now - timedelta(seconds=301)).isoformat(), (now - timedelta(seconds=301)).isoformat()))
+                    conn.execute("INSERT INTO pr_cache_state (id, attempted_at, completed_at, outcome, successful_projects) VALUES (1, ?, ?, 'partial', '[]')", ((now - timedelta(seconds=301)).isoformat(), (now - timedelta(seconds=301)).isoformat()))
                 with patch.object(pr_service, '_utcnow', return_value=now), \
                         patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
@@ -159,10 +184,80 @@ class TestPullRequestsService(unittest.TestCase):
                     result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['cacheStatus']['outcome'], 'failed')
                 self.assertTrue(result['cacheStatus']['stale'])
+                self.assertEqual([item['id'] for item in result['items']], [1])
                 with sync_service.get_db_connection() as conn:
                     rows = conn.execute('SELECT id FROM pull_requests').fetchall()
                 self.assertEqual([row['id'] for row in rows], [1])
                 gc.collect()
+
+    def test_project_fallback_empty_result_does_not_clear_organization_cache(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pr-fallback-empty.db')):
+                pr_service.init_pr_db()
+                with sync_service.get_db_connection() as conn:
+                    conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+                    conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
+                    conn.execute("INSERT INTO pull_requests (id, project, repository, title, status, creation_date, reviewers_json, work_items_json, last_synced_at) VALUES (1, 'Alpha', 'repo', 'cached', 'active', '2026-11-01', '[]', '[]', '2026-11-01')")
+                responses = [
+                    type('Response', (), {'status_code': 500, 'json': lambda self: {}})(),
+                    type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})(),
+                ]
+                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
+                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(pr_service.requests, 'get', side_effect=responses):
+                    result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                self.assertEqual([item['id'] for item in result['items']], [1])
+                self.assertEqual(result['cacheStatus']['outcome'], 'partial')
+                self.assertTrue(result['cacheStatus']['stale'])
+
+    def test_partial_pr_cache_keeps_failure_reason_until_refresh(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'partial-pr-reason.db')):
+                pr_service.init_pr_db()
+                with sync_service.get_db_connection() as conn:
+                    conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+                    conn.executemany('INSERT INTO work_items (project, deleted_at) VALUES (?, NULL)', [('Alpha',), ('Beta',)])
+                alpha = {'pullRequestId': 1, 'title': 'fixture', 'status': 'active', 'repository': {'name': 'repo', 'project': {'name': 'Alpha'}}}
+                responses = [
+                    type('Response', (), {'status_code': 500, 'json': lambda self: {}})(),
+                    type('Response', (), {'status_code': 200, 'json': lambda self: {'value': [alpha]}})(),
+                    type('Response', (), {'status_code': 403, 'json': lambda self: {}})(),
+                ]
+                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
+                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(pr_service.requests, 'get', side_effect=responses) as get:
+                    first = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                    cached = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', include_cache_status=True)
+                self.assertEqual(first['cacheStatus']['errors'], [{'kind': 'upstream_http', 'status': 500}, {'kind': 'auth', 'status': 403}])
+                self.assertEqual(cached['cacheStatus']['errors'], first['cacheStatus']['errors'])
+                self.assertTrue(cached['cacheStatus']['stale'])
+                self.assertEqual(get.call_count, 3)
+
+    def test_pr_refresh_clears_failure_status_after_connection_recovers(self):
+        import requests
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pr-recovery.db')):
+                pr_service.init_pr_db()
+                with sync_service.get_db_connection() as conn:
+                    conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+                    conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
+                recovered_pr = {'pullRequestId': 12, 'title': 'fixture', 'status': 'active', 'repository': {'name': 'repo', 'project': {'name': 'Alpha'}}}
+                responses = [
+                    type('Response', (), {'status_code': 500, 'json': lambda self: {}})(),
+                    requests.ConnectionError('synthetic refusal'),
+                    type('Response', (), {'status_code': 200, 'json': lambda self: {'value': [recovered_pr]}})(),
+                ]
+                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
+                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(pr_service.requests, 'get', side_effect=responses):
+                    failed = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                    recovered = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                self.assertEqual(failed['cacheStatus']['outcome'], 'failed')
+                self.assertEqual(failed['cacheStatus']['errors'][0]['kind'], 'upstream_http')
+                self.assertEqual([item['id'] for item in recovered['items']], [12])
+                self.assertEqual(recovered['cacheStatus']['outcome'], 'complete')
+                self.assertFalse(recovered['cacheStatus']['stale'])
+                self.assertEqual(recovered['cacheStatus']['errors'], [])
 
     def test_user_identity_matching(self):
         identity_by_id = {"id": "00000000-0000-0000-0000-000000000001", "displayName": "Different Name"}
@@ -174,8 +269,121 @@ class TestPullRequestsService(unittest.TestCase):
         identity_by_name = {"id": "other-id", "displayName": "Fixture User"}
         self.assertTrue(pr_service.is_user_match(identity_by_name, self.user))
 
+        identity_name_prefix = {"id": "other-id", "displayName": "Fixture User Assistant"}
+        self.assertFalse(pr_service.is_user_match(identity_name_prefix, self.user))
+
         identity_other = {"id": "999", "displayName": "Unknown Person", "uniqueName": "x@y.com"}
         self.assertFalse(pr_service.is_user_match(identity_other, self.user))
+
+    def test_team_reviewer_matches_current_user_group_membership(self):
+        user = {**self.user, "groupIds": ["group-guid"]}
+        pr = {
+            "id": 42, "status": "active", "authorId": "author", "authorName": "Author",
+            "reviewers": [{"id": "group-guid", "displayName": "Review Team", "isContainer": True, "vote": 0}]
+        }
+        flags = pr_service.evaluate_pr_personal_flags(pr, user)
+        self.assertTrue(flags["isReviewer"])
+        self.assertTrue(flags["needsMyReview"])
+
+    def test_group_membership_lookup_resolves_team_origin_id_read_only(self):
+        responses = [
+            type('Response', (), {'status_code': 200, 'json': lambda self: {'value': [{'containerDescriptor': 'group-descriptor'}]}})(),
+            type('Response', (), {'status_code': 200, 'json': lambda self: {'originId': 'group-guid'}})(),
+        ]
+        with patch.object(pr_service.requests, 'get', side_effect=responses) as get:
+            result = pr_service.fetch_user_group_ids('sample-org', 'user-descriptor', {})
+        self.assertEqual(result['groupIds'], ['group-guid'])
+        self.assertEqual(result['status'], 'available')
+        self.assertTrue(all(call.kwargs.get('timeout') for call in get.call_args_list))
+        self.assertTrue(all(call.args[0].startswith('https://vssps.dev.azure.com/') for call in get.call_args_list))
+
+    def test_group_membership_auth_failure_is_reported_as_unavailable(self):
+        response = type('Response', (), {'status_code': 403, 'json': lambda self: {}})()
+        with patch.object(pr_service.requests, 'get', return_value=response):
+            result = pr_service.fetch_user_group_ids('sample-org', 'user-descriptor', {})
+        self.assertEqual(result, {'groupIds': [], 'status': 'unavailable', 'error': {'kind': 'auth', 'status': 403}})
+
+    def test_group_details_failure_does_not_claim_complete_membership(self):
+        responses = [
+            type('Response', (), {'status_code': 200, 'json': lambda self: {'value': [{'containerDescriptor': 'group-descriptor'}]}})(),
+            type('Response', (), {'status_code': 403, 'json': lambda self: {}})(),
+        ]
+        with patch.object(pr_service.requests, 'get', side_effect=responses):
+            result = pr_service.fetch_user_group_ids('sample-org', 'user-descriptor', {})
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertEqual(result['error']['kind'], 'group_lookup_incomplete')
+
+    def test_missing_reviewer_data_does_not_create_a_pending_assignment(self):
+        pr = {"id": 7, "status": "active", "authorId": "someone-else", "authorName": "Other", "reviewers": []}
+        flags = pr_service.evaluate_pr_personal_flags(pr, self.user)
+        self.assertFalse(flags["isReviewer"])
+        self.assertFalse(flags["needsMyReview"])
+
+    def test_assigned_author_with_no_vote_still_needs_review(self):
+        pr = {
+            "id": 8,
+            "status": "active",
+            "authorId": self.user["id"],
+            "authorName": self.user["displayName"],
+            "reviewers": [{"id": self.user["id"], "displayName": self.user["displayName"], "vote": 0}],
+        }
+        flags = pr_service.evaluate_pr_personal_flags(pr, self.user)
+        self.assertTrue(flags["isAuthor"])
+        self.assertTrue(flags["isReviewer"])
+        self.assertTrue(flags["needsMyReview"])
+
+        filtered = pr_service.query_pull_requests([pr], {"status": "active", "quickFilter": "needs-my-review"}, self.user)
+        summary = pr_service.get_pr_summary([pr], project="all", current_user=self.user)
+        self.assertEqual(filtered["total"], 1)
+        self.assertEqual(summary["needsMyReview"], 1)
+
+    def test_optional_reviewer_with_no_vote_appears_in_needs_my_review(self):
+        raw_pr = {
+            "pullRequestId": 9,
+            "title": "Synthetic optional reviewer PR",
+            "status": "active",
+            "repository": {"name": "fixture-repo", "project": {"name": "Fixture Project"}},
+            "createdBy": {"id": "other-user", "displayName": "Other User"},
+            "reviewers": [{
+                "id": self.user["id"],
+                "displayName": self.user["displayName"],
+                "vote": 0,
+                "isRequired": False,
+            }],
+        }
+
+        parsed = pr_service.parse_azure_pr(raw_pr, "https://dev.azure.com/fixture")
+        result = pr_service.query_pull_requests(
+            [parsed], {"project": "all", "status": "active", "quickFilter": "needs-my-review"}, self.user
+        )
+
+        self.assertFalse(parsed["reviewers"][0]["isRequired"])
+        self.assertEqual(result["total"], 1)
+        self.assertTrue(result["items"][0]["needsMyReview"])
+
+    def test_pr_upstream_failures_keep_categories_for_auth_rate_limit_timeout_and_refusal(self):
+        cases = [
+            (type('Response', (), {'status_code': 403, 'json': lambda self: {}})(), 'auth'),
+            (type('Response', (), {'status_code': 429, 'json': lambda self: {}})(), 'rate_limited'),
+            (type('Response', (), {'status_code': 500, 'json': lambda self: {}})(), 'upstream_http'),
+            (RuntimeError('timeout fixture'), 'upstream_error'),
+        ]
+        import requests
+        cases[3] = (requests.Timeout('synthetic timeout'), 'timeout')
+        cases.append((requests.ConnectionError('synthetic refusal'), 'connection_refused'))
+        for index, (failure, expected_kind) in enumerate(cases):
+            with self.subTest(kind=expected_kind), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+                with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, f'pr-error-{index}.db')):
+                    pr_service.init_pr_db()
+                    with sync_service.get_db_connection() as conn:
+                        conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+                        conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
+                    with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
+                            patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                            patch.object(pr_service.requests, 'get', side_effect=[failure, failure]):
+                        result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                    self.assertEqual(result['items'], [])
+                    self.assertEqual(result['cacheStatus']['errors'][0]['kind'], expected_kind)
 
     def test_parse_azure_pr(self):
         raw = {

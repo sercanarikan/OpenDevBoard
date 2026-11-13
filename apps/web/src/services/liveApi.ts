@@ -45,6 +45,20 @@ function buildUrl(path: string, query?: URLSearchParams): string {
   return url.toString();
 }
 
+/** Check the backend separately from requests that can fail or time out upstream. */
+export async function probeBackend(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(buildUrl('/health'), { signal: controller.signal, cache: 'no-store' });
+    return response.status !== 502 && response.status !== 503 && response.status !== 504;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type NetworkListener = (event: { ok: boolean; error?: ApiError }) => void;
 const networkListeners = new Set<NetworkListener>();
 
@@ -62,9 +76,9 @@ function emitNetwork(event: { ok: boolean; error?: ApiError }) {
 }
 
 /** GET + JSON with a timeout that composes with the caller's AbortSignal (a superseded request aborts cleanly). */
-export async function getJson<T>(path: string, query?: URLSearchParams, signal?: AbortSignal): Promise<T> {
+export async function getJson<T>(path: string, query?: URLSearchParams, signal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort);
   if (signal?.aborted) controller.abort();
@@ -150,6 +164,10 @@ export function prQuery(p: PullRequestParams): URLSearchParams {
   if (p.sortOrder) q.set('sortOrder', p.sortOrder);
   if (p.refresh) q.set('refresh', 'true');
   return q;
+}
+
+export function pullRequestSnapshotParams(project?: string): PullRequestParams {
+  return { project, status: 'all', quickFilter: 'all', limit: 1, offset: 0, refresh: true };
 }
 
 export function pipelineQuery(p: PipelineParams): URLSearchParams {
@@ -322,7 +340,7 @@ export const liveApi: WorkItemsApi = {
   pipelinesSummary: (days = 30, project, signal) => {
     const q = new URLSearchParams({ days: String(days) });
     if (project && project !== 'all') q.set('project', project);
-    return getJson<PipelineSummary>('/pipelines/summary', q, signal);
+    return getJson<PipelineSummary>('/pipelines/summary', q, signal, 50000);
   },
 
   async pipelineRun(id, project, signal) {
@@ -340,7 +358,7 @@ export const liveApi: WorkItemsApi = {
   deploymentsSummary: (days = 30, project, signal) => {
     const q = new URLSearchParams({ days: String(days) });
     if (project && project !== 'all') q.set('project', project);
-    return getJson<DeploymentSummary>('/deployments/summary', q, signal);
+    return getJson<DeploymentSummary>('/deployments/summary', q, signal, 50000);
   },
 
   async deployment(id, project, signal) {

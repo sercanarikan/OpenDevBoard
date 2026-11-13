@@ -28,7 +28,7 @@ Sunucu taraflı sayfalama, filtreleme, arama ve sıralama destekleyen ana PR lis
 - `repository` (string, opsiyonel): Belirli bir Git deposuna göre filtreler.
 - `status` (string, opsiyonel): `active` (varsayılan), `completed`, `abandoned`, `all`.
 - `quickFilter` (string, opsiyonel):
-  - `needs-my-review`: Kullanıcının reviewer olarak atandığı, yazar olmadığı ve henüz oy vermediği (`vote == 0`) aktif PR'lar.
+  - `needs-my-review`: Kullanıcının reviewer olarak atandığı ve henüz oy vermediği (`vote == 0`) aktif PR'lar.
   - `created-by-me`: Kullanıcının oluşturduğu PR'lar.
   - `involved`: Kullanıcının yazar veya reviewer olduğu PR'lar.
   - `all`: Proje kapsamındaki tüm PR'lar.
@@ -38,6 +38,8 @@ Sunucu taraflı sayfalama, filtreleme, arama ve sıralama destekleyen ana PR lis
 - `sortBy` (string, varsayılan: `creationDate`): `creationDate`, `id`, `title`.
 - `sortOrder` (string, varsayılan: `desc`): `desc`, `asc`.
 - `refresh` (boolean, opsiyonel): `true` verilirse önbellek atlanır ve Azure DevOps'tan taze veri çekilir.
+
+PR senkronizasyonu aktif talepleri oluşturulma tarihinden bağımsız çeker; böylece 30 günden eski ama hâlâ aktif olan PR'lar da kapsama girer. Sayfalama üst sınırına ulaşılırsa `cacheStatus.complete=false` ve `stale=true` döner. Veri alınamaz ve kullanılabilir cache yoksa liste/özet uç noktaları `503` döndürür; bu durum boş sonuç değildir. `cacheStatus.hasSnapshot` daha önce tamamlanmış boş snapshot'ı da ayırt eder. Cache varsa son başarılı snapshot gösterilir ve `cacheStatus` bunun stale olduğunu bildirir.
 
 **Örnek Yanıt:**
 ```json
@@ -87,7 +89,15 @@ Sunucu taraflı sayfalama, filtreleme, arama ve sıralama destekleyen ana PR lis
     "totalActive": 2
   },
   "dataScope": "live_cached",
-  "lastSyncedAt": "2026-01-02T14:32:00Z"
+  "lastSyncedAt": "2026-01-02T14:32:00Z",
+  "cacheStatus": {
+    "outcome": "complete",
+    "complete": true,
+    "stale": false,
+    "lastSyncedAt": "2026-01-02T14:32:00Z",
+    "errors": []
+  },
+  "reviewerIdentityStatus": {"groupMembership": "available"}
 }
 ```
 
@@ -115,7 +125,10 @@ Belirli bir PR'ın tam açıklama, tüm inceleyenler ve ilişkili Work Item deta
 Azure DevOps üzerindeki inceleyen kimliği, oturum açmış kullanıcının kimliğiyle 3 kademeli doğrulanır:
 1. **Azure DevOps Identity GUID (`id`):** En güvenilir benzersiz eşleşme.
 2. **Subject Descriptor / UPN (`uniqueName`):** Kurumsal e-posta/kullanıcı adı eşleşmesi.
-3. **Display Name (`displayName`):** Büyük/küçük harf duyarsız tam veya alt dize eşleşmesi.
+3. **Display Name (`displayName`):** Benzersiz kimlikler yoksa büyük/küçük harf duyarsız tam eşleşme. Alt dize eşleşmesi kullanılmaz.
+4. **Takım/grup:** Oturum açmış kullanıcının Graph `subjectDescriptor` üyelikleri okunur; reviewer bir container ise grubun `originId` değeriyle eşleştirilir. Graph erişimi reddedilirse doğrudan kullanıcı eşleşmeleri çalışmaya devam eder ve `reviewerIdentityStatus.groupMembership="unavailable"` olarak gösterilir. PAT kapsamı bu yanıt görülmeden varsayılmaz.
+
+`İncelememi Bekleyenler`, aktif PR'da kullanıcı reviewer olarak atanmış ve oyu `0` ise PR'ı listeler. PR yazarı olmak tek başına bu atamayı yok saydırmaz; Azure DevOps PR'da yazarı ayrıca reviewer olarak atamışsa bu inceleme de gösterilir.
 
 **Oy Değerleri:**
 | Vote Kodu | Durum Anahtarı | Türkçe Etiket | İngilizce Etiket |
@@ -132,7 +145,8 @@ Azure DevOps üzerindeki inceleyen kimliği, oturum açmış kullanıcının kim
 
 - SQLite veritabanında `pull_requests` tablosunda saklanır.
 - **TTL:** 300 saniye (5 dakika).
-- 5 dakika içindeki istekler Azure DevOps'a gitmeden anında yerel veritabanından döndürülür (~5 ms).
+- Tamamlanan senkronizasyondan sonraki 5 dakika içindeki istekler Azure DevOps'a gitmeden yerel veritabanından döndürülür.
+- Kısmi/başarısız yenileme varsa önbellekteki satırlar korunur; API bunları sıfır PR gibi sunmaz ve `cacheStatus.errors` içinde yalnızca hata kategorisi ile HTTP kodunu döndürür.
 - Manuel "Yenile" butonuna basıldığında `refresh=true` ile Azure DevOps'tan taze veri çekilir.
 - **İzole Test Modu (`DEVOPS_FIXTURE_MODE=1`):** Ağ erişimi olmadan 16 deterministik PR üretilerek CI testlerinin stabil çalışması sağlanır.
 

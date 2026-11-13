@@ -1,0 +1,58 @@
+// Synthetic summaries exercise partial and failed upstream results in the dashboard.
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+let passed = 0, total = 0;
+function check(name, ok) { total++; if (ok) passed++; console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); }
+try {
+  const pipeline = { periodDays: 30, totalPipelines: 1, totalRuns: 2, succeeded: 2, failed: 0, partiallySucceeded: 0, inProgress: 0, canceled: 0, successRate: 100, failedRuns: [], dailyStats: [], cacheStatus: { outcome: 'partial', complete: false, stale: false } };
+  const deployment = { periodDays: 30, totalDeployments: 1, succeeded: 1, failed: 0, inProgress: 0, successRate: 100, environments: [], dailyStats: [], cacheStatus: { outcome: 'partial', complete: false, stale: true, errors: [{ kind: 'upstream_http', status: 404 }] } };
+  await page.route('**/api/pull-requests/summary*', route => route.fulfill({ json: { needsMyReview: 2, createdByMe: 3, involved: 3, totalActive: 4, cacheStatus: { outcome: 'partial', complete: false, stale: true, lastSyncedAt: '2026-01-01T00:00:00Z' }, reviewerIdentityStatus: { groupMembership: 'available' } } }));
+  await page.route('**/api/pipelines/summary?*', route => route.fulfill({ json: pipeline }));
+  await page.route('**/api/deployments/summary?*', route => route.fulfill({ json: deployment }));
+  await page.goto(`${process.env.WEB_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
+  const pipelineCard = page.getByTestId('dash-pipeline-card');
+  const deploymentCard = page.getByTestId('dash-deployment-card');
+  await pipelineCard.getByText('%100', { exact: true }).waitFor();
+  await deploymentCard.getByText('%100', { exact: true }).waitFor();
+  check('pipeline partial is explicitly visible', await pipelineCard.getByText('Pipeline verisi kısmi', { exact: false }).count() > 0);
+  check('pipeline partial does not claim all pipelines are healthy', await pipelineCard.getByText("Tüm pipeline'lar sağlıklı", { exact: false }).count() === 0);
+  check('deployment partial is explicitly visible', await deploymentCard.getByText('Dağıtım verisi kısmen', { exact: false }).count() > 0);
+  check('deployment reports upstream 404', await deploymentCard.getByText('HTTP 404', { exact: false }).count() > 0);
+  await page.getByTestId('dash-card-my-prs').getByText('3', { exact: true }).waitFor();
+  check('created PR count marks stale partial data', await page.getByTestId('dash-card-my-prs').getByText('Son başarılı PR verisi', { exact: false }).count() > 0);
+  await page.unroute('**/api/pipelines/summary?*');
+  await page.unroute('**/api/deployments/summary?*');
+  await page.route('**/api/pipelines/summary?*', route => route.fulfill({ json: { ...pipeline, cacheStatus: { outcome: 'failed', complete: false, stale: true } } }));
+  await page.route('**/api/deployments/summary?*', route => route.fulfill({ json: { ...deployment, cacheStatus: { outcome: 'failed', complete: false, stale: true } } }));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await pipelineCard.getByText('Pipeline verisi alınamadı.', { exact: true }).waitFor();
+  await deploymentCard.getByText('Dağıtım verisi alınamadı', { exact: false }).waitFor();
+  check('failed pipeline does not show a successful percentage', await pipelineCard.getByText('%100', { exact: true }).count() === 0);
+  check('failed deployment does not show a successful percentage', await deploymentCard.getByText('%100', { exact: true }).count() === 0);
+  await page.unroute('**/api/pipelines/summary?*');
+  await page.route('**/api/pipelines/summary?*', route => route.fulfill({ json: { ...pipeline, totalRuns: 0, cacheStatus: { outcome: 'complete', complete: true, stale: false } } }));
+  const emptyResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/pipelines/summary');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await emptyResponse;
+  await pipelineCard.waitFor();
+  await page.waitForTimeout(500);
+  check('successful empty pipeline result is distinguished', await pipelineCard.getByText('Pipeline koşumu bulunmuyor', { exact: false }).count() > 0);
+  check('empty pipeline result does not claim pipelines are healthy', await pipelineCard.getByText("Tüm pipeline'lar sağlıklı", { exact: false }).count() === 0);
+  await page.route('**/api/pipelines/runs?*', route => route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0, hasMore: false, summary: pipeline, cacheStatus: pipeline.cacheStatus } }));
+  const pipelineListResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/pipelines/runs');
+  await page.goto(`${process.env.WEB_URL}/pipelines`, { waitUntil: 'domcontentloaded' });
+  await pipelineListResponse;
+  await page.getByTestId('pipeline-loading').waitFor({ state: 'hidden' });
+  await page.getByText('Pipeline verisi kısmi', { exact: false }).first().waitFor();
+  check('pipeline explorer shows partial status', await page.getByText('Pipeline verisi kısmi', { exact: false }).count() > 0);
+  await page.route('**/api/deployments?*', route => route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0, hasMore: false, summary: deployment, cacheStatus: deployment.cacheStatus } }));
+  const deploymentListResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/deployments');
+  await page.goto(`${process.env.WEB_URL}/deployments`, { waitUntil: 'domcontentloaded' });
+  await deploymentListResponse;
+  await page.getByTestId('deployment-loading').waitFor({ state: 'hidden' });
+  await page.getByText('Dağıtım verisi kısmen', { exact: false }).first().waitFor();
+  check('deployment explorer shows partial status', await page.getByText('Dağıtım verisi kısmen', { exact: false }).count() > 0);
+} catch (error) { console.error(error); total++; } finally { await browser.close(); }
+console.log(`SUMMARY ${passed}/${total}`);
+process.exit(passed === total && total > 0 ? 0 : 1);

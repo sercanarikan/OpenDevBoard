@@ -12,11 +12,12 @@ import {
   type PipelineRun,
   type DeploymentRecord
 } from '../types/paging';
-import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent } from '../services/liveApi';
+import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent, pullRequestSnapshotParams, probeBackend } from '../services/liveApi';
 import { demoApi } from '../services/demoApi';
 import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockData';
 import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
 import i18n from '../i18n';
+import { apiErrorTranslationKey } from '../utils/apiErrorMessage';
 
 export const SYNC_POLL_MS = 20000;
 const LOST_AFTER_FAILURES = 2;
@@ -37,13 +38,16 @@ const defaultFilters: FilterOptions = {
 
 
 const errMessage = (e: unknown): string => {
-  if (e instanceof ApiError) return e.isNetwork ? i18n.t('api.connectionRefused') : e.message;
+  if (e instanceof ApiError) {
+    const key = apiErrorTranslationKey(e);
+    return key ? i18n.t(key) : e.message;
+  }
   return (e as Error)?.message || i18n.t('api.unexpectedConnectionError');
 };
 
 /** Retains same-scope data during refresh and ignores aborted responses. */
 function useScopedSummary<T>(
-  request: (signal: AbortSignal) => Promise<T>, enabled: boolean, refreshToken: number, label: string
+  request: (signal: AbortSignal) => Promise<T>, enabled: boolean, refreshToken: number
 ) {
   const requestKey = useMemo(() => ({ request, enabled, refreshToken }), [request, enabled, refreshToken]);
   const [result, setResult] = useState<{ key: typeof requestKey | null; data: T | null; error: string | null }>({
@@ -58,10 +62,9 @@ function useScopedSummary<T>(
       if (ctrl.signal.aborted || (e instanceof ApiError && e.isAbort)) return;
       const message = errMessage(e);
       setResult(prev => ({ key: requestKey, data: prev.key?.request === request ? prev.data : null, error: message }));
-      console.warn(`${label} summary failed:`, message);
     });
     return () => ctrl.abort();
-  }, [request, enabled, requestKey, label]);
+  }, [request, enabled, requestKey]);
   return {
     data: result.key?.request === request ? result.data : null,
     loading: !enabled ? result.key === null : result.key !== requestKey,
@@ -287,7 +290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         if (controller.signal.aborted) return;
         failuresRef.current += 1;
-        if (failuresRef.current >= LOST_AFTER_FAILURES && sourceRef.current !== 'lost') {
+        if (failuresRef.current >= LOST_AFTER_FAILURES && sourceRef.current !== 'lost' && !(await probeBackend()) && !controller.signal.aborted) {
           setSource('lost');
           setConnectionError(errMessage(e));
           setIsBannerDismissed(false);
@@ -303,19 +306,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [booting, isBackend]);
 
-  // Any failed request (a page, a search, an Inspector load) flags the backend as unreachable immediately; waiting
-  // for the next 20 s poll would leave the user without a warning. The poll still performs the recovery.
+  // Confirm that the backend is unavailable before promoting a single request failure to a global warning.
   useEffect(() => {
     if (booting || !isBackend) return;
-    return onNetworkEvent(({ ok, error }) => {
-      if (ok) return;
-      failuresRef.current = LOST_AFTER_FAILURES;
-      if (sourceRef.current !== 'lost') {
-        setSource('lost');
-        setConnectionError(errMessage(error));
-        setIsBannerDismissed(false);
-      }
+    const state = { active: true, checking: false };
+    const unsubscribe = onNetworkEvent(({ ok, error }) => {
+      if (ok || state.checking || sourceRef.current === 'lost') return;
+      state.checking = true;
+      void probeBackend().then(reachable => {
+        state.checking = false;
+        if (state.active && !reachable && sourceRef.current !== 'lost') {
+          failuresRef.current = LOST_AFTER_FAILURES;
+          setSource('lost');
+          setConnectionError(errMessage(error));
+          setIsBannerDismissed(false);
+        }
+      });
     });
+    return () => { state.active = false; unsubscribe(); };
   }, [booting, isBackend]);
 
   // While the backend is unreachable, probe quickly so recovery is noticed within seconds.
@@ -352,6 +360,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         await postSync(mode);
         try {
+          await api.pullRequests(pullRequestSnapshotParams(filters.selectedProject));
+        } catch {
+          // The following summary/list refresh surfaces the API's stale or failed cache state.
+        }
+        try {
           setSyncReport(await fetchSyncReport());
         } catch {
           /* the poll reports a lost backend */
@@ -361,7 +374,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsSyncing(false);
       }
     },
-    [source]
+    [source, api, filters.selectedProject]
   );
 
   const retryConnection = useCallback(async () => {
@@ -432,9 +445,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const prRequest = useCallback((signal: AbortSignal) => api.pullRequestsSummary(filters.selectedProject, signal), [api, filters.selectedProject]);
   const pipelineRequest = useCallback((signal: AbortSignal) => api.pipelinesSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
   const deploymentRequest = useCallback((signal: AbortSignal) => api.deploymentsSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
-  const { data: prSummary, loading: prSummaryLoading, error: prSummaryError } = useScopedSummary(prRequest, !booting, refreshToken, 'PR');
-  const { data: pipelineSummary, loading: pipelineSummaryLoading, error: pipelineSummaryError } = useScopedSummary(pipelineRequest, !booting, refreshToken, 'Pipeline');
-  const { data: deploymentSummary, loading: deploymentSummaryLoading, error: deploymentSummaryError } = useScopedSummary(deploymentRequest, !booting, refreshToken, 'Deployment');
+  const { data: prSummary, loading: prSummaryLoading, error: prSummaryError } = useScopedSummary(prRequest, !booting, refreshToken);
+  const { data: pipelineSummary, loading: pipelineSummaryLoading, error: pipelineSummaryError } = useScopedSummary(pipelineRequest, !booting, refreshToken);
+  const { data: deploymentSummary, loading: deploymentSummaryLoading, error: deploymentSummaryError } = useScopedSummary(deploymentRequest, !booting, refreshToken);
   const [selectedPR, setSelectedPR] = useState<PullRequest | null>(null);
   const [selectedPipelineRun, setSelectedPipelineRun] = useState<PipelineRun | null>(null);
 

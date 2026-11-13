@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   GitPullRequest,
@@ -18,6 +18,7 @@ import { useApp } from '../../context/useApp';
 import type { PullRequest, PRQuickFilter, PRStatus, PullRequestReviewer } from '../../types/paging';
 import { PullRequestInspector } from './PullRequestInspector';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
+import { ReviewerRequirementBadge } from './ReviewerRequirementBadge';
 
 export const PullRequestExplorer: React.FC = () => {
   const { t } = useTranslation(['pullRequests', 'common']);
@@ -25,6 +26,7 @@ export const PullRequestExplorer: React.FC = () => {
     api,
     filters,
     refreshToken,
+    prSummary,
     selectedWorkItem,
     setSelectedWorkItem,
     selectedPR,
@@ -42,9 +44,11 @@ export const PullRequestExplorer: React.FC = () => {
   const [prs, setPrs] = useState<PullRequest[]>([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState({ needsMyReview: 0, createdByMe: 0, involved: 0, totalActive: 0 });
+  const [cacheStatus, setCacheStatus] = useState<import('../../types/paging').PullRequestsResponse['cacheStatus']>(undefined);
 
   const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const forcedRefreshNonce = useRef(0);
 
   // Debounce search
   useEffect(() => {
@@ -55,34 +59,24 @@ export const PullRequestExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Fetch PRs
-  const fetchPRs = useCallback((signal: AbortSignal) => {
-    const offset = (page - 1) * pageSize;
-    return api.pullRequests(
-      {
-        project: filters.selectedProject,
-        status: statusFilter,
-        quickFilter,
-        search: debouncedSearch,
-        limit: pageSize,
-        offset
-      },
-      signal
-    );
-  }, [api, filters.selectedProject, statusFilter, quickFilter, debouncedSearch, page, pageSize]);
-
   // A changed request is loading until that specific request settles.
-  const request = useMemo(() => ({ fetchPRs, refreshToken, refreshNonce }), [fetchPRs, refreshToken, refreshNonce]);
+  const request = useMemo(() => ({ api, project: filters.selectedProject, status: statusFilter, quickFilter,
+    search: debouncedSearch, limit: pageSize, offset: (page - 1) * pageSize, refreshToken, refreshNonce }),
+  [api, filters.selectedProject, statusFilter, quickFilter, debouncedSearch, page, pageSize, refreshToken, refreshNonce]);
   const loading = settled?.request !== request;
   const error = loading ? null : settled.error;
 
   useEffect(() => {
     const ctrl = new AbortController();
-    request.fetchPRs(ctrl.signal).then(res => {
+    const refresh = request.refreshNonce > forcedRefreshNonce.current;
+    request.api.pullRequests({ project: request.project, status: request.status, quickFilter: request.quickFilter,
+      search: request.search, limit: request.limit, offset: request.offset, refresh }, ctrl.signal).then(res => {
       if (ctrl.signal.aborted) return;
+      if (refresh) forcedRefreshNonce.current = request.refreshNonce;
       setPrs(res.items);
       setTotal(res.total);
       if (res.summary) setSummary(res.summary);
+      setCacheStatus(res.cacheStatus);
       setSettled({ request, error: null });
     }, (e: any) => {
       if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
@@ -133,6 +127,16 @@ export const PullRequestExplorer: React.FC = () => {
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
       {/* 1. Header Toolbar */}
       <div className="p-3 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] space-y-3 shrink-0">
+        {prSummary?.reviewerIdentityStatus?.groupMembership === 'unavailable' && (
+          <div role="status" className="rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            {t('identity.groupMembershipUnavailable')}
+          </div>
+        )}
+        {cacheStatus?.stale && (
+          <div role="status" className="rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            {t('identity.cachedData', { when: cacheStatus.lastSyncedAt ? new Date(cacheStatus.lastSyncedAt.endsWith('Z') ? cacheStatus.lastSyncedAt : `${cacheStatus.lastSyncedAt}Z`).toLocaleString() : t('identity.unknownTime') })}
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Quick Filter Tabs */}
           <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100/90 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800">
@@ -352,7 +356,11 @@ export const PullRequestExplorer: React.FC = () => {
                         <td className="py-2.5 px-3">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {pr.reviewers.slice(0, 3).map((r, idx) => (
-                              <div key={idx} className="flex items-center gap-0.5" title={`${r.displayName}: ${r.voteLabel}`}>
+                              <div
+                                key={idx}
+                                className="flex items-center gap-0.5"
+                                title={`${r.displayName}: ${r.voteLabel} · ${t(r.isRequired ? 'inspector.required' : 'inspector.optional')}`}
+                              >
                                 {r.avatar ? (
                                   <img src={r.avatar} alt={r.displayName} className="w-4 h-4 rounded-full object-cover" />
                                 ) : (
@@ -361,6 +369,10 @@ export const PullRequestExplorer: React.FC = () => {
                                   </div>
                                 )}
                                 {getVoteIcon(r)}
+                                <ReviewerRequirementBadge
+                                  isRequired={Boolean(r.isRequired)}
+                                  label={t(r.isRequired ? 'inspector.required' : 'inspector.optional')}
+                                />
                               </div>
                             ))}
                             {pr.reviewers.length > 3 && (

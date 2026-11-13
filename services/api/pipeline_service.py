@@ -221,6 +221,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     org_fetch_complete = False
     project_outcomes = {}
     fetch_failed = False
+    organization_query_error = None
     try:
         url = f"{org_url.rstrip('/')}/_apis/build/builds"
         token = None
@@ -231,6 +232,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
                 params["continuationToken"] = token
             res = requests.get(url, headers=headers, params=params, timeout=15)
             if res.status_code != 200:
+                organization_query_error = {"kind": "http", "status": res.status_code}
                 fetch_failed = True
                 break
             org_fetch_succeeded = True
@@ -248,6 +250,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
             fetch_failed = True
     except Exception as e:
         fetch_failed = True
+        organization_query_error = {"kind": "timeout" if isinstance(e, requests.Timeout) else "network" if isinstance(e, requests.ConnectionError) else "error"}
         logger.warning("Org-level builds query failed: %s", e)
 
     # Project fallback if org query returns empty
@@ -339,6 +342,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     if include_cache_status:
         return {"items": final_runs, "cacheStatus": {
             "outcome": outcome,
+            "organizationQueryError": organization_query_error,
             "complete": fetch_complete, "stale": not fetch_succeeded,
             "paginationBounded": not fetch_complete,
             "successfulProjects": sorted(p for p, ok in project_outcomes.items() if ok),

@@ -14,7 +14,10 @@ const forwardedArgs = separator >= 0 ? argv.slice(separator + 1) : [];
 const preservedLogDir = process.env.E2E_LOG_DIR ? path.resolve(process.env.E2E_LOG_DIR) : null;
 const runDir = preservedLogDir || fs.mkdtempSync(path.join(os.tmpdir(), 'devopsflow-e2e-'));
 if (preservedLogDir) fs.mkdirSync(runDir, { recursive: true });
-const defaultSuites = [{ name: 'fixture', script: 'e2e-fixture.mjs', edition: 'public' }];
+const defaultSuites = [
+  { name: 'fixture', script: 'e2e-fixture.mjs', edition: 'public' },
+  { name: 'summary-status', script: 'e2e-summary-status.mjs', edition: 'public' }
+];
 const liveSuites = [
   'e2e-stack.mjs', 'e2e-routing.mjs', 'e2e-smoke.mjs', 'e2e-dashboard-pr.mjs',
   'e2e-pipelines-deployments.mjs', 'e2e-team-history.mjs', 'e2e-quality-fixes.mjs',

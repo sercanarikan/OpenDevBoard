@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { getJson, historyQuery, liveApi, onNetworkEvent, postSync } from './liveApi';
+import { getJson, historyQuery, liveApi, onNetworkEvent, postSync, pullRequestSnapshotParams } from './liveApi';
 import { ApiError } from '../types/paging';
 
 const events: { ok: boolean; error?: ApiError }[] = [];
@@ -15,9 +15,22 @@ afterEach(() => {
   off?.();
   off = null;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('getJson network reporting', () => {
+  it('allows deployment summaries more than 20 seconds and still times out', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_u: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    })));
+    const request = liveApi.deploymentsSummary();
+    const result = expect(request).rejects.toMatchObject({ message: 'timeout' });
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(30000);
+    await result;
+  });
   it('returns the fixture sync result so the UI can refresh the fixture status', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'success', fixture: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -34,6 +47,27 @@ describe('getJson network reporting', () => {
     const summary = new URLSearchParams({ days: '7', project: 'alms' });
     expect(timeline.get('project')).toBe(summary.get('project'));
     expect(timeline.get('days')).toBe(summary.get('days'));
+  });
+
+  it('builds a forced refresh request for PR snapshots after manual sync', () => {
+    expect(pullRequestSnapshotParams('Alpha')).toEqual({
+      project: 'Alpha',
+      status: 'all',
+      quickFilter: 'all',
+      limit: 1,
+      offset: 0,
+      refresh: true
+    });
+  });
+
+  it('sends the forced PR refresh through the live API query', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await liveApi.pullRequests(pullRequestSnapshotParams('Alpha'));
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('/pull-requests?');
+    expect(url).toContain('refresh=true');
+    expect(url).toContain('project=Alpha');
   });
 
   it('forwards history type and search filters to summary without pagination', async () => {
@@ -100,5 +134,21 @@ describe('getJson network reporting', () => {
     ctrl.abort();
     await expect(p).rejects.toMatchObject({ isAbort: true });
     expect(events).toEqual([]);
+  });
+});
+
+describe('backend health probe', () => {
+  it('confirms backend availability independently of a failed card request', async () => {
+    const { probeBackend } = await import('./liveApi');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    await expect(probeBackend()).resolves.toBe(true);
+  });
+
+  it('reports a refused connection or proxy failure as unavailable', async () => {
+    const { probeBackend } = await import('./liveApi');
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    await expect(probeBackend()).resolves.toBe(false);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 502 })));
+    await expect(probeBackend()).resolves.toBe(false);
   });
 });
