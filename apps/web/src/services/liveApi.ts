@@ -45,6 +45,20 @@ function buildUrl(path: string, query?: URLSearchParams): string {
   return url.toString();
 }
 
+/** Check the backend separately from requests that can fail or time out upstream. */
+export async function probeBackend(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(buildUrl('/health'), { signal: controller.signal, cache: 'no-store' });
+    return response.status !== 502 && response.status !== 503 && response.status !== 504;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type NetworkListener = (event: { ok: boolean; error?: ApiError }) => void;
 const networkListeners = new Set<NetworkListener>();
 

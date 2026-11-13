@@ -12,7 +12,7 @@ import {
   type PipelineRun,
   type DeploymentRecord
 } from '../types/paging';
-import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent, pullRequestSnapshotParams } from '../services/liveApi';
+import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent, pullRequestSnapshotParams, probeBackend } from '../services/liveApi';
 import { demoApi } from '../services/demoApi';
 import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockData';
 import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
@@ -286,7 +286,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         if (controller.signal.aborted) return;
         failuresRef.current += 1;
-        if (failuresRef.current >= LOST_AFTER_FAILURES && sourceRef.current !== 'lost') {
+        if (failuresRef.current >= LOST_AFTER_FAILURES && sourceRef.current !== 'lost' && !(await probeBackend()) && !controller.signal.aborted) {
           setSource('lost');
           setConnectionError(errMessage(e));
           setIsBannerDismissed(false);
@@ -302,19 +302,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [booting, isBackend]);
 
-  // Any failed request (a page, a search, an Inspector load) flags the backend as unreachable immediately; waiting
-  // for the next 20 s poll would leave the user without a warning. The poll still performs the recovery.
+  // Confirm that the backend is unavailable before promoting a single request failure to a global warning.
   useEffect(() => {
     if (booting || !isBackend) return;
-    return onNetworkEvent(({ ok, error }) => {
-      if (ok) return;
-      failuresRef.current = LOST_AFTER_FAILURES;
-      if (sourceRef.current !== 'lost') {
-        setSource('lost');
-        setConnectionError(errMessage(error));
-        setIsBannerDismissed(false);
-      }
+    let active = true;
+    let checking = false;
+    const unsubscribe = onNetworkEvent(({ ok, error }) => {
+      if (ok || checking || sourceRef.current === 'lost') return;
+      checking = true;
+      void probeBackend().then(reachable => {
+        checking = false;
+        if (active && !reachable && sourceRef.current !== 'lost') {
+          failuresRef.current = LOST_AFTER_FAILURES;
+          setSource('lost');
+          setConnectionError(errMessage(error));
+          setIsBannerDismissed(false);
+        }
+      });
     });
+    return () => { active = false; unsubscribe(); };
   }, [booting, isBackend]);
 
   // While the backend is unreachable, probe quickly so recovery is noticed within seconds.

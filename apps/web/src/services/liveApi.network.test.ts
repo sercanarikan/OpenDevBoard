@@ -123,3 +123,19 @@ describe('getJson network reporting', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('backend health probe', () => {
+  it('confirms backend availability independently of a failed card request', async () => {
+    const { probeBackend } = await import('./liveApi');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    await expect(probeBackend()).resolves.toBe(true);
+  });
+
+  it('reports a refused connection or proxy failure as unavailable', async () => {
+    const { probeBackend } = await import('./liveApi');
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    await expect(probeBackend()).resolves.toBe(false);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 502 })));
+    await expect(probeBackend()).resolves.toBe(false);
+  });
+});
