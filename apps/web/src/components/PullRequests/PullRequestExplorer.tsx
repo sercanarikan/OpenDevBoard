@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   GitPullRequest,
@@ -59,34 +59,20 @@ export const PullRequestExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Fetch PRs
-  const fetchPRs = useCallback((signal: AbortSignal) => {
-    const offset = (page - 1) * pageSize;
-    const refresh = refreshNonce > forcedRefreshNonce.current;
-    if (refresh) forcedRefreshNonce.current = refreshNonce;
-    return api.pullRequests(
-      {
-        project: filters.selectedProject,
-        status: statusFilter,
-        quickFilter,
-        search: debouncedSearch,
-        limit: pageSize,
-        offset,
-        refresh
-      },
-      signal
-    );
-  }, [api, filters.selectedProject, statusFilter, quickFilter, debouncedSearch, page, pageSize, refreshNonce]);
-
   // A changed request is loading until that specific request settles.
-  const request = useMemo(() => ({ fetchPRs, refreshToken, refreshNonce }), [fetchPRs, refreshToken, refreshNonce]);
+  const request = useMemo(() => ({ api, project: filters.selectedProject, status: statusFilter, quickFilter,
+    search: debouncedSearch, limit: pageSize, offset: (page - 1) * pageSize, refreshToken, refreshNonce }),
+  [api, filters.selectedProject, statusFilter, quickFilter, debouncedSearch, page, pageSize, refreshToken, refreshNonce]);
   const loading = settled?.request !== request;
   const error = loading ? null : settled.error;
 
   useEffect(() => {
     const ctrl = new AbortController();
-    request.fetchPRs(ctrl.signal).then(res => {
+    const refresh = request.refreshNonce > forcedRefreshNonce.current;
+    request.api.pullRequests({ project: request.project, status: request.status, quickFilter: request.quickFilter,
+      search: request.search, limit: request.limit, offset: request.offset, refresh }, ctrl.signal).then(res => {
       if (ctrl.signal.aborted) return;
+      if (refresh) forcedRefreshNonce.current = request.refreshNonce;
       setPrs(res.items);
       setTotal(res.total);
       if (res.summary) setSummary(res.summary);

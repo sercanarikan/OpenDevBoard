@@ -28,7 +28,7 @@ Sunucu taraflı sayfalama, filtreleme, arama ve sıralama destekleyen ana PR lis
 - `repository` (string, opsiyonel): Belirli bir Git deposuna göre filtreler.
 - `status` (string, opsiyonel): `active` (varsayılan), `completed`, `abandoned`, `all`.
 - `quickFilter` (string, opsiyonel):
-  - `needs-my-review`: Kullanıcının reviewer olarak atandığı, yazar olmadığı ve henüz oy vermediği (`vote == 0`) aktif PR'lar.
+  - `needs-my-review`: Kullanıcının reviewer olarak atandığı ve henüz oy vermediği (`vote == 0`) aktif PR'lar.
   - `created-by-me`: Kullanıcının oluşturduğu PR'lar.
   - `involved`: Kullanıcının yazar veya reviewer olduğu PR'lar.
   - `all`: Proje kapsamındaki tüm PR'lar.

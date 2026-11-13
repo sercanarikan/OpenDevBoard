@@ -19,7 +19,7 @@ async function exercise({ path, endpoint, prefix, firstFilter, secondFilter, ite
       window.fetch = (input, init) => {
         const url = new URL(typeof input === 'string' ? input : input.url, location.href);
         if (url.pathname !== endpointPath) return originalFetch(input, init);
-        return new Promise(resolve => window.testRequests.push({ resolve, signal: init?.signal }));
+        return new Promise(resolve => window.testRequests.push({ resolve, signal: init?.signal, refresh: url.searchParams.get('refresh') }));
       };
       window.answerRequest = (index, status, body) => window.testRequests[index].resolve(
         new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -75,6 +75,20 @@ async function exercise({ path, endpoint, prefix, firstFilter, secondFilter, ite
     await answer(7, 200, response(5));
     await page.locator(`[data-testid="${prefix}-row"][data-id="5"]`).waitFor();
     check(`${prefix}: retry after refresh error succeeds`, await page.locator(`[data-testid="${prefix}-row"][data-id="5"]`).count() === 1);
+    if (prefix === 'pr') {
+      await page.getByTitle('Yenile', { exact: true }).last().click();
+      await waitForRequest(9);
+      check('pr: manual refresh requests an upstream refresh', await page.evaluate(() => window.testRequests[8].refresh === 'true'));
+      await secondFilter(page);
+      await waitForRequest(10);
+      check('pr: superseded manual refresh remains forced', await page.evaluate(() => window.testRequests[8].signal.aborted && window.testRequests[9].refresh === 'true'));
+      await answer(9, 200, response(6));
+      await page.locator('[data-testid="pr-row"][data-id="6"]').waitFor();
+      await firstFilter(page);
+      await waitForRequest(11);
+      check('pr: completed forced refresh is consumed once', await page.evaluate(() => window.testRequests[10].refresh !== 'true'));
+      await answer(10, 200, response(7));
+    }
   } catch (error) {
     console.error(error);
     total++;

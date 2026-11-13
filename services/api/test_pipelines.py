@@ -14,6 +14,21 @@ class TestPipelineHealthService(unittest.TestCase):
         pipeline_service.init_pipeline_db()
         self.fixture_runs = pipeline_service.build_fixture_pipelines()
 
+    def test_project_fallback_reports_organization_http_failure(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pipeline-fallback.db')):
+                pipeline_service.init_pipeline_db()
+                with sync_service.get_db_connection() as conn:
+                    conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+                    conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
+                forbidden = type('Response', (), {'status_code': 403})()
+                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
+                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(pipeline_service.requests, 'get', side_effect=[forbidden, self._ok([])]):
+                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True)
+                self.assertEqual(result['cacheStatus']['outcome'], 'partial')
+                self.assertEqual(result['cacheStatus']['organizationQueryError'], {'kind': 'http', 'status': 403})
+
     def test_pipeline_cache_does_not_serve_a_different_days_window(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pipeline.db')):

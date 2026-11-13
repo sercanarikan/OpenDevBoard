@@ -104,6 +104,7 @@ Geriye dönük uyumluluk için korunmuştur.
 
 - SQLite veritabanında `pipeline_runs` tablosunda saklanır.
 - **TTL:** 300 saniye (5 dakika).
+- Canlı özetin `cacheStatus.organizationQueryError` alanı, organizasyon düzeyindeki sorgu başarısızsa anonim hata türünü ve varsa HTTP durumunu içerir; proje kapsamındaki sonuçlar organizasyonun tümünü doğrulamadığında durum `partial` kalır.
 - Tekrarlanan istekler yerel SQLite'tan ~5 ms içinde yanıtlanır.
 - **Fixture Modu (`DEVOPS_FIXTURE_MODE=1`):** Çevrimdışı ve CI ortamında 20 deterministik pipeline çalıştırması üretir; ağ veya PAT gerektirmez.
 

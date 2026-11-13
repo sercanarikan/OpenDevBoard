@@ -309,14 +309,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Confirm that the backend is unavailable before promoting a single request failure to a global warning.
   useEffect(() => {
     if (booting || !isBackend) return;
-    let active = true;
-    let checking = false;
+    const state = { active: true, checking: false };
     const unsubscribe = onNetworkEvent(({ ok, error }) => {
-      if (ok || checking || sourceRef.current === 'lost') return;
-      checking = true;
+      if (ok || state.checking || sourceRef.current === 'lost') return;
+      state.checking = true;
       void probeBackend().then(reachable => {
-        checking = false;
-        if (active && !reachable && sourceRef.current !== 'lost') {
+        state.checking = false;
+        if (state.active && !reachable && sourceRef.current !== 'lost') {
           failuresRef.current = LOST_AFTER_FAILURES;
           setSource('lost');
           setConnectionError(errMessage(error));
@@ -324,7 +323,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
     });
-    return () => { active = false; unsubscribe(); };
+    return () => { state.active = false; unsubscribe(); };
   }, [booting, isBackend]);
 
   // While the backend is unreachable, probe quickly so recovery is noticed within seconds.
