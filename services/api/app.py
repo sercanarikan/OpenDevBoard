@@ -591,7 +591,7 @@ def _load_all_pipelines(days=30, force_refresh=False):
         return pipeline_service.build_fixture_pipelines()
     org_url = get_devops_org_url()
     pat = get_devops_pat()
-    return pipeline_service.sync_live_pipeline_runs(org_url, pat, days=days, force_refresh=force_refresh, include_cache_status=True)
+    return pipeline_service.sync_live_pipeline_runs(org_url, pat, days=days, force_refresh=force_refresh, include_cache_status=True, project_scoped=True)
 
 def _load_all_deployments(days=30, force_refresh=False):
     if sync_service.is_fixture_mode():

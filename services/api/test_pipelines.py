@@ -25,7 +25,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.requests, 'get', side_effect=[forbidden, self._ok([])]):
-                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True)
+                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['cacheStatus']['outcome'], 'partial')
                 self.assertEqual(result['cacheStatus']['organizationQueryError'], {'kind': 'http', 'status': 403})
 
@@ -65,8 +65,8 @@ class TestPipelineHealthService(unittest.TestCase):
                         patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.requests, 'get', return_value=self._ok([])) as get:
-                        first = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, include_cache_status=True)
-                        second = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True)
+                        first = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, include_cache_status=True, project_scoped=False)
+                        second = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True, project_scoped=False)
                 self.assertEqual(first['items'], [])
                 self.assertEqual(second['items'], [])
                 self.assertEqual(first['cacheStatus']['outcome'], 'partial')
@@ -87,7 +87,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.requests, 'get', return_value=self._ok([])):
-                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, force_refresh=True, include_cache_status=True)
+                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['items'], [])
                 self.assertEqual(result['cacheStatus']['outcome'], 'partial')
                 self.assertFalse(result['cacheStatus']['complete'])
@@ -103,7 +103,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.requests, 'get', side_effect=responses) as get:
-                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual({item['id'] for item in result['items']}, {10, 11})
                 self.assertEqual(get.call_count, 2)
                 self.assertEqual(get.call_args_list[1].kwargs['params']['continuationToken'], 'next')
@@ -124,7 +124,7 @@ class TestPipelineHealthService(unittest.TestCase):
                         patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.requests, 'get', return_value=self._ok([])) as get:
-                    pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True)
+                    pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True, project_scoped=False)
                 self.assertEqual(get.call_count, 1)
 
     def test_pipeline_short_refresh_does_not_replace_long_window_snapshot(self):
@@ -143,7 +143,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.requests, 'get', return_value=self._ok([])):
-                    pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, force_refresh=True, include_cache_status=True)
+                    pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, force_refresh=True, include_cache_status=True, project_scoped=False)
                 conn = sync_service.get_db_connection()
                 try:
                     rows = conn.execute('SELECT id FROM pipeline_runs').fetchall()
@@ -167,7 +167,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.requests, 'get', return_value=bad):
-                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
+                    result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['cacheStatus']['outcome'], 'failed')
                 self.assertTrue(result['cacheStatus']['stale'])
                 with sync_service.get_db_connection() as conn:
