@@ -319,6 +319,24 @@ class TestPullRequestsService(unittest.TestCase):
         self.assertFalse(flags["isReviewer"])
         self.assertFalse(flags["needsMyReview"])
 
+    def test_assigned_author_with_no_vote_still_needs_review(self):
+        pr = {
+            "id": 8,
+            "status": "active",
+            "authorId": self.user["id"],
+            "authorName": self.user["displayName"],
+            "reviewers": [{"id": self.user["id"], "displayName": self.user["displayName"], "vote": 0}],
+        }
+        flags = pr_service.evaluate_pr_personal_flags(pr, self.user)
+        self.assertTrue(flags["isAuthor"])
+        self.assertTrue(flags["isReviewer"])
+        self.assertTrue(flags["needsMyReview"])
+
+        filtered = pr_service.query_pull_requests([pr], {"status": "active", "quickFilter": "needs-my-review"}, self.user)
+        summary = pr_service.get_pr_summary([pr], project="all", current_user=self.user)
+        self.assertEqual(filtered["total"], 1)
+        self.assertEqual(summary["needsMyReview"], 1)
+
     def test_pr_upstream_failures_keep_categories_for_auth_rate_limit_timeout_and_refusal(self):
         cases = [
             (type('Response', (), {'status_code': 403, 'json': lambda self: {}})(), 'auth'),

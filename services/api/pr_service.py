@@ -783,7 +783,7 @@ def evaluate_pr_personal_flags(pr: Dict[str, Any], current_user: Optional[Dict[s
             break
 
     is_active = (pr.get("status") or "").lower() == "active"
-    needs_my_review = is_active and is_reviewer and not is_author and (my_vote == 0)
+    needs_my_review = is_active and is_reviewer and (my_vote == 0)
     has_reviewed = is_reviewer and (my_vote != 0)
 
     return {

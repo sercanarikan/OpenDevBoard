@@ -128,6 +128,8 @@ Azure DevOps üzerindeki inceleyen kimliği, oturum açmış kullanıcının kim
 3. **Display Name (`displayName`):** Benzersiz kimlikler yoksa büyük/küçük harf duyarsız tam eşleşme. Alt dize eşleşmesi kullanılmaz.
 4. **Takım/grup:** Oturum açmış kullanıcının Graph `subjectDescriptor` üyelikleri okunur; reviewer bir container ise grubun `originId` değeriyle eşleştirilir. Graph erişimi reddedilirse doğrudan kullanıcı eşleşmeleri çalışmaya devam eder ve `reviewerIdentityStatus.groupMembership="unavailable"` olarak gösterilir. PAT kapsamı bu yanıt görülmeden varsayılmaz.
 
+`İncelememi Bekleyenler`, aktif PR'da kullanıcı reviewer olarak atanmış ve oyu `0` ise PR'ı listeler. PR yazarı olmak tek başına bu atamayı yok saydırmaz; Azure DevOps PR'da yazarı ayrıca reviewer olarak atamışsa bu inceleme de gösterilir.
+
 **Oy Değerleri:**
 | Vote Kodu | Durum Anahtarı | Türkçe Etiket | İngilizce Etiket |
 | :---: | :--- | :--- | :--- |
