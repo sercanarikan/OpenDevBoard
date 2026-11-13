@@ -333,7 +333,9 @@ export const DashboardOverview: React.FC = () => {
                 {t('cards.myOpenPRs')}
               </div>
               <div role={prSummaryError ? 'alert' : undefined} className="text-[11px] text-slate-400 truncate">
-                {prSummaryError || t('cards.myOpenPRsDesc')}
+                {prSummaryError || (prCacheStale
+                  ? t('cards.cachedPRs', { when: prSummary?.cacheStatus?.lastSyncedAt ? formatCacheTime(prSummary.cacheStatus.lastSyncedAt) : t('cache.unknownTime') })
+                  : t('cards.myOpenPRsDesc'))}
               </div>
             </div>
           </div>

@@ -7,6 +7,7 @@ function check(name, ok) { total++; if (ok) passed++; console.log(`${ok ? 'PASS'
 try {
   const pipeline = { periodDays: 30, totalPipelines: 1, totalRuns: 2, succeeded: 2, failed: 0, partiallySucceeded: 0, inProgress: 0, canceled: 0, successRate: 100, failedRuns: [], dailyStats: [], cacheStatus: { outcome: 'partial', complete: false, stale: false } };
   const deployment = { periodDays: 30, totalDeployments: 1, succeeded: 1, failed: 0, inProgress: 0, successRate: 100, environments: [], dailyStats: [], cacheStatus: { outcome: 'partial', complete: false, stale: true, errors: [{ kind: 'upstream_http', status: 404 }] } };
+  await page.route('**/api/pull-requests/summary*', route => route.fulfill({ json: { needsMyReview: 2, createdByMe: 3, involved: 3, totalActive: 4, cacheStatus: { outcome: 'partial', complete: false, stale: true, lastSyncedAt: '2026-01-01T00:00:00Z' }, reviewerIdentityStatus: { groupMembership: 'available' } } }));
   await page.route('**/api/pipelines/summary?*', route => route.fulfill({ json: pipeline }));
   await page.route('**/api/deployments/summary?*', route => route.fulfill({ json: deployment }));
   await page.goto(`${process.env.WEB_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
@@ -18,6 +19,8 @@ try {
   check('pipeline partial does not claim all pipelines are healthy', await pipelineCard.getByText("Tüm pipeline'lar sağlıklı", { exact: false }).count() === 0);
   check('deployment partial is explicitly visible', await deploymentCard.getByText('Dağıtım verisi kısmen', { exact: false }).count() > 0);
   check('deployment reports upstream 404', await deploymentCard.getByText('HTTP 404', { exact: false }).count() > 0);
+  await page.getByTestId('dash-card-my-prs').getByText('3', { exact: true }).waitFor();
+  check('created PR count marks stale partial data', await page.getByTestId('dash-card-my-prs').getByText('Son başarılı PR verisi', { exact: false }).count() > 0);
   await page.unroute('**/api/pipelines/summary?*');
   await page.unroute('**/api/deployments/summary?*');
   await page.route('**/api/pipelines/summary?*', route => route.fulfill({ json: { ...pipeline, cacheStatus: { outcome: 'failed', complete: false, stale: true } } }));
