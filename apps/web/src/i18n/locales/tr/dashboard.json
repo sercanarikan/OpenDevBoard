@@ -2,6 +2,18 @@
   "title": "Genel Bakış",
   "welcome": "Hoş geldiniz, {{name}}",
   "subtitle": "Günlük iş durumunuz, bekleyen incelemeleriniz ve öncelikli görevleriniz",
+  "cache": {
+    "stale": "Son başarılı güncelleme {{when}}. Güncel dağıtım verisi alınamadı.",
+    "partial": "Dağıtım verisi kısmen güncellendi; bazı projelere erişilemedi.",
+    "failed": "Dağıtım verisi alınamadı ve gösterilecek başarılı önbellek yok.",
+    "unreachable": "Backend bağlantısı kesildi; genel bağlantı göstergesine bakın.",
+    "auth": "Azure DevOps dağıtım verisi için HTTP {{status}} döndürdü; yapılandırılmış bağlantıyı ve izinleri kontrol edin.",
+    "rateLimited": "Azure DevOps dağıtım isteğini hız sınırı nedeniyle reddetti.",
+    "timeout": "Azure DevOps dağıtım isteğine zaman aşımından önce yanıt vermedi.",
+    "upstreamUnreachable": "Backend, dağıtım verisi için Azure DevOps'a bağlanamadı.",
+    "upstreamHttp": "Azure DevOps dağıtım verisi için HTTP {{status}} döndürdü.",
+    "unknownTime": "zaman bilinmiyor"
+  },
   "cards": {
     "myTasks": "Aktif Görevlerim",
     "myTasksDesc": "Üzerinize atanmış açık iş öğeleri",
@@ -9,6 +21,8 @@
     "blockedTasksDesc": "Öncül bir işi bekleyen görevleriniz",
     "pendingPRs": "İncelememi Bekleyenler",
     "pendingPRsDesc": "İncelemeniz gereken açık PR'lar",
+    "reviewerIdentityUnavailable": "Ekip/grup inceleme atamaları doğrulanamadı; sayı eksik olabilir",
+    "cachedPRs": "Son başarılı PR verisi: {{when}}",
     "myOpenPRs": "Açık PR'larım",
     "myOpenPRsDesc": "Oluşturduğunuz aktif birleştirme talepleri"
   },
@@ -28,7 +42,7 @@
     "latestFailed": "Son Başarısız Pipeline",
     "latestDeployment": "Son Dağıtım",
     "noFailedPipelines": "Tüm pipeline'lar sağlıklı, kırık build bulunmuyor.",
-    "noDeployments": "Henüz dağıtım kaydı bulunmuyor.",
+    "noDeployments": "Klasik release deployment kaydı bulunmuyor.",
     "viewPipelines": "Pipeline'ları Gör",
     "viewDeployments": "Dağıtımları Gör",
     "myRecentActivity": "Son Aktivitelerim",

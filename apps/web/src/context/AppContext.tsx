@@ -43,7 +43,7 @@ const errMessage = (e: unknown): string => {
 
 /** Retains same-scope data during refresh and ignores aborted responses. */
 function useScopedSummary<T>(
-  request: (signal: AbortSignal) => Promise<T>, enabled: boolean, refreshToken: number, label: string
+  request: (signal: AbortSignal) => Promise<T>, enabled: boolean, refreshToken: number
 ) {
   const requestKey = useMemo(() => ({ request, enabled, refreshToken }), [request, enabled, refreshToken]);
   const [result, setResult] = useState<{ key: typeof requestKey | null; data: T | null; error: string | null }>({
@@ -58,10 +58,9 @@ function useScopedSummary<T>(
       if (ctrl.signal.aborted || (e instanceof ApiError && e.isAbort)) return;
       const message = errMessage(e);
       setResult(prev => ({ key: requestKey, data: prev.key?.request === request ? prev.data : null, error: message }));
-      console.warn(`${label} summary failed:`, message);
     });
     return () => ctrl.abort();
-  }, [request, enabled, requestKey, label]);
+  }, [request, enabled, requestKey]);
   return {
     data: result.key?.request === request ? result.data : null,
     loading: !enabled ? result.key === null : result.key !== requestKey,
@@ -432,9 +431,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const prRequest = useCallback((signal: AbortSignal) => api.pullRequestsSummary(filters.selectedProject, signal), [api, filters.selectedProject]);
   const pipelineRequest = useCallback((signal: AbortSignal) => api.pipelinesSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
   const deploymentRequest = useCallback((signal: AbortSignal) => api.deploymentsSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
-  const { data: prSummary, loading: prSummaryLoading, error: prSummaryError } = useScopedSummary(prRequest, !booting, refreshToken, 'PR');
-  const { data: pipelineSummary, loading: pipelineSummaryLoading, error: pipelineSummaryError } = useScopedSummary(pipelineRequest, !booting, refreshToken, 'Pipeline');
-  const { data: deploymentSummary, loading: deploymentSummaryLoading, error: deploymentSummaryError } = useScopedSummary(deploymentRequest, !booting, refreshToken, 'Deployment');
+  const { data: prSummary, loading: prSummaryLoading, error: prSummaryError } = useScopedSummary(prRequest, !booting, refreshToken);
+  const { data: pipelineSummary, loading: pipelineSummaryLoading, error: pipelineSummaryError } = useScopedSummary(pipelineRequest, !booting, refreshToken);
+  const { data: deploymentSummary, loading: deploymentSummaryLoading, error: deploymentSummaryError } = useScopedSummary(deploymentRequest, !booting, refreshToken);
   const [selectedPR, setSelectedPR] = useState<PullRequest | null>(null);
   const [selectedPipelineRun, setSelectedPipelineRun] = useState<PipelineRun | null>(null);
 

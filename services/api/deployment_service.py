@@ -53,7 +53,10 @@ def init_deployment_db():
             id INTEGER PRIMARY KEY CHECK (id = 1), requested_days INTEGER NOT NULL,
             attempted_at TEXT NOT NULL, completed_at TEXT,
             outcome TEXT NOT NULL CHECK (outcome IN ('complete', 'partial', 'failed')),
-            successful_projects TEXT NOT NULL DEFAULT '[]')''')
+            successful_projects TEXT NOT NULL DEFAULT '[]', errors_json TEXT NOT NULL DEFAULT '[]')''')
+        cache_columns = {row[1] for row in cursor.execute("PRAGMA table_info(deployment_cache_state)").fetchall()}
+        if "errors_json" not in cache_columns:
+            cursor.execute("ALTER TABLE deployment_cache_state ADD COLUMN errors_json TEXT NOT NULL DEFAULT '[]'")
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_dep_scope ON deployment_records(project, environment_name, status, completed_on)')
         conn.commit()
 
@@ -194,13 +197,17 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
         with sync_service.db_lock, sync_service.get_db_connection() as conn:
             cursor = conn.cursor()
             state = cursor.execute("SELECT * FROM deployment_cache_state WHERE id=1").fetchone()
-            if state and state["outcome"] == "partial" and state["completed_at"]:
+            if state and state["outcome"] in {"complete", "partial"} and state["completed_at"]:
                 try:
                     last_sync_dt = datetime.fromisoformat(state["completed_at"])
                     if state["requested_days"] == days and 0 <= (now - last_sync_dt).total_seconds() < CACHE_TTL_SECONDS:
                         cursor.execute("SELECT * FROM deployment_records WHERE started_on >= ? ORDER BY started_on DESC", ((now - timedelta(days=days)).isoformat(timespec="seconds") + "Z",))
                         cached = [_row_to_deployment_dict(r) for r in cursor.fetchall()]
-                        return {"items": cached, "cacheStatus": {"outcome": "partial", "complete": False, "stale": False, "paginationBounded": True, "completenessScope": "discovered-projects/date-window", "projectDiscoveryComplete": False, "organizationSnapshotComplete": False}} if include_cache_status else cached
+                        try:
+                            cached_errors = json.loads(state["errors_json"] or "[]")
+                        except (KeyError, TypeError, ValueError):
+                            cached_errors = []
+                        return {"items": cached, "cacheStatus": {"outcome": state["outcome"], "complete": state["outcome"] == "complete", "stale": state["outcome"] != "complete", "paginationBounded": state["outcome"] != "complete", "lastSyncedAt": state["completed_at"], "errors": cached_errors, "completenessScope": "discovered-projects/date-window", "projectDiscoveryComplete": False, "organizationSnapshotComplete": False}} if include_cache_status else cached
                 except Exception:
                     pass
 
@@ -225,6 +232,26 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
     all_raw = []
     projects_fetch_ok = bool(projects) and not project_scope_bounded
     project_outcomes = {}
+    upstream_errors = []
+
+    def record_error(status=None, error=None):
+        if status in (401, 403):
+            kind = "auth"
+        elif status == 429:
+            kind = "rate_limited"
+        elif isinstance(error, requests.Timeout):
+            kind = "timeout"
+        elif isinstance(error, requests.ConnectionError):
+            kind = "connection_refused"
+        elif status is not None:
+            kind = "upstream_http"
+        else:
+            kind = "upstream_error"
+        entry = {"kind": kind}
+        if status is not None:
+            entry["status"] = status
+        if entry not in upstream_errors:
+            upstream_errors.append(entry)
     request_budget = DEPLOYMENT_MAX_PAGES * max(1, min(len(projects), 100))
     requests_made = 0
     for proj in projects:
@@ -242,6 +269,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
                 r = requests.get(vsrm_url, headers=headers, params=params, timeout=10)
                 requests_made += 1
                 if r.status_code != 200:
+                    record_error(status=r.status_code)
                     break
                 for d in r.json().get('value', []):
                     all_raw.append((d, proj))
@@ -259,6 +287,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
         except Exception as ex:
             projects_fetch_ok = False
             project_outcomes[proj] = False
+            record_error(error=ex)
             logger.debug("Project %s deployment fetch error: %s", proj, ex)
 
     normalized = []
@@ -274,38 +303,63 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
         unique_map[(d["id"], d["project"])] = d
     final_deps = list(unique_map.values())
 
-    fetch_complete = bool(projects) and all(project_outcomes.get(p, False) for p in projects) and bool(all_raw)
+    fetch_complete = bool(projects) and all(project_outcomes.get(p, False) for p in projects)
     if project_scope_bounded:
         fetch_complete = False
     outcome = "complete" if fetch_complete else ("partial" if any(project_outcomes.values()) else "failed")
-    completed_at = now_iso if fetch_complete else None
-    if final_deps and (projects_fetch_ok or any(project_outcomes.values())):
+    completed_at = now_iso if any(project_outcomes.values()) else None
+    fetch_succeeded = any(project_outcomes.values())
+    if fetch_succeeded:
         with sync_service.db_lock, sync_service.get_db_connection() as conn:
-            conn.executemany('''
+            if fetch_complete and projects:
+                project_placeholders = ",".join("?" for _ in projects)
+                conn.execute(
+                    f"DELETE FROM deployment_records WHERE project IN ({project_placeholders}) AND started_on >= ?",
+                    (*projects, (now - timedelta(days=days)).isoformat(timespec="seconds") + "Z"),
+                )
+            if final_deps:
+                conn.executemany('''
                 INSERT OR REPLACE INTO deployment_records (
                     id, project, release_id, release_name, definition_id, definition_name,
                     environment_id, environment_name, status, attempt, started_on,
                     completed_on, duration_seconds, requested_by, url, last_synced_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', [(
+                ''', [(
                 d["id"], d["project"], d["releaseId"], d["releaseName"], d["definitionId"],
                 d["definitionName"], d["environmentId"], d["environmentName"], d["status"],
                 d["attempt"], d["startedOn"], d["completedOn"], d["durationSeconds"],
                 d["requestedBy"], d["url"], now_iso
-            ) for d in final_deps])
+                ) for d in final_deps])
             conn.commit()
     with sync_service.db_lock, sync_service.get_db_connection() as conn:
-        conn.execute('''INSERT INTO deployment_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
-            VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET attempted_at=excluded.attempted_at,
-            completed_at=excluded.completed_at, outcome=excluded.outcome,
-            successful_projects=excluded.successful_projects''',
-            (days, now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_outcomes.items() if ok))))
+        conn.execute('''INSERT INTO deployment_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects, errors_json)
+            VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET attempted_at=excluded.attempted_at,
+            completed_at=COALESCE(excluded.completed_at, deployment_cache_state.completed_at), outcome=excluded.outcome,
+            successful_projects=excluded.successful_projects, errors_json=excluded.errors_json''',
+            (days, now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_outcomes.items() if ok)), json.dumps(upstream_errors)))
         conn.commit()
+
+    if not fetch_complete:
+        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+            cached = [_row_to_deployment_dict(r) for r in conn.execute(
+                "SELECT * FROM deployment_records WHERE started_on >= ? ORDER BY started_on DESC",
+                ((now - timedelta(days=days)).isoformat(timespec="seconds") + "Z",)
+            ).fetchall()]
+            last_row_sync = conn.execute("SELECT MAX(last_synced_at) FROM deployment_records").fetchone()[0]
+            last_complete_sync = conn.execute("SELECT completed_at FROM deployment_cache_state WHERE id=1").fetchone()[0]
+        final_deps = cached
+    else:
+        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+            last_row_sync = conn.execute("SELECT MAX(last_synced_at) FROM deployment_records").fetchone()[0]
+            last_complete_sync = conn.execute("SELECT completed_at FROM deployment_cache_state WHERE id=1").fetchone()[0]
+    last_success = max((stamp for stamp in (last_row_sync, last_complete_sync) if stamp), default=None)
 
     if include_cache_status:
         return {"items": final_deps, "cacheStatus": {
             "outcome": outcome,
-            "complete": fetch_complete, "stale": not any(project_outcomes.values()), "paginationBounded": not fetch_complete,
+            "complete": fetch_complete, "stale": not fetch_complete, "paginationBounded": not fetch_complete,
+            "lastSyncedAt": last_success,
+            "errors": upstream_errors,
             "successfulProjects": sorted(p for p, ok in project_outcomes.items() if ok),
             "completenessScope": "discovered-projects/date-window",
             "projectDiscoveryComplete": False,

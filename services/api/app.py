@@ -121,7 +121,8 @@ def get_current_user_info():
             return {
                 "id": auth_user.get("id", ""),
                 "displayName": auth_user.get("providerDisplayName") or auth_user.get("customDisplayName", ""),
-                "uniqueName": auth_user.get("subjectDescriptor") or auth_user.get("uniqueName", "")
+                "uniqueName": auth_user.get("uniqueName", ""),
+                "subjectDescriptor": auth_user.get("subjectDescriptor", "")
             }
     except Exception as e:
         app.logger.warning(f"Could not fetch authenticated user info: {e}")
@@ -302,7 +303,19 @@ def _get_pr_current_user():
             "displayName": "Fixture User",
             "uniqueName": "fixture.user@devopsflow.local"
         }
-    return get_current_user_info() or {}
+    user = get_current_user_info() or {}
+    subject_descriptor = user.get("subjectDescriptor")
+    if subject_descriptor:
+        groups = pr_service.fetch_user_group_ids(get_devops_org_name(), subject_descriptor, get_headers())
+        user["groupIds"] = groups["groupIds"]
+        user["groupMembershipStatus"] = groups["status"]
+        if groups.get("error"):
+            user["groupMembershipError"] = groups["error"]
+    else:
+        user["groupIds"] = []
+        user["groupMembershipStatus"] = "unavailable"
+        user["groupMembershipError"] = {"kind": "identity_unavailable"}
+    return user
 
 def _load_all_prs(force_refresh=False):
     if sync_service.is_fixture_mode():
@@ -311,6 +324,13 @@ def _load_all_prs(force_refresh=False):
     pat = get_devops_pat()
     return pr_service.sync_live_pull_requests(org_url, pat, force_refresh=force_refresh, include_cache_status=True)
 
+
+def _pr_sync_failed_without_cache(sync_data):
+    if not isinstance(sync_data, dict):
+        return False
+    status = sync_data.get("cacheStatus", {})
+    return status.get("outcome") in {"failed", "partial"} and not sync_data.get("items") and not status.get("hasSnapshot", False)
+
 @app.route('/api/my-pull-requests', methods=['GET'])
 def get_my_pull_requests():
     """Fetches active pull requests across all projects, identifying PRs where user is reviewer or author (legacy UI compatibility)."""
@@ -318,6 +338,8 @@ def get_my_pull_requests():
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         current_user = _get_pr_current_user()
         sync_data = _load_all_prs(force_refresh=force_refresh)
+        if _pr_sync_failed_without_cache(sync_data):
+            return jsonify({"error": "Pull requests could not be refreshed", "items": [], "total": 0, "cacheStatus": sync_data.get("cacheStatus")}), 503
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
 
         # Annotate with personal flags
@@ -356,10 +378,17 @@ def get_pull_requests():
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         current_user = _get_pr_current_user()
         sync_data = _load_all_prs(force_refresh=force_refresh)
+        if _pr_sync_failed_without_cache(sync_data):
+            return jsonify({"error": "Pull requests could not be refreshed", "items": [], "total": 0, "cacheStatus": sync_data.get("cacheStatus")}), 503
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         result = pr_service.query_pull_requests(all_prs, request.args, current_user=current_user)
+        result["reviewerIdentityStatus"] = {
+            "groupMembership": current_user.get("groupMembershipStatus", "unavailable"),
+            "error": current_user.get("groupMembershipError")
+        }
         if isinstance(sync_data, dict):
             result["cacheStatus"] = sync_data.get("cacheStatus")
+            result["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
         return jsonify(result), 200
     except Exception as e:
         app.logger.error(f"Error in get_pull_requests: {e}", exc_info=True)
@@ -372,10 +401,18 @@ def get_pull_requests_summary():
         project = request.args.get('project', 'all')
         current_user = _get_pr_current_user()
         sync_data = _load_all_prs()
+        if _pr_sync_failed_without_cache(sync_data):
+            return jsonify({"error": "Pull requests could not be refreshed", "needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0, "cacheStatus": sync_data.get("cacheStatus")}), 503
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         summary = pr_service.get_pr_summary(all_prs, project=project, current_user=current_user)
+        summary["reviewerIdentityStatus"] = {
+            "groupMembership": current_user.get("groupMembershipStatus", "unavailable"),
+            "error": current_user.get("groupMembershipError")
+        }
         if isinstance(sync_data, dict):
             summary["cacheStatus"] = sync_data.get("cacheStatus")
+            summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
+            summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt") or summary.get("lastSyncedAt")
         return jsonify(summary), 200
     except Exception as e:
         app.logger.error(f"Error in get_pull_requests_summary: {e}", exc_info=True)
@@ -386,7 +423,10 @@ def get_pull_request_by_id(pr_id):
     """Detailed view for a single PR."""
     try:
         current_user = _get_pr_current_user()
-        all_prs = _load_all_prs()
+        sync_data = _load_all_prs()
+        if _pr_sync_failed_without_cache(sync_data):
+            return jsonify({"error": "Pull requests could not be refreshed", "cacheStatus": sync_data.get("cacheStatus")}), 503
+        all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         pr = pr_service.get_single_pr_details(all_prs, pr_id, current_user=current_user)
         if not pr:
             return jsonify({"error": f"Pull request #{pr_id} not found"}), 404
@@ -773,6 +813,7 @@ def get_deployments():
         res = deployment_service.query_deployments(all_deps, request.args)
         if isinstance(sync_data, dict):
             res["cacheStatus"] = sync_data.get("cacheStatus")
+            res["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
         return jsonify(res), 200
     except Exception as e:
         app.logger.error(f"Error in get_deployments: {e}", exc_info=True)
@@ -794,6 +835,7 @@ def get_deployments_summary():
         summary = deployment_service.compute_deployment_summary(all_deps, days=days)
         if isinstance(sync_data, dict):
             summary["cacheStatus"] = sync_data.get("cacheStatus")
+            summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
         return jsonify(summary), 200
     except Exception as e:
         app.logger.error(f"Error in get_deployments_summary: {e}", exc_info=True)

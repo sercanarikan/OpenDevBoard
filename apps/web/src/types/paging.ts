@@ -236,6 +236,8 @@ export interface PullRequestsSummary {
   involved: number;
   totalActive: number;
   lastSyncedAt?: string;
+  reviewerIdentityStatus?: { groupMembership: 'available' | 'unavailable' | 'not_requested'; error?: { kind: string; status?: number } };
+  cacheStatus?: { outcome: string; complete: boolean; stale: boolean; lastSyncedAt?: string | null; hasSnapshot?: boolean; errors?: { kind: string; status?: number }[] };
 }
 
 export interface PullRequestsResponse {
@@ -247,6 +249,8 @@ export interface PullRequestsResponse {
   summary: PullRequestsSummary;
   dataScope: string;
   lastSyncedAt?: string;
+  reviewerIdentityStatus?: PullRequestsSummary['reviewerIdentityStatus'];
+  cacheStatus?: PullRequestsSummary['cacheStatus'];
 }
 
 export interface PullRequestParams {
@@ -377,6 +381,7 @@ export interface DeploymentSummary {
   projects?: DeploymentProjectStat[];
   dailyStats: PipelineDailyStat[];
   lastSyncedAt?: string;
+  cacheStatus?: { outcome: string; complete: boolean; stale: boolean; lastSyncedAt?: string | null; hasSnapshot?: boolean; errors?: { kind: string; status?: number }[] };
 }
 
 export interface DeploymentsResponse {

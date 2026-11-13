@@ -2,6 +2,18 @@
   "title": "Dashboard",
   "welcome": "Welcome back, {{name}}",
   "subtitle": "Daily summary of your active tasks, pending code reviews, and priority work",
+  "cache": {
+    "stale": "Last successful update: {{when}}. Current deployment data could not be fetched.",
+    "partial": "Deployment data refreshed partially; some projects were unavailable.",
+    "failed": "Deployment data could not be fetched and no successful cache is available.",
+    "unreachable": "The backend is unreachable; see the global connection status.",
+    "auth": "Azure DevOps returned HTTP {{status}} for deployment data; check the configured connection and permissions.",
+    "rateLimited": "Azure DevOps rate-limited the deployment request.",
+    "timeout": "Azure DevOps did not answer the deployment request before it timed out.",
+    "upstreamUnreachable": "The backend could not connect to Azure DevOps for deployment data.",
+    "upstreamHttp": "Azure DevOps returned HTTP {{status}} for deployment data.",
+    "unknownTime": "unknown time"
+  },
   "cards": {
     "myTasks": "My Active Tasks",
     "myTasksDesc": "Open work items assigned to you",
@@ -9,6 +21,8 @@
     "blockedTasksDesc": "Tasks blocked by pending predecessors",
     "pendingPRs": "Pending My Review",
     "pendingPRsDesc": "Pull requests awaiting your review",
+    "reviewerIdentityUnavailable": "Team or group reviewer assignments could not be checked; this count may be incomplete",
+    "cachedPRs": "Last successful PR data: {{when}}",
     "myOpenPRs": "My Open PRs",
     "myOpenPRsDesc": "Active pull requests created by you"
   },
@@ -28,7 +42,7 @@
     "latestFailed": "Latest Broken Pipeline",
     "latestDeployment": "Latest Deployment",
     "noFailedPipelines": "All pipelines are healthy; no broken builds found.",
-    "noDeployments": "No deployment records found.",
+    "noDeployments": "No classic release deployment records found.",
     "viewPipelines": "View Pipelines",
     "viewDeployments": "View Deployments",
     "myRecentActivity": "My Recent Activity",

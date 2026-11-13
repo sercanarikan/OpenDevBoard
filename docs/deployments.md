@@ -80,6 +80,8 @@ Sayfalama, arama, proje, ortam ve durum filtreleme destekleyen dağıtım kayıt
 ### 2.2. `GET /api/deployments/summary`
 Dashboard ve özet görünüm için hafif uç noktası.
 
+Yanıttaki `cacheStatus` güncellemenin `complete`, `partial` veya `failed` sonucunu ve son başarılı güncelleme zamanını (`lastSyncedAt`) taşır. Geçerli bir boş yanıt `complete` ve sıfır dağıtım döndürür. Azure erişimi başarısızsa cache varsa son snapshot `stale=true` ile sunulur; cache yoksa UI metrikleri sıfır yerine `—` gösterir. `errors` yalnızca `auth` (401/403), `rate_limited` (429), `upstream_http` (diğer HTTP yanıtları), `timeout` veya `connection_refused` gibi kategorileri içerir; ham yanıt gövdesi içermez. `Classic Release Deployments (VSRM API)` desteklenir; YAML Environments bu endpoint için desteklenmez.
+
 ### 2.3. `GET /api/deployments/<id>`
 Tekil bir dağıtımın ortam, süre, attempt ve release bağlantısı detaylarını döndürür.
 
