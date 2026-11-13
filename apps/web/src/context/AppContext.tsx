@@ -17,6 +17,7 @@ import { demoApi } from '../services/demoApi';
 import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockData';
 import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
 import i18n from '../i18n';
+import { apiErrorTranslationKey } from '../utils/apiErrorMessage';
 
 export const SYNC_POLL_MS = 20000;
 const LOST_AFTER_FAILURES = 2;
@@ -37,7 +38,10 @@ const defaultFilters: FilterOptions = {
 
 
 const errMessage = (e: unknown): string => {
-  if (e instanceof ApiError) return e.isNetwork ? i18n.t('api.connectionRefused') : e.message;
+  if (e instanceof ApiError) {
+    const key = apiErrorTranslationKey(e);
+    return key ? i18n.t(key) : e.message;
+  }
   return (e as Error)?.message || i18n.t('api.unexpectedConnectionError');
 };
 
