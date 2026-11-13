@@ -3,6 +3,10 @@
   "welcome": "Hoş geldiniz, {{name}}",
   "subtitle": "Günlük iş durumunuz, bekleyen incelemeleriniz ve öncelikli görevleriniz",
   "cache": {
+    "pipelinePartial": "Pipeline verisi kısmi; bazı sonuçlar eksik olabilir.",
+    "pipelineFailed": "Pipeline verisi alınamadı.",
+    "pipelineStale": "Pipeline verisi güncel değil.",
+    "pipelineEmpty": "Bu dönemde pipeline koşumu bulunmuyor.",
     "stale": "Son başarılı güncelleme {{when}}. Güncel dağıtım verisi alınamadı.",
     "partial": "Dağıtım verisi kısmen güncellendi; bazı projelere erişilemedi.",
     "failed": "Dağıtım verisi alınamadı ve gösterilecek başarılı önbellek yok.",

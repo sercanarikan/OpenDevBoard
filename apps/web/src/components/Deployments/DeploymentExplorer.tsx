@@ -23,7 +23,7 @@ import { DeploymentInspector } from './DeploymentInspector';
 const emptyEnvironments: DeploymentEnvironmentStat[] = [];
 
 export const DeploymentExplorer: React.FC = () => {
-  const { t } = useTranslation(['deployments', 'common']);
+  const { t } = useTranslation(['deployments', 'common', 'dashboard']);
   const {
     api,
     filters,
@@ -60,6 +60,7 @@ export const DeploymentExplorer: React.FC = () => {
     deployments: DeploymentRecord[];
     total: number;
     summary: DeploymentSummary | null;
+    cacheStatus: DeploymentSummary['cacheStatus'];
     error: string | null;
   } | null>(null);
   const sameScope = result?.scope === scope;
@@ -96,7 +97,7 @@ export const DeploymentExplorer: React.FC = () => {
       if (ctrl.signal.aborted) return;
       setResult(previous => ({
         request, scope, deployments: res.items, total: res.total,
-        summary: res.summary ?? (previous?.scope === scope ? previous.summary : null), error: null
+        summary: res.summary ?? (previous?.scope === scope ? previous.summary : null), cacheStatus: res.cacheStatus, error: null
       }));
     }).catch((e: any) => {
       if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
@@ -105,6 +106,7 @@ export const DeploymentExplorer: React.FC = () => {
         deployments: previous?.scope === scope ? previous.deployments : [],
         total: previous?.scope === scope ? previous.total : 0,
         summary: previous?.scope === scope ? previous.summary : null,
+        cacheStatus: previous?.scope === scope ? previous.cacheStatus : undefined,
         error: e?.message || 'Failed to load deployment records'
       }));
     });
@@ -168,7 +170,7 @@ export const DeploymentExplorer: React.FC = () => {
     }
   };
 
-  const isReady = !loading && summary !== null;
+  const isReady = !loading && summary !== null && !(result?.cacheStatus?.outcome === 'failed' && !result.cacheStatus.lastSyncedAt);
 
   // Filtered and visible environments
   const allEnvironments = summary?.environments ?? emptyEnvironments;
@@ -198,6 +200,12 @@ export const DeploymentExplorer: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
+      {!loading && !error && sameScope && result?.cacheStatus && (result.cacheStatus.outcome === 'partial' || result.cacheStatus.outcome === 'failed' || result.cacheStatus.stale) && (
+        <div role="status" className="m-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+          {t(result.cacheStatus.outcome === 'partial' ? 'cache.partial' : result.cacheStatus.lastSyncedAt ? 'cache.stale' : 'cache.failed', { ns: 'dashboard', when: result.cacheStatus.lastSyncedAt ? new Date(result.cacheStatus.lastSyncedAt.endsWith('Z') ? result.cacheStatus.lastSyncedAt : `${result.cacheStatus.lastSyncedAt}Z`).toLocaleString() : t('cache.unknownTime', { ns: 'dashboard' }) })}
+          {result.cacheStatus.errors?.[0]?.kind === 'upstream_http' ? ` ${t('cache.upstreamHttp', { ns: 'dashboard', status: result.cacheStatus.errors[0].status ?? '' })}` : ''}
+        </div>
+      )}
       {/* 1. Overview Metrics Top Strip */}
       <div className="p-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] shrink-0 space-y-3">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

@@ -16,8 +16,9 @@ export function getIntegrationState(input: {
 }): IntegrationState {
   if (!input.backendReachable) return 'unreachable';
   if (input.loading) return 'loading';
+  if (input.requestError) return input.hasData ? 'cached' : 'failed';
   if (input.status?.outcome === 'partial') return 'partial';
-  if (input.requestError || input.status?.outcome === 'failed') {
+  if (input.status?.outcome === 'failed') {
     return input.hasData && !!input.status?.lastSyncedAt ? 'cached' : 'failed';
   }
   if (input.status?.stale) return 'cached';

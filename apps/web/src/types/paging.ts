@@ -307,6 +307,7 @@ export interface PipelineSummary {
   failedRuns: PipelineRun[];
   dailyStats: PipelineDailyStat[];
   lastSyncedAt?: string;
+  cacheStatus?: { outcome: string; complete: boolean; stale: boolean; lastSyncedAt?: string | null };
 }
 
 export interface PipelineRunsResponse {
@@ -316,6 +317,7 @@ export interface PipelineRunsResponse {
   offset: number;
   hasMore: boolean;
   summary: PipelineSummary;
+  cacheStatus?: PipelineSummary['cacheStatus'];
   dataScope: string;
   lastSyncedAt?: string;
 }
@@ -391,6 +393,7 @@ export interface DeploymentsResponse {
   offset: number;
   hasMore: boolean;
   summary: DeploymentSummary;
+  cacheStatus?: DeploymentSummary['cacheStatus'];
   supportedSources?: string[];
   dataScope: string;
   lastSyncedAt?: string;

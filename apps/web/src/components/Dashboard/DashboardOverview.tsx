@@ -152,6 +152,7 @@ export const DashboardOverview: React.FC = () => {
   const isPRReady = !booting && !prSummaryLoading && !prSummaryError && prSummary !== null;
   const prIdentityUnavailable = !!prSummary?.reviewerIdentityStatus && prSummary.reviewerIdentityStatus.groupMembership !== 'available';
   const prCacheStale = !!prSummary?.cacheStatus?.stale;
+  const pipelineUnavailable = pipelineSummary?.cacheStatus?.outcome === 'failed' && !pipelineSummary.cacheStatus.lastSyncedAt;
   const deploymentCache = deploymentSummary?.cacheStatus;
   const formatCacheTime = (value: string) => new Date(value.endsWith('Z') ? value : `${value}Z`).toLocaleString();
   const deploymentState = getIntegrationState({
@@ -177,7 +178,7 @@ export const DashboardOverview: React.FC = () => {
   const deploymentCacheNotice = deploymentState === 'cached'
     ? `${t('cache.stale', { when: deploymentCache?.lastSyncedAt ? formatCacheTime(deploymentCache.lastSyncedAt) : t('cache.unknownTime') })}${deploymentErrorNotice ? ` ${deploymentErrorNotice}` : ''}`
     : deploymentState === 'partial'
-      ? deploymentErrorNotice || t('cache.partial')
+      ? `${t('cache.partial')}${deploymentCache?.stale && deploymentCache.lastSyncedAt ? ` ${t('cache.stale', { when: formatCacheTime(deploymentCache.lastSyncedAt) })}` : ''}${deploymentErrorNotice ? ` ${deploymentErrorNotice}` : ''}`
       : deploymentState === 'failed'
         ? `${t('cache.failed')}${deploymentErrorNotice ? ` ${deploymentErrorNotice}` : ''}`
         : deploymentState === 'unreachable'
@@ -501,21 +502,21 @@ export const DashboardOverview: React.FC = () => {
                 <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 text-center">
                   <div className="text-[10px] text-slate-400">{t('summary.successRate', { ns: 'pipelines' })}</div>
                   <div className="text-base font-bold text-brand-600 dark:text-brand-400 mt-0.5">
-                    {pipelineSummary ? `%${pipelineSummary.successRate}` : '—'}
+                    {pipelineSummary && !pipelineUnavailable && pipelineSummary.totalRuns > 0 ? `%${pipelineSummary.successRate}` : '—'}
                   </div>
                 </div>
 
                 <div className="p-2.5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/40 text-center">
                   <div className="text-[10px] text-emerald-700 dark:text-emerald-400">{t('summary.succeeded', { ns: 'pipelines' })}</div>
                   <div className="text-base font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {pipelineSummary ? pipelineSummary.succeeded : '—'}
+                    {pipelineSummary && !pipelineUnavailable ? pipelineSummary.succeeded : '—'}
                   </div>
                 </div>
 
                 <div className="p-2.5 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/60 dark:border-rose-900/40 text-center">
                   <div className="text-[10px] text-rose-700 dark:text-rose-400">{t('summary.failed', { ns: 'pipelines' })}</div>
                   <div className="text-base font-bold text-rose-700 dark:text-rose-300 mt-0.5">
-                    {pipelineSummary ? pipelineSummary.failed : '—'}
+                    {pipelineSummary && !pipelineUnavailable ? pipelineSummary.failed : '—'}
                   </div>
                 </div>
               </div>
@@ -530,6 +531,12 @@ export const DashboardOverview: React.FC = () => {
                 <div className="p-2.5 rounded-xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-center text-xs text-rose-600 dark:text-rose-400">
                   {pipelineSummaryError}
                 </div>
+              ) : pipelineSummary?.cacheStatus?.outcome === 'partial' || pipelineSummary?.cacheStatus?.outcome === 'failed' || pipelineSummary?.cacheStatus?.stale ? (
+                <div role="status" className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-center text-xs text-amber-700 dark:text-amber-300">
+                  {pipelineSummary.cacheStatus.outcome === 'failed' ? t('cache.pipelineFailed') : pipelineSummary.cacheStatus.outcome === 'partial' ? t('cache.pipelinePartial') : t('cache.pipelineStale')}
+                </div>
+              ) : pipelineSummary?.totalRuns === 0 ? (
+                <div role="status" className="p-2.5 text-center text-xs text-slate-500">{t('cache.pipelineEmpty')}</div>
               ) : pipelineSummary?.failedRuns && pipelineSummary.failedRuns.length > 0 ? (
                 <div
                   onClick={() => setSelectedPipelineRun(pipelineSummary.failedRuns[0])}

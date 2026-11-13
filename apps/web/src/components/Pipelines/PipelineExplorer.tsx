@@ -17,7 +17,7 @@ import type { PipelineRun, PipelineSummary } from '../../types/paging';
 import { PipelineInspector } from './PipelineInspector';
 
 export const PipelineExplorer: React.FC = () => {
-  const { t } = useTranslation(['pipelines', 'common']);
+  const { t } = useTranslation(['pipelines', 'common', 'dashboard']);
   const {
     api,
     filters,
@@ -37,6 +37,7 @@ export const PipelineExplorer: React.FC = () => {
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<PipelineSummary | null>(null);
+  const [cacheStatus, setCacheStatus] = useState<PipelineSummary['cacheStatus']>();
 
   const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -77,6 +78,7 @@ export const PipelineExplorer: React.FC = () => {
       setRuns(res.items);
       setTotal(res.total);
       if (res.summary) setSummary(res.summary);
+      setCacheStatus(res.cacheStatus);
       setSettled({ request, error: null });
     }, (e: any) => {
       if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
@@ -146,10 +148,15 @@ export const PipelineExplorer: React.FC = () => {
     }
   };
 
-  const isReady = !loading && summary !== null;
+  const isReady = !loading && summary !== null && !(cacheStatus?.outcome === 'failed' && !cacheStatus.lastSyncedAt);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
+      {!loading && !error && cacheStatus && (cacheStatus.outcome === 'partial' || cacheStatus.outcome === 'failed' || cacheStatus.stale) && (
+        <div role="status" className="m-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+          {t(cacheStatus.outcome === 'failed' ? 'cache.pipelineFailed' : cacheStatus.outcome === 'partial' ? 'cache.pipelinePartial' : 'cache.pipelineStale', { ns: 'dashboard' })}
+        </div>
+      )}
       {/* 1. Summary Cards Top Strip */}
       <div className="p-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] shrink-0">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

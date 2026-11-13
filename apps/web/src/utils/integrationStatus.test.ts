@@ -17,6 +17,10 @@ describe('getIntegrationState', () => {
     expect(getIntegrationState({ loading: false, hasData: false, backendReachable: true, status: { outcome: 'failed', complete: false, stale: true } })).toBe('failed');
   });
 
+  it('retains a previously loaded snapshot after a request error even without a timestamp', () => {
+    expect(getIntegrationState({ loading: false, hasData: true, backendReachable: true, requestError: true })).toBe('cached');
+  });
+
   it('keeps backend unreachability distinct and returns to live after recovery', () => {
     expect(getIntegrationState({ loading: false, hasData: true, backendReachable: false })).toBe('unreachable');
     expect(getIntegrationState({ loading: false, hasData: true, backendReachable: true, status: { outcome: 'complete', complete: true, stale: false } })).toBe('live');
