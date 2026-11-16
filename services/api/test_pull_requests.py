@@ -14,6 +14,11 @@ class TestPullRequestsService(unittest.TestCase):
     def setUp(self):
         pr_service.init_pr_db()
         pr_service._user_group_cache.clear()
+        # These legacy scenarios exercise the degraded path (project inventory unavailable); the
+        # project-scoped read is covered by PullRequestProjectScopeTests.
+        inventory = patch.object(pr_service.project_inventory, 'discover_projects', return_value=([], False))
+        inventory.start()
+        self.addCleanup(inventory.stop)
         self.fixture_prs = pr_service.build_fixture_prs()
         self.user = {
             "id": "00000000-0000-0000-0000-000000000001",
@@ -540,3 +545,124 @@ class TestPullRequestsService(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PullRequestProjectScopeTests(unittest.TestCase):
+    """PRs are read per accessible project; the organization-level endpoint returns short non-final pages."""
+
+    class Response:
+        def __init__(self, values, status=200, token=None):
+            self.status_code, self.values = status, values
+            self.headers = {'x-ms-continuationtoken': token} if token else {}
+
+        def json(self):
+            return {'value': self.values}
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.db = patch.object(sync_service, 'DB_PATH', os.path.join(self.temp.name, 'pr-scope.db'))
+        self.db.start()
+        pr_service.init_pr_db()
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.db.stop)
+
+    @staticmethod
+    def _raw(project, pr_id, status='active'):
+        return {'pullRequestId': pr_id, 'title': f't{pr_id}', 'status': status, 'creationDate': '2026-11-09T00:00:00Z',
+                'repository': {'name': 'Repo', 'project': {'name': project}}}
+
+    def _fetchers(self, data, fail=(), inventory=None):
+        """data: {project: [pr ids]} served in short pages of 3 (a short page is NOT the last page)."""
+        from urllib.parse import urlparse, unquote
+        calls = []
+        R = self.Response
+        def get(url, *, headers, params, timeout):
+            path = unquote(urlparse(url).path)
+            calls.append((path, dict(params)))
+            if path.endswith('/_apis/projects'):
+                return R([{'name': n} for n in (inventory if inventory is not None else data)])
+            if path.endswith('/_apis/git/pullrequests') and path.count('/') == 3:
+                raise AssertionError('organization-level PR endpoint must not be used when the inventory was read')
+            project = path.split('/')[2]
+            if project in fail:
+                return R([], status=500)
+            ids = data[project]
+            skip = params['$skip']
+            return R([self._raw(project, i) for i in ids[skip:skip + 3]])
+        return calls, get
+
+    def _sync(self, get, patch_projects=True, **kwargs):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                patch.object(pr_service.requests, 'get', side_effect=get), patch.object(pr_service.project_inventory.azure_http, 'get', side_effect=get):
+            return pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'synthetic', include_cache_status=True, **kwargs)
+
+    def test_short_pages_do_not_truncate_the_result(self):
+        calls, get = self._fetchers({'Alpha': list(range(1, 9)), 'Beta': [100]})
+        result = self._sync(get, force_refresh=True)
+        self.assertEqual({(p['project'], p['id']) for p in result['items']}, {('Alpha', i) for i in range(1, 9)} | {('Beta', 100)})
+        self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+
+    def test_complete_read_reports_accessible_scope_and_survives_the_cache(self):
+        calls, get = self._fetchers({'Alpha': [1], 'Beta': []})
+        first = self._sync(get, force_refresh=True)
+        n = len(calls)
+        cached = self._sync(get)
+        self.assertEqual(len(calls), n, 'second read must come from the cache')
+        for result in (first, cached):
+            status = result['cacheStatus']
+            self.assertEqual(status['completenessScope'], 'accessible-projects')
+            self.assertTrue(status['projectDiscoveryComplete'])
+            self.assertTrue(status['complete'])
+            self.assertFalse(status['stale'])
+            self.assertFalse(status['organizationSnapshotComplete'])
+
+    def test_project_without_work_items_is_read(self):
+        calls, get = self._fetchers({'NoWorkItems': [7]})
+        result = self._sync(get, force_refresh=True)
+        self.assertEqual([p['id'] for p in result['items']], [7])
+
+    def test_failed_project_is_partial_stale_and_keeps_the_other_rows(self):
+        _, get = self._fetchers({'Alpha': [1, 2], 'Beta': [3]}, fail={'Beta'})
+        result = self._sync(get, force_refresh=True)
+        self.assertEqual(result['cacheStatus']['outcome'], 'partial')
+        self.assertFalse(result['cacheStatus']['complete'])
+        self.assertTrue(result['cacheStatus']['stale'])
+        self.assertEqual(result['cacheStatus']['successfulProjects'], ['Alpha'])
+        self.assertEqual({p['id'] for p in result['items']}, {1, 2})
+
+    def test_successful_empty_read_is_complete_not_failed(self):
+        _, get = self._fetchers({'Alpha': []})
+        result = self._sync(get, force_refresh=True)
+        self.assertEqual(result['items'], [])
+        self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+
+    def test_complete_empty_inventory_is_a_successful_empty_read(self):
+        _, get = self._fetchers({}, inventory=[])
+        result = self._sync(get, force_refresh=True)
+        self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+
+    def test_project_names_are_url_encoded(self):
+        calls, get = self._fetchers({'Has Space': [1], 'Vakıf İnsan': [2]})
+        result = self._sync(get, force_refresh=True)
+        self.assertEqual({p['id'] for p in result['items']}, {1, 2})
+
+    def test_page_cap_is_incomplete(self):
+        calls, get = self._fetchers({'Alpha': list(range(1, 10)), 'Beta': [100]})
+        with patch.object(pr_service, 'PR_PROJECT_MAX_PAGES', 2):
+            result = self._sync(get, force_refresh=True)
+        self.assertEqual(result['cacheStatus']['outcome'], 'partial')
+        self.assertFalse(result['cacheStatus']['complete'])
+        self.assertEqual(result['cacheStatus']['successfulProjects'], ['Beta'])
+
+    def test_unreadable_inventory_uses_the_degraded_path_and_is_not_project_scoped(self):
+        from urllib.parse import urlparse
+        R = self.Response
+        raw = self._raw('Alpha', 5)
+        def get(url, *, headers, params, timeout):
+            if urlparse(url).path.endswith('/_apis/projects'):
+                return R([], status=403)
+            return R([raw])
+        result = self._sync(get, force_refresh=True)
+        self.assertEqual(result['cacheStatus']['completenessScope'], 'organization-pr-query')
+        self.assertFalse(result['cacheStatus']['projectDiscoveryComplete'])
+        self.assertEqual([p['id'] for p in result['items']], [5])

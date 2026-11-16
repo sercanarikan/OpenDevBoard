@@ -145,6 +145,7 @@ Azure DevOps üzerindeki inceleyen kimliği, oturum açmış kullanıcının kim
 
 - SQLite veritabanında `pull_requests` tablosunda saklanır.
 - **TTL:** 300 saniye (5 dakika).
+- **Proje kapsamı:** Senkronizasyon önce erişilebilir proje envanterini (tüm sayfalarıyla) okur ve her projeyi ayrı sorgular; boş sayfaya kadar sayfalar. Organizasyon seviyesi PR uç noktası sayfa sonrası filtreleme yaptığı için `$top`'tan kısa ve son olmayan sayfalar döndürür (canlı ölçümde 1895 PR'dan yalnızca 12'si geldi); bu yüzden artık yalnızca envanter okunamadığında (degrade mod) kullanılır. Proje kapsamlı tam okumada `cacheStatus.completenessScope` `accessible-projects`, `projectDiscoveryComplete` `true` olur; degrade modda `organization-pr-query` ve `false` kalır. `organizationSnapshotComplete` her zaman `false`'tur.
 - Tamamlanan senkronizasyondan sonraki 5 dakika içindeki istekler Azure DevOps'a gitmeden yerel veritabanından döndürülür.
 - Kısmi/başarısız yenileme varsa önbellekteki satırlar korunur; API bunları sıfır PR gibi sunmaz ve `cacheStatus.errors` içinde yalnızca hata kategorisi ile HTTP kodunu döndürür.
 - Manuel "Yenile" butonuna basıldığında `refresh=true` ile Azure DevOps'tan taze veri çekilir.

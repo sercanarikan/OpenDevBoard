@@ -13,6 +13,18 @@ class TestDeploymentMetricsService(unittest.TestCase):
     def setUp(self):
         deployment_service.init_deployment_db()
         self.fixture_deps = deployment_service.build_fixture_deployments()
+        # These legacy scenarios seed their projects as work items. Model that as a fully read inventory;
+        # inventory behavior itself is covered by DeploymentProjectInventoryTests.
+        def legacy_inventory(org_url, headers):
+            try:
+                with sync_service.get_db_connection() as conn:
+                    rows = conn.execute("SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL").fetchall()
+                return [r["project"] for r in rows], True
+            except Exception:
+                return [], True
+        patcher = patch.object(deployment_service.project_inventory, 'discover_projects', side_effect=legacy_inventory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_deployment_cache_does_not_serve_a_different_days_window(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -149,7 +161,9 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 self.assertEqual(result['cacheStatus']['outcome'], 'complete')
                 self.assertTrue(result['cacheStatus']['complete'])
                 self.assertEqual(result['cacheStatus']['completenessScope'], 'discovered-projects/date-window')
-                self.assertFalse(result['cacheStatus']['projectDiscoveryComplete'])
+                # Intentional contract change: the project inventory is now read through all its pages, so a
+                # complete read reports projectDiscoveryComplete (was always False when scope came from work items).
+                self.assertTrue(result['cacheStatus']['projectDiscoveryComplete'])
                 self.assertFalse(result['cacheStatus']['organizationSnapshotComplete'])
 
     def test_deployment_partial_cache_ttl_expiration_forces_refresh(self):
@@ -354,3 +368,103 @@ class TestDeploymentMetricsService(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DeploymentProjectInventoryTests(unittest.TestCase):
+    """Deployments are discovered through the accessible project inventory, not cached work items."""
+
+    class Response:
+        def __init__(self, values, status=200, token=None):
+            self.status_code, self.values = status, values
+            self.headers = {'x-ms-continuationtoken': token} if token else {}
+
+        def json(self):
+            return {'value': self.values}
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.db = patch.object(sync_service, 'DB_PATH', os.path.join(self.temp.name, 'inventory-deployment.db'))
+        self.db.start()
+        deployment_service.init_deployment_db()
+        with sync_service.get_db_connection() as conn:
+            conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
+            conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.db.stop)
+
+    def _sync(self, fetch, **kwargs):
+        from unittest.mock import patch as p
+        with p.object(sync_service, 'is_fixture_mode', return_value=False), p.object(sync_service, 'get_devops_headers', return_value={}), \
+                p.object(deployment_service.azure_http, 'get', side_effect=fetch):
+            return deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'synthetic', include_cache_status=True, **kwargs)
+
+    def _fetch(self, projects=('Alpha', 'Beta'), fail=None, inventory_status=200, inventory_token=None):
+        from urllib.parse import urlparse, unquote
+        calls = []
+        R = self.Response
+        started = datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+        def fetch(url, *, headers, params, timeout):
+            path = unquote(urlparse(url).path)
+            calls.append(path)
+            if path.endswith('/_apis/projects'):
+                if inventory_status != 200:
+                    return R([], status=inventory_status)
+                return R([{'name': n} for n in projects], token=inventory_token if not params.get('continuationToken') else None)
+            project = path.split('/')[2]
+            if fail and project == fail:
+                return R([], status=404)
+            return R([{'id': hash(project) % 1000, 'startedOn': started, 'release': {'id': 1, 'name': 'r'}, 'releaseDefinition': {'id': 1, 'name': 'd'},
+                       'releaseEnvironment': {'id': 1, 'name': 'Prod'}, 'deploymentStatus': 'succeeded', 'attempt': 1}])
+        return calls, fetch
+
+    def test_project_without_work_items_is_included_and_read_is_complete(self):
+        calls, fetch = self._fetch()
+        result = self._sync(fetch, force_refresh=True)
+        queried = {c.split('/')[2] for c in calls if '/release/deployments' in c}
+        self.assertEqual(queried, {'Alpha', 'Beta'})
+        self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+        self.assertTrue(result['cacheStatus']['projectDiscoveryComplete'])
+        self.assertFalse(result['cacheStatus']['stale'])
+        self.assertFalse(result['cacheStatus']['organizationSnapshotComplete'])
+
+    def test_project_names_are_url_encoded(self):
+        calls, fetch = self._fetch(projects=('Has Space', 'Vakıf İnsan'))
+        self._sync(fetch, force_refresh=True)
+        self.assertEqual({c.split('/')[2] for c in calls if '/release/deployments' in c}, {'Has Space', 'Vakıf İnsan'})
+
+    def test_cached_complete_read_reports_discovery_complete_without_new_calls(self):
+        calls, fetch = self._fetch()
+        self._sync(fetch, force_refresh=True)
+        n = len(calls)
+        cached = self._sync(fetch)
+        self.assertEqual(len(calls), n)
+        self.assertEqual(cached['cacheStatus']['outcome'], 'complete')
+        self.assertTrue(cached['cacheStatus']['projectDiscoveryComplete'])
+
+    def test_unreadable_inventory_falls_back_to_work_items_but_is_never_complete(self):
+        calls, fetch = self._fetch(inventory_status=403)
+        result = self._sync(fetch, force_refresh=True)
+        self.assertEqual({c.split('/')[2] for c in calls if '/release/deployments' in c}, {'Alpha'})
+        self.assertEqual(result['cacheStatus']['outcome'], 'partial')
+        self.assertFalse(result['cacheStatus']['complete'])
+        self.assertTrue(result['cacheStatus']['stale'])
+        self.assertFalse(result['cacheStatus']['projectDiscoveryComplete'])
+
+    def test_failed_project_query_is_partial_and_reported_not_empty(self):
+        _, fetch = self._fetch(fail='Beta')
+        result = self._sync(fetch, force_refresh=True)
+        self.assertEqual(result['cacheStatus']['outcome'], 'partial')
+        self.assertTrue(result['cacheStatus']['projectDiscoveryComplete'])
+        self.assertIn({'kind': 'upstream_http', 'status': 404}, result['cacheStatus']['errors'])
+        self.assertEqual(result['cacheStatus']['successfulProjects'], ['Alpha'])
+
+    def test_inventory_pagination_reads_every_page(self):
+        calls, fetch = self._fetch(projects=('Alpha', 'Beta'), inventory_token='next')
+        self._sync(fetch, force_refresh=True)
+        self.assertEqual(len([c for c in calls if c.endswith('/_apis/projects')]), 2)
+
+    def test_empty_inventory_is_a_successful_empty_result_when_fully_read(self):
+        _, fetch = self._fetch(projects=())
+        result = self._sync(fetch, force_refresh=True)
+        self.assertEqual(result['items'], [])
+        self.assertEqual(result['cacheStatus']['outcome'], 'complete')

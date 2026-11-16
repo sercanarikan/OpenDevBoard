@@ -13,7 +13,9 @@ from typing import Dict, Any, List, Optional
 import requests
 
 import azure_http
+import project_inventory
 import sync_service
+from urllib.parse import quote
 
 logger = logging.getLogger("deployment_service")
 
@@ -209,7 +211,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
                             cached_errors = json.loads(state["errors_json"] or "[]")
                         except (KeyError, TypeError, ValueError):
                             cached_errors = []
-                        return {"items": cached, "cacheStatus": {"outcome": state["outcome"], "complete": state["outcome"] == "complete", "stale": state["outcome"] != "complete", "paginationBounded": state["outcome"] != "complete", "lastSyncedAt": state["completed_at"], "errors": cached_errors, "completenessScope": "discovered-projects/date-window", "projectDiscoveryComplete": False, "organizationSnapshotComplete": False}} if include_cache_status else cached
+                        return {"items": cached, "cacheStatus": {"outcome": state["outcome"], "complete": state["outcome"] == "complete", "stale": state["outcome"] != "complete", "paginationBounded": state["outcome"] != "complete", "lastSyncedAt": state["completed_at"], "errors": cached_errors, "completenessScope": "discovered-projects/date-window", "projectDiscoveryComplete": state["outcome"] == "complete", "organizationSnapshotComplete": False}} if include_cache_status else cached
                 except Exception:
                     pass
 
@@ -217,19 +219,24 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
     start_utc = now - timedelta(days=days)
     start_date_iso = start_utc.isoformat() + "Z"
 
-    # Query projects from local DB to avoid extra round-trips
-    projects = []
+    # Discover the accessible project inventory (all pages) instead of deriving scope from cached work items.
+    # Projects without work items can still have releases. If discovery fails, fall back to the work-item
+    # projects, but never claim a complete read.
+    projects, project_discovery_complete = project_inventory.discover_projects(org_url, headers)
     project_scope_bounded = False
-    try:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
-            projects = [r["project"] for r in conn.execute(
-                "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
-            ).fetchall()]
-            if len(projects) > 100:
-                projects = projects[:100]
-                project_scope_bounded = True
-    except Exception as e:
-        logger.error("Failed to load projects for deployment sync: %s", e)
+    if not project_discovery_complete:
+        try:
+            with sync_service.db_lock, sync_service.get_db_connection() as conn:
+                projects.extend(r["project"] for r in conn.execute(
+                    "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
+                ).fetchall())
+        except Exception as e:
+            logger.error("Failed to load projects for deployment sync: %s", e)
+        projects = list(dict.fromkeys(projects))
+        if len(projects) > 100:
+            projects = projects[:100]
+            project_scope_bounded = True
+    projects = list(dict.fromkeys(projects))
 
     all_raw = []
     projects_fetch_ok = bool(projects) and not project_scope_bounded
@@ -258,7 +265,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
         records = []
         errors = []
         try:
-            vsrm_url = f"https://vsrm.dev.azure.com/{org_name}/{proj}/_apis/release/deployments"
+            vsrm_url = f"https://vsrm.dev.azure.com/{org_name}/{quote(proj, safe='')}/_apis/release/deployments"
             token = None
             seen_tokens = set()
             for _ in range(DEPLOYMENT_MAX_PAGES):
@@ -305,12 +312,13 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
         unique_map[(d["id"], d["project"])] = d
     final_deps = list(unique_map.values())
 
-    fetch_complete = bool(projects) and all(project_outcomes.get(p, False) for p in projects)
-    if project_scope_bounded:
+    no_projects_proven = project_discovery_complete and not projects
+    fetch_complete = (bool(projects) or no_projects_proven) and all(project_outcomes.get(p, False) for p in projects)
+    if project_scope_bounded or not project_discovery_complete:
         fetch_complete = False
     outcome = "complete" if fetch_complete else ("partial" if any(project_outcomes.values()) else "failed")
-    completed_at = now_iso if any(project_outcomes.values()) else None
-    fetch_succeeded = any(project_outcomes.values())
+    fetch_succeeded = any(project_outcomes.values()) or no_projects_proven
+    completed_at = now_iso if fetch_succeeded else None
     if fetch_succeeded:
         with sync_service.db_lock, sync_service.get_db_connection() as conn:
             if fetch_complete and projects:
@@ -364,7 +372,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
             "errors": upstream_errors,
             "successfulProjects": sorted(p for p, ok in project_outcomes.items() if ok),
             "completenessScope": "discovered-projects/date-window",
-            "projectDiscoveryComplete": False,
+            "projectDiscoveryComplete": project_discovery_complete,
             "organizationSnapshotComplete": False,
         }}
     return final_deps

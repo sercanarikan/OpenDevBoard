@@ -8,11 +8,13 @@ import json
 import logging
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from urllib.parse import quote
 import requests
 
+import project_inventory
 import sync_service
 
 logger = logging.getLogger("pr_service")
@@ -21,6 +23,8 @@ _user_group_cache = {}
 CACHE_TTL_SECONDS = 300  # 5 minutes TTL for PR cache
 PR_PAGE_SIZE = 200
 PR_MAX_REQUESTS = 25
+PR_PROJECT_MAX_PAGES = 50
+PROJECT_SCOPE = "accessible-projects"
 
 VOTE_LABELS_TR = {
     10: "Onaylandı",
@@ -87,7 +91,8 @@ def init_pr_db():
                 outcome TEXT NOT NULL CHECK (outcome IN ('complete', 'partial', 'failed')),
                 successful_projects TEXT NOT NULL DEFAULT '[]',
                 errors_json TEXT NOT NULL DEFAULT '[]',
-                last_complete_at TEXT
+                last_complete_at TEXT,
+                scope TEXT NOT NULL DEFAULT 'organization-pr-query'
             )
         ''')
         cache_columns = {row[1] for row in cursor.execute("PRAGMA table_info(pr_cache_state)").fetchall()}
@@ -95,6 +100,8 @@ def init_pr_db():
             cursor.execute("ALTER TABLE pr_cache_state ADD COLUMN errors_json TEXT NOT NULL DEFAULT '[]'")
         if "last_complete_at" not in cache_columns:
             cursor.execute("ALTER TABLE pr_cache_state ADD COLUMN last_complete_at TEXT")
+        if "scope" not in cache_columns:
+            cursor.execute("ALTER TABLE pr_cache_state ADD COLUMN scope TEXT NOT NULL DEFAULT 'organization-pr-query'")
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_pr_scope ON pull_requests(project, status, creation_date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_pr_author ON pull_requests(author_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_pr_status ON pull_requests(status)')
@@ -540,7 +547,8 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                         except (KeyError, TypeError, ValueError):
                             cached_errors = []
                         last_complete_at = state["last_complete_at"]
-                        return {"items": cached, "cacheStatus": {"outcome": state["outcome"], "complete": state["outcome"] == "complete", "stale": state["outcome"] != "complete", "paginationBounded": state["outcome"] != "complete", "lastSyncedAt": last_successful_sync, "hasSnapshot": bool(cached) or bool(last_complete_at), "errors": cached_errors, "completenessScope": "organization-pr-query", "dateScope": "all", "projectDiscoveryComplete": False, "organizationSnapshotComplete": False}} if include_cache_status else cached
+                        cached_scope = state["scope"] if "scope" in state.keys() else "organization-pr-query"
+                        return {"items": cached, "cacheStatus": {"outcome": state["outcome"], "complete": state["outcome"] == "complete", "stale": state["outcome"] != "complete", "paginationBounded": state["outcome"] != "complete", "lastSyncedAt": last_successful_sync, "hasSnapshot": bool(cached) or bool(last_complete_at), "errors": cached_errors, "completenessScope": cached_scope, "dateScope": "all", "projectDiscoveryComplete": cached_scope == PROJECT_SCOPE and state["outcome"] == "complete", "organizationSnapshotComplete": False}} if include_cache_status else cached
                 except Exception:
                     pass
 
@@ -572,38 +580,76 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
         if entry not in upstream_errors:
             upstream_errors.append(entry)
 
-    # 1. Try an organization-level query. Do not filter by creation date: active
-    # PRs can remain open and await review long after the recent-history window.
-    try:
-        offset = 0
-        for _ in range(PR_MAX_REQUESTS):
-            params = {
-                "searchCriteria.status": "all",
-                "$skip": offset,
-                "$top": PR_PAGE_SIZE,
-                "api-version": "7.1",
-            }
-            url = f"{org_url.rstrip('/')}/_apis/git/pullrequests"
-            res = requests.get(url, headers=headers, params=params, timeout=15)
-            if res.status_code != 200:
+    # 0. Preferred path: read every accessible project (all inventory pages). The organization-level PR
+    # endpoint filters after paging, so it returns short pages that are not the last page and silently
+    # truncates the result; a short page is only trusted at project level, and even there the scan runs
+    # until an empty page. Do not filter by creation date: active PRs can await review long after the
+    # recent-history window.
+    projects, project_discovery_complete = project_inventory.discover_projects(org_url, headers)
+    scoped = project_discovery_complete
+    scoped_all_complete = False
+    if scoped:
+        def fetch_project_prs(proj):
+            records, errors, offset = [], [], 0
+            url = f"{org_url.rstrip('/')}/{quote(proj, safe='')}/_apis/git/pullrequests"
+            try:
+                for _ in range(PR_PROJECT_MAX_PAGES):
+                    params = {"searchCriteria.status": "all", "$skip": offset, "$top": PR_PAGE_SIZE, "api-version": "7.1"}
+                    r = requests.get(url, headers=headers, params=params, timeout=15)
+                    if r.status_code != 200:
+                        errors.append((r.status_code, None))
+                        return proj, records, False, errors
+                    page = r.json().get("value", [])
+                    if not page:
+                        return proj, records, True, errors
+                    records.extend(page)
+                    offset += len(page)
+            except Exception as ex:
+                errors.append((None, ex))
+            return proj, records, False, errors
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for proj, records, complete, errors in executor.map(fetch_project_prs, projects):
+                all_raw_prs.extend(records)
+                project_fetch_outcomes[proj] = complete
+                if not complete:
+                    fetch_incomplete = True
+                for status, error in errors:
+                    record_error(status=status, error=error)
+        scoped_all_complete = not fetch_incomplete
+
+    # 1. Degraded mode (project inventory unavailable): organization-level query, then work-item projects.
+    if not scoped:
+        try:
+            offset = 0
+            for _ in range(PR_MAX_REQUESTS):
+                params = {
+                    "searchCriteria.status": "all",
+                    "$skip": offset,
+                    "$top": PR_PAGE_SIZE,
+                    "api-version": "7.1",
+                }
+                url = f"{org_url.rstrip('/')}/_apis/git/pullrequests"
+                res = requests.get(url, headers=headers, params=params, timeout=15)
+                if res.status_code != 200:
+                    fetch_incomplete = True
+                    record_error(status=res.status_code)
+                    break
+                page = res.json().get("value", [])
+                org_fetch_succeeded = True
+                all_raw_prs.extend(page)
+                if len(page) < PR_PAGE_SIZE:
+                    org_fetch_complete = True
+                    break
+                offset += len(page)
+            else:
                 fetch_incomplete = True
-                record_error(status=res.status_code)
-                break
-            page = res.json().get("value", [])
-            org_fetch_succeeded = True
-            all_raw_prs.extend(page)
-            if len(page) < PR_PAGE_SIZE:
-                org_fetch_complete = True
-                break
-            offset += len(page)
-        else:
-            fetch_incomplete = True
-    except Exception as e:
-        record_error(error=e)
-        logger.warning("Org-level PR query failed, falling back to per-project: %s", e)
+        except Exception as e:
+            record_error(error=e)
+            logger.warning("Org-level PR query failed, falling back to per-project: %s", e)
 
     # 2. Per-project fallback if org query returns empty or fails
-    if not org_fetch_succeeded:
+    if not org_fetch_succeeded and not scoped:
         try:
             # Query projects from local DB to avoid extra Azure round-trip
             with sync_service.db_lock, sync_service.get_db_connection() as conn:
@@ -655,11 +701,11 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
     final_prs = list(unique_map.values())
 
     # Write to SQLite in a single transaction
-    fetch_succeeded = org_fetch_succeeded or any(project_fetch_outcomes.values())
+    fetch_succeeded = org_fetch_succeeded or any(project_fetch_outcomes.values()) or (scoped and not projects)
     # The local work-item cache is not an authoritative organization project
     # inventory, so a successful fallback can provide rows but cannot certify
     # a complete organization snapshot or delete older cached rows.
-    fetch_complete = org_fetch_complete and not fetch_incomplete
+    fetch_complete = scoped_all_complete if scoped else (org_fetch_complete and not fetch_incomplete)
     if fetch_succeeded:
         with sync_service.db_lock, sync_service.get_db_connection() as conn:
             if fetch_complete:
@@ -683,11 +729,11 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
     with sync_service.db_lock, sync_service.get_db_connection() as conn:
         outcome = 'complete' if fetch_complete else ('partial' if fetch_succeeded else 'failed')
         completed_at = now_iso if fetch_succeeded else None
-        conn.execute('''INSERT INTO pr_cache_state (id, attempted_at, completed_at, outcome, successful_projects, errors_json, last_complete_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET attempted_at=excluded.attempted_at,
+        conn.execute('''INSERT INTO pr_cache_state (id, attempted_at, completed_at, outcome, successful_projects, errors_json, last_complete_at, scope)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope, attempted_at=excluded.attempted_at,
             completed_at=COALESCE(excluded.completed_at, pr_cache_state.completed_at), outcome=excluded.outcome, successful_projects=excluded.successful_projects,
             errors_json=excluded.errors_json, last_complete_at=COALESCE(excluded.last_complete_at, pr_cache_state.last_complete_at)''',
-            (now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_fetch_outcomes.items() if ok)), json.dumps(upstream_errors), now_iso if fetch_complete else None))
+            (now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_fetch_outcomes.items() if ok)), json.dumps(upstream_errors), now_iso if fetch_complete else None, PROJECT_SCOPE if scoped else "organization-pr-query"))
         conn.commit()
 
     if not fetch_succeeded:
@@ -714,8 +760,8 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
             "stale": not fetch_complete,
             "paginationBounded": not fetch_complete,
             "dateScope": "all",
-            "completenessScope": "organization-pr-query",
-            "projectDiscoveryComplete": False,
+            "completenessScope": PROJECT_SCOPE if scoped else "organization-pr-query",
+            "projectDiscoveryComplete": scoped,
             "organizationSnapshotComplete": False,
             "successfulProjects": sorted(p for p, ok in project_fetch_outcomes.items() if ok),
             "lastSyncedAt": last_successful_sync,
