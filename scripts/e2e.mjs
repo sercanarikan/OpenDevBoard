@@ -16,7 +16,8 @@ const runDir = preservedLogDir || fs.mkdtempSync(path.join(os.tmpdir(), 'devopsf
 if (preservedLogDir) fs.mkdirSync(runDir, { recursive: true });
 const defaultSuites = [
   { name: 'fixture', script: 'e2e-fixture.mjs', edition: 'public' },
-  { name: 'summary-status', script: 'e2e-summary-status.mjs', edition: 'public' }
+  { name: 'summary-status', script: 'e2e-summary-status.mjs', edition: 'public' },
+  { name: 'dashboard-cards', script: 'e2e-dashboard-cards.mjs', edition: 'public' }
 ];
 const liveSuites = [
   'e2e-stack.mjs', 'e2e-routing.mjs', 'e2e-smoke.mjs', 'e2e-dashboard-pr.mjs',
