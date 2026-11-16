@@ -103,6 +103,17 @@ Ayrı meta anahtarları: `last_success_at` (yalnızca `success`), `last_full_syn
 | Org anlık görüntüsü (bilgi) | `sync-status.totalOrgActive` |
 | Sayfada görünen | alt çubuk: `{from}–{to} / {total}` |
 
+## Dashboard özet kartları: pipeline, dağıtım ve ekip aktivitesi
+
+Üç kart ayrı uçlardan (`/api/pipelines/summary`, `/api/deployments/summary`, `/api/team-activity/summary`) beslenir. Her biri kendi isteğini ve durumunu taşır; biri yavaşlarsa ya da hata verirse diğerleri bağımsız yüklenir. Tek bir kartın hatası, backend `/api/health` ile hâlâ erişilebilirse genel bağlantı uyarısına dönüşmez.
+
+- **Cache süresi:** Üç servis de sonucu 5 dakika (`CACHE_TTL_SECONDS`) boyunca SQLite cache'inden sunar. `?refresh=true` bu süreyi atlar.
+- **Pipeline:** Proje kapsamlı okuma `partial` etiketini **korur** (organizasyon anlık görüntüsü iddia edilmez). Keşif ve tüm proje çağrıları hatasız bittiyse okuma yine de TTL boyunca cache'ten sunulur. Başarısız bir proje varsa `completed_at` boş kalır ve bir sonraki istek yeniden dener.
+- **Ekip aktivitesi:** Azure DevOps, devre dışı bırakılmış (`isDisabled`) bir deponun commit geçmişi için her zaman HTTP 404 döndürür. Bu depolar sorgulanmaz ve hata sayılmaz; `outcome` yalnızca etkin depolara göre `complete` olabilir. Devre dışı depoların cache'teki mevcut commit'leri silinmez. Etkin bir depo hata verirse sonuç `partial` ve `stale` kalır, cache'lenmez.
+- **HTTP bağlantıları:** Bu üç servisin Azure DevOps `GET` istekleri `azure_http.py` içindeki paylaşılan keep-alive oturumundan geçer (yalnızca `GET`, çerez saklanmaz, otomatik yeniden deneme yok). Her istekte yeni TCP/TLS bağlantısı kurulmaz.
+- **Eşzamanlı istekler:** Aynı gün sayısı ve `refresh` değeriyle aynı anda gelen pipeline, dağıtım ve ekip aktivitesi istekleri (kart, gezgin sayfası, birden çok sekme) tek bir Azure DevOps çağrı kümesini paylaşır (`request_coalescing.py`). İstekler bittiğinde sonuç ayrıca saklanmaz; `refresh=true` istekleri `refresh` olmayanlara katılmaz.
+- **Arayüz:** Kartlar yenileme sırasında son veriyi ve güncellik notunu (`kısmi`, `güncel değil`) görünür tutar, yalnızca küçük bir "Güncelleniyor" göstergesi ekler. Dashboard'daki **Yenile** düğmesi üç kartı da yeniden ister. Ekip kartı hata (`Ekip aktivitesi alınamadı.`), kısmi/güncel olmayan veri ve gerçek boş sonucu birbirinden ayırır.
+
 ## Yedek / geri yükleme
 
 Cache'in tutarlı kopyası `sqlite3.Connection.backup()` ile alınır (WAL açıkken dosya kopyası güvenli değildir) ve `PRAGMA integrity_check` ile doğrulanır. Ayrıntı: [backup-restore.md](backup-restore.md).
