@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import requests
 
+import azure_http
 import sync_service
 
 logger = logging.getLogger("pipeline_service")
@@ -236,7 +237,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
                 params = {"$top": 100, "api-version": "7.1"}
                 if token:
                     params["continuationToken"] = token
-                response = requests.get(f"{org_url.rstrip('/')}/_apis/projects", headers=headers, params=params, timeout=15)
+                response = azure_http.get(f"{org_url.rstrip('/')}/_apis/projects", headers=headers, params=params, timeout=15)
                 if response.status_code != 200:
                     break
                 values = response.json().get("value", [])
@@ -273,7 +274,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
                     params["continuationToken"] = token
                 try:
                     url = f"{org_url.rstrip('/')}/{quote(project, safe='')}/_apis/build/builds"
-                    response = requests.get(url, headers=headers, params=params, timeout=10)
+                    response = azure_http.get(url, headers=headers, params=params, timeout=10)
                     if response.status_code != 200:
                         return project, records, False
                     page = response.json().get("value", [])
@@ -306,7 +307,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
                 params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
                 if token:
                     params["continuationToken"] = token
-                res = requests.get(url, headers=headers, params=params, timeout=15)
+                res = azure_http.get(url, headers=headers, params=params, timeout=15)
                 if res.status_code != 200:
                     organization_query_error = {"kind": "http", "status": res.status_code}
                     fetch_failed = True
@@ -349,7 +350,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
                             params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
                             if token:
                                 params["continuationToken"] = token
-                            r = requests.get(url, headers=headers, params=params, timeout=10)
+                            r = azure_http.get(url, headers=headers, params=params, timeout=10)
                             if r.status_code != 200:
                                 break
                             all_raw.extend(r.json().get("value", []))
@@ -406,7 +407,11 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
             conn.commit()
 
     outcome = "complete" if fetch_complete else ("partial" if fetch_succeeded else "failed")
-    completed_at = now_iso if fetch_complete else None
+    # Project-scoped reads never claim an organization snapshot (outcome stays "partial"), but a read in which
+    # discovery and every project call succeeded is a usable snapshot of the discovered projects. Record it so the
+    # TTL cache above can serve it; reads with failures keep completed_at empty and are retried on the next request.
+    cacheable = fetch_complete or (project_scoped and fetch_succeeded and not fetch_failed)
+    completed_at = now_iso if cacheable else None
     with sync_service.db_lock, sync_service.get_db_connection() as conn:
         conn.execute('''INSERT INTO pipeline_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
             VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET requested_days=excluded.requested_days,

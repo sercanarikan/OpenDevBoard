@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import requests
 
+import azure_http
 import sync_service
 
 logger = logging.getLogger("deployment_service")
@@ -264,7 +265,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
                 params = {"minStartedTime": start_date_iso, "$top": DEPLOYMENT_PAGE_SIZE, "$expand": "releaseEnvironment", "api-version": "7.0"}
                 if token:
                     params["continuationToken"] = token
-                response = requests.get(vsrm_url, headers=headers, params=params, timeout=10)
+                response = azure_http.get(vsrm_url, headers=headers, params=params, timeout=10)
                 if response.status_code != 200:
                     errors.append((response.status_code, None))
                     break

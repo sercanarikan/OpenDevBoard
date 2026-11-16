@@ -10,8 +10,8 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
-import requests
 
+import azure_http
 import sync_service
 
 logger = logging.getLogger("team_service")
@@ -196,7 +196,7 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
     try:
         headers = sync_service.get_devops_headers(pat)
         r_url = f"{org_url.rstrip('/')}/_apis/git/repositories?api-version=7.1"
-        res = requests.get(r_url, headers=headers, timeout=15)
+        res = azure_http.get(r_url, headers=headers, timeout=15)
         if res.status_code == 200:
             repos = res.json().get("value", [])
             repo_fetch_ok = True
@@ -204,6 +204,12 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
             logger.warning("Failed to fetch repositories for team activity: HTTP %s", res.status_code)
     except Exception as e:
         logger.warning("Failed to fetch repositories for team activity: %s", e)
+
+    # Azure DevOps answers HTTP 404 for the commit history of a disabled repository, every time. Such a repository
+    # is not a retrieval failure, and querying it only made every refresh "partial" (and therefore never cacheable).
+    # Its already cached commits are kept untouched below.
+    disabled_pairs = {(r.get("project", {}).get("name", ""), r.get("name")) for r in repos if r.get("isDisabled") is True}
+    repos = [r for r in repos if r.get("isDisabled") is not True]
 
     project_repos: Dict[str, List[Dict[str, Any]]] = {}
     invalid_repo_projects = set()
@@ -225,7 +231,7 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
             return project_name, False, []
         try:
             url = f"{org_url.rstrip('/')}/{project_name}/_apis/git/repositories/{repo_id}/commits?searchCriteria.fromDate={start_date_iso}&$top=100&api-version=7.1"
-            r = requests.get(url, headers=headers, timeout=8)
+            r = azure_http.get(url, headers=headers, timeout=8)
             if r.status_code == 200:
                 items = r.json().get("value", [])
                 out = []
@@ -278,7 +284,12 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
     success_keys = {(c["commitId"], c["repository"]): c for c in fresh_commits}
     if complete:
         with sync_service.db_lock, sync_service.get_db_connection() as conn:
-            # A completed range is authoritative only for that range. Preserve all cached history outside it.
+            # A completed range is authoritative only for that range. Preserve all cached history outside it,
+            # and the cached commits of disabled repositories, which Azure DevOps no longer serves.
+            kept_disabled = [tuple(row) for row in conn.execute(
+                "SELECT commit_id, project, repository, author_name, author_email, date, comment, change_counts, url, last_synced_at "
+                "FROM team_commits WHERE date >= ?", (start_date_iso,)
+            ).fetchall() if (row["project"], row["repository"]) in disabled_pairs] if disabled_pairs else []
             conn.execute("DELETE FROM team_commits WHERE date >= ?", (start_date_iso,))
             conn.executemany('''
                 INSERT OR REPLACE INTO team_commits (
@@ -289,6 +300,13 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
                 c["commitId"], c["project"], c["repository"], c["author"], c["authorEmail"],
                 c["date"], c["comment"], "", c["url"], now_iso
             ) for c in fresh_commits])
+            if kept_disabled:
+                conn.executemany('''
+                    INSERT OR IGNORE INTO team_commits (
+                        commit_id, project, repository, author_name, author_email,
+                        date, comment, change_counts, url, last_synced_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', kept_disabled)
             conn.execute('''
                 INSERT INTO team_activity_cache_state
                     (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
@@ -362,7 +380,7 @@ def _load_live_prs_summary_only(org_url: str, pat: str, days: int) -> List[Dict[
     prs = []
     try:
         url = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=200&api-version=7.1"
-        res = requests.get(url, headers=headers, timeout=12)
+        res = azure_http.get(url, headers=headers, timeout=12)
         if res.status_code == 200:
             for pr in res.json().get("value", []):
                 c_date = pr.get("creationDate", "")

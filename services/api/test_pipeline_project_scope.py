@@ -44,13 +44,56 @@ class PipelineProjectScopeTests(unittest.TestCase):
             if path.endswith('/Beta/_apis/build/builds'):
                 return Response([{'id': 3, 'project': {'name': 'Beta'}}] if token else [{'id': 2, 'project': {'name': 'Beta'}}], token=None if token else 'build-next')
             raise AssertionError('unexpected synthetic endpoint')
-        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.requests, 'get', side_effect=fetch):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
             result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True)
         self.assertEqual({x['id'] for x in result['items']}, {1, 2, 3})
         self.assertFalse(any(p == '/org/_apis/build/builds' for p, _ in calls))
         self.assertEqual(result['cacheStatus']['outcome'], 'partial')
         self.assertTrue(result['cacheStatus']['projectDiscoveryComplete'])
         self.assertEqual(len([p for p, _ in calls if p.endswith('/Beta/_apis/build/builds')]), 2)
+
+    def _scoped_fetch(self, fail_beta=False):
+        calls = []
+        queued = pipeline_service._utcnow().isoformat(timespec='seconds') + 'Z'
+        def fetch(url, *, headers, params, timeout):
+            path = urlparse(url).path
+            calls.append(path)
+            if path.endswith('/_apis/projects'):
+                return Response([{'name': 'Alpha'}, {'name': 'Beta'}])
+            if path.endswith('/Alpha/_apis/build/builds'):
+                return Response([{'id': 1, 'project': {'name': 'Alpha'}, 'queueTime': queued}])
+            if path.endswith('/Beta/_apis/build/builds'):
+                return Response([], status=500) if fail_beta else Response([{'id': 2, 'project': {'name': 'Beta'}, 'queueTime': queued}])
+            raise AssertionError('unexpected synthetic endpoint')
+        return calls, fetch
+
+    def test_successful_project_scoped_read_stays_partial_but_is_served_from_the_ttl_cache(self):
+        calls, fetch = self._scoped_fetch()
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
+            first = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', include_cache_status=True)
+            after_first = len(calls)
+            second = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', include_cache_status=True)
+            forced = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True)
+        self.assertEqual(after_first, 3)
+        self.assertEqual({x['id'] for x in first['items']}, {1, 2})
+        self.assertEqual(first['cacheStatus']['outcome'], 'partial')
+        self.assertFalse(first['cacheStatus']['organizationSnapshotComplete'])
+        self.assertEqual({x['id'] for x in second['items']}, {1, 2})
+        self.assertEqual(second['cacheStatus']['outcome'], 'partial')
+        self.assertFalse(second['cacheStatus']['stale'])
+        self.assertFalse(second['cacheStatus']['complete'])
+        self.assertEqual(len(calls), after_first + 3, 'only the forced refresh may call Azure DevOps again')
+        self.assertEqual(forced['cacheStatus']['outcome'], 'partial')
+
+    def test_project_scoped_read_with_a_failed_project_is_not_cached(self):
+        calls, fetch = self._scoped_fetch(fail_beta=True)
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
+            first = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', include_cache_status=True)
+            after_first = len(calls)
+            pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', include_cache_status=True)
+        self.assertEqual(first['cacheStatus']['outcome'], 'partial')
+        self.assertEqual(first['cacheStatus']['successfulProjects'], ['Alpha'])
+        self.assertGreater(len(calls), after_first, 'a read with a failed project must be retried on the next request')
 
     def test_incomplete_project_inventory_does_not_claim_complete(self):
         def fetch(url, *, headers, params, timeout):
@@ -59,7 +102,7 @@ class PipelineProjectScopeTests(unittest.TestCase):
                     return Response([], status=403)
                 return Response([{'name': 'Alpha'}], token='next')
             return Response([])
-        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.requests, 'get', side_effect=fetch):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
             result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True, project_scoped=True)
         self.assertEqual(result['cacheStatus']['outcome'], 'partial')
         self.assertFalse(result['cacheStatus']['projectDiscoveryComplete'])
@@ -74,7 +117,7 @@ class PipelineProjectScopeTests(unittest.TestCase):
                 return Response([{'name': name} for name in names])
             calls.append(path)
             return Response([])
-        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.requests, 'get', side_effect=fetch):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
             result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True, project_scoped=True)
         self.assertEqual(len(calls), 26)
         self.assertTrue(result['cacheStatus']['projectDiscoveryComplete'])
@@ -88,7 +131,7 @@ class PipelineProjectScopeTests(unittest.TestCase):
             if '/Alpha/' in url:
                 return Response([])
             return Response([{'id': 1, 'project': {'name': 'Beta'}}], token='repeat')
-        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.requests, 'get', side_effect=fetch):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
             result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True, project_scoped=True)
         self.assertEqual(result['cacheStatus']['outcome'], 'partial')
         self.assertFalse(result['cacheStatus']['complete'])
@@ -99,7 +142,7 @@ class PipelineProjectScopeTests(unittest.TestCase):
             if urlparse(url).path.endswith('/_apis/projects'):
                 return Response([{'name': f'Project-{i}'} for i in range(100)])
             return Response([])
-        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.requests, 'get', side_effect=fetch):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
             result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True)
         self.assertFalse(result['cacheStatus']['projectDiscoveryComplete'])
         self.assertEqual(result['cacheStatus']['outcome'], 'partial')
@@ -111,7 +154,7 @@ class PipelineProjectScopeTests(unittest.TestCase):
             if '/Alpha/' in url:
                 return Response([])
             return Response([{'id': i, 'project': {'name': 'Beta'}} for i in range(pipeline_service.BUILD_PAGE_SIZE)])
-        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.requests, 'get', side_effect=fetch):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
             result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True)
         self.assertEqual(result['cacheStatus']['successfulProjects'], ['Alpha'])
         self.assertEqual(result['cacheStatus']['outcome'], 'partial')
