@@ -44,7 +44,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     conn.close()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', return_value=self._ok([])) as get:
+                        patch.object(deployment_service.azure_http, 'get', return_value=self._ok([])) as get:
                         first = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', days=7, include_cache_status=True)
                         second = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', days=30)
                 self.assertEqual(first['items'], [])
@@ -78,7 +78,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     return self._ok([])
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', side_effect=fetch):
+                        patch.object(deployment_service.azure_http, 'get', side_effect=fetch):
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'synthetic', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['cacheStatus']['outcome'], 'complete')
 
@@ -96,7 +96,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     conn.close()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', return_value=self._ok([])) as get:
+                        patch.object(deployment_service.azure_http, 'get', return_value=self._ok([])) as get:
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                     cached = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', include_cache_status=True)
                 self.assertEqual(result['items'], [])
@@ -119,7 +119,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 responses = [self._ok([]), type('Response', (), {'status_code': 403, 'json': lambda self: {}})()]
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', side_effect=responses):
+                        patch.object(deployment_service.azure_http, 'get', side_effect=responses):
                     first = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                     failed = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(first['cacheStatus']['outcome'], 'complete')
@@ -141,7 +141,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 ]
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', side_effect=responses) as get:
+                        patch.object(deployment_service.azure_http, 'get', side_effect=responses) as get:
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual({item['id'] for item in result['items']}, {1, 2})
                 self.assertEqual(get.call_count, 2)
@@ -169,7 +169,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 with patch.object(deployment_service, '_utcnow', return_value=now), \
                         patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', return_value=self._ok([])) as get:
+                        patch.object(deployment_service.azure_http, 'get', return_value=self._ok([])) as get:
                     deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', days=30, include_cache_status=True)
                 self.assertEqual(get.call_count, 1)
 
@@ -188,7 +188,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 bad = type('Response', (), {'status_code': 500, 'json': lambda self: {}})()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', return_value=bad):
+                        patch.object(deployment_service.azure_http, 'get', return_value=bad):
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['cacheStatus']['outcome'], 'failed')
                 self.assertTrue(result['cacheStatus']['stale'])
@@ -215,7 +215,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     with sync_service.get_db_connection() as conn:
                         conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                         conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
-                    request_patch = patch.object(deployment_service.requests, 'get', side_effect=failure) if isinstance(failure, BaseException) else patch.object(deployment_service.requests, 'get', return_value=failure)
+                    request_patch = patch.object(deployment_service.azure_http, 'get', side_effect=failure) if isinstance(failure, BaseException) else patch.object(deployment_service.azure_http, 'get', return_value=failure)
                     with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                             patch.object(sync_service, 'get_devops_headers', return_value={}), \
                             request_patch:
@@ -236,7 +236,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 forbidden = type('Response', (), {'status_code': 403, 'json': lambda self: {}})()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', side_effect=[good, forbidden]) as get:
+                        patch.object(deployment_service.azure_http, 'get', side_effect=[good, forbidden]) as get:
                     partial = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                     cached_partial = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', include_cache_status=True)
                 self.assertEqual(partial['cacheStatus']['outcome'], 'partial')
@@ -249,7 +249,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 with patch.object(deployment_service, '_utcnow', return_value=deployment_service._utcnow() + timedelta(minutes=6)), \
                         patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(deployment_service.requests, 'get', side_effect=[good, good]):
+                        patch.object(deployment_service.azure_http, 'get', side_effect=[good, good]):
                     recovered = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(recovered['cacheStatus']['outcome'], 'complete')
                 self.assertFalse(recovered['cacheStatus']['stale'])

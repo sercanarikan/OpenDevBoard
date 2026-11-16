@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from threading import Lock
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import request_coalescing
 
 # Azure DevOps SDK imports
 from msrest.authentication import BasicAuthentication
@@ -435,12 +436,16 @@ def get_pull_request_by_id(pr_id):
         app.logger.error(f"Error in get_pull_request_by_id: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+# Concurrent identical cold requests (cards, explorers, tabs) share one Azure DevOps fan-out.
+_live_flights = request_coalescing.Coalescer()
+
+
 def _load_all_team_activity(days=30, force_refresh=False):
     if sync_service.is_fixture_mode():
         return team_service.build_fixture_team_activity()
     org_url = get_devops_org_url()
     pat = get_devops_pat()
-    return team_service.sync_live_team_activity(org_url, pat, days=days, force_refresh=force_refresh)
+    return _live_flights.run(('team', days, force_refresh), lambda: team_service.sync_live_team_activity(org_url, pat, days=days, force_refresh=force_refresh))
 
 def _validated_days():
     """Parse the shared positive-integer days query parameter."""
@@ -591,7 +596,7 @@ def _load_all_pipelines(days=30, force_refresh=False):
         return pipeline_service.build_fixture_pipelines()
     org_url = get_devops_org_url()
     pat = get_devops_pat()
-    return pipeline_service.sync_live_pipeline_runs(org_url, pat, days=days, force_refresh=force_refresh, include_cache_status=True, project_scoped=True)
+    return _live_flights.run(('pipelines', days, force_refresh), lambda: pipeline_service.sync_live_pipeline_runs(org_url, pat, days=days, force_refresh=force_refresh, include_cache_status=True, project_scoped=True))
 
 def _load_all_deployments(days=30, force_refresh=False):
     if sync_service.is_fixture_mode():
@@ -599,7 +604,7 @@ def _load_all_deployments(days=30, force_refresh=False):
     org_url = get_devops_org_url()
     org_name = get_devops_org_name()
     pat = get_devops_pat()
-    return deployment_service.sync_live_deployments(org_url, org_name, pat, days=days, force_refresh=force_refresh, include_cache_status=True)
+    return _live_flights.run(('deployments', days, force_refresh), lambda: deployment_service.sync_live_deployments(org_url, org_name, pat, days=days, force_refresh=force_refresh, include_cache_status=True))
 
 @app.route('/api/pipeline-health', methods=['GET'])
 def get_pipeline_health():

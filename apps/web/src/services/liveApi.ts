@@ -45,8 +45,27 @@ function buildUrl(path: string, query?: URLSearchParams): string {
   return url.toString();
 }
 
-/** Check the backend separately from requests that can fail or time out upstream. */
-export async function probeBackend(): Promise<boolean> {
+/** Any HTTP answer (even a 4xx/5xx other than a gateway error) is proof that the backend is reachable. */
+let lastResponseAt = 0;
+const RECENT_RESPONSE_MS = 15000;
+
+export function hasRecentResponse(now = Date.now()): boolean {
+  return now - lastResponseAt < RECENT_RESPONSE_MS;
+}
+
+export function isTimeoutError(error: unknown): boolean {
+  return error instanceof ApiError && error.isNetwork && error.message === 'timeout';
+}
+
+/**
+ * Check the backend separately from requests that can fail or time out upstream.
+ *
+ * `trustRecentResponse` is for a client-side timeout only: the browser allows six HTTP/1.1 connections per origin,
+ * so while slow summary requests hold them this probe can queue past its own timeout although the backend answers.
+ * A response received moments ago proves reachability; refused connections and gateway errors never use the shortcut.
+ */
+export async function probeBackend(trustRecentResponse = false): Promise<boolean> {
+  if (trustRecentResponse && hasRecentResponse()) return true;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
@@ -99,13 +118,17 @@ export async function getJson<T>(path: string, query?: URLSearchParams, signal?:
       throw new ApiError(message, res.status);
     }
     const body = (await res.json()) as T;
+    lastResponseAt = Date.now();
     emitNetwork({ ok: true });
     return body;
   } catch (err: any) {
     if (err instanceof ApiError) {
       // An HTTP answer (even 4xx/5xx) proves the server is reachable; only gateway errors mean "backend gone".
       if (err.status === 502 || err.status === 503 || err.status === 504) emitNetwork({ ok: false, error: err });
-      else emitNetwork({ ok: true });
+      else {
+        lastResponseAt = Date.now();
+        emitNetwork({ ok: true });
+      }
       throw err;
     }
     if (signal?.aborted) throw new ApiError('aborted', 0, { isAbort: true });
@@ -374,7 +397,7 @@ export const liveApi: WorkItemsApi = {
   teamActivitySummary: (days = 30, project, signal) => {
     const q = new URLSearchParams({ days: String(days) });
     if (project && project !== 'all') q.set('project', project);
-    return getJson<TeamActivitySummary>('/team-activity/summary', q, signal);
+    return getJson<TeamActivitySummary>('/team-activity/summary', q, signal, 50000);
   },
 
   teamContributors: (params, signal) => getJson<TeamContributorsResponse>('/team-activity/contributors', teamQuery(params), signal),

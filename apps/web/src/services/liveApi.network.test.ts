@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { getJson, historyQuery, liveApi, onNetworkEvent, postSync, pullRequestSnapshotParams } from './liveApi';
+import { getJson, hasRecentResponse, historyQuery, isTimeoutError, liveApi, onNetworkEvent, postSync, probeBackend, pullRequestSnapshotParams } from './liveApi';
 import { ApiError } from '../types/paging';
 
 const events: { ok: boolean; error?: ApiError }[] = [];
@@ -16,6 +16,81 @@ afterEach(() => {
   off = null;
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe('backend reachability probe', () => {
+  const answer = (status = 200) => vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status }));
+
+  it('allows team activity summaries the same budget as the other dashboard summaries', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_u: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    })));
+    const result = expect(liveApi.teamActivitySummary(7, 'all')).rejects.toMatchObject({ message: 'timeout' });
+    await vi.advanceTimersByTimeAsync(49999);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await result;
+  });
+
+  it('treats a recent HTTP answer as proof of reachability only when asked to for a client timeout', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.stubGlobal('fetch', answer());
+    await getJson('/work-items/summary');
+    expect(hasRecentResponse()).toBe(true);
+
+    // The health probe would hang behind busy browser connections; the recent answer makes it unnecessary.
+    const health = vi.fn((_u: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    }));
+    vi.stubGlobal('fetch', health);
+    await expect(probeBackend(true)).resolves.toBe(true);
+    expect(health).not.toHaveBeenCalled();
+
+    // Without the opt-in (refused connection, gateway error) the probe always asks the backend.
+    const probe = probeBackend(false);
+    const settled = vi.fn();
+    void probe.then(settled);
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(health).toHaveBeenCalledTimes(1);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(probe).resolves.toBe(false);
+  });
+
+  it('does not trust an old answer', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.stubGlobal('fetch', answer());
+    await getJson('/work-items/summary');
+    vi.setSystemTime(new Date('2026-01-01T00:00:16Z'));
+    expect(hasRecentResponse()).toBe(false);
+    const health = answer(503);
+    vi.stubGlobal('fetch', health);
+    await expect(probeBackend(true)).resolves.toBe(false);
+    expect(health).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a 4xx/5xx answer as reachable but a gateway error as unreachable', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-01T00:00:00Z'));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'nope' }), { status: 500 })));
+    await expect(getJson('/x')).rejects.toBeInstanceOf(ApiError);
+    expect(hasRecentResponse()).toBe(true);
+
+    vi.setSystemTime(new Date('2026-02-01T01:00:00Z'));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'bad gateway' }), { status: 504 })));
+    await expect(getJson('/x')).rejects.toBeInstanceOf(ApiError);
+    expect(hasRecentResponse()).toBe(false);
+  });
+
+  it('recognises only client-side timeouts', () => {
+    expect(isTimeoutError(new ApiError('timeout', 0, { isNetwork: true }))).toBe(true);
+    expect(isTimeoutError(new ApiError('Failed to fetch', 0, { isNetwork: true }))).toBe(false);
+    expect(isTimeoutError(new ApiError('HTTP 504', 504))).toBe(false);
+    expect(isTimeoutError(new Error('timeout'))).toBe(false);
+  });
 });
 
 describe('getJson network reporting', () => {

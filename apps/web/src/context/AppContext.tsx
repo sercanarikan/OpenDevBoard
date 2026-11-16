@@ -12,7 +12,7 @@ import {
   type PipelineRun,
   type DeploymentRecord
 } from '../types/paging';
-import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent, pullRequestSnapshotParams, probeBackend } from '../services/liveApi';
+import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent, pullRequestSnapshotParams, probeBackend, isTimeoutError } from '../services/liveApi';
 import { demoApi } from '../services/demoApi';
 import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockData';
 import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
@@ -290,7 +290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         if (controller.signal.aborted) return;
         failuresRef.current += 1;
-        if (failuresRef.current >= LOST_AFTER_FAILURES && sourceRef.current !== 'lost' && !(await probeBackend()) && !controller.signal.aborted) {
+        if (failuresRef.current >= LOST_AFTER_FAILURES && sourceRef.current !== 'lost' && !(await probeBackend(isTimeoutError(e))) && !controller.signal.aborted) {
           setSource('lost');
           setConnectionError(errMessage(e));
           setIsBannerDismissed(false);
@@ -313,7 +313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsubscribe = onNetworkEvent(({ ok, error }) => {
       if (ok || state.checking || sourceRef.current === 'lost') return;
       state.checking = true;
-      void probeBackend().then(reachable => {
+      void probeBackend(isTimeoutError(error)).then(reachable => {
         state.checking = false;
         if (state.active && !reachable && sourceRef.current !== 'lost') {
           failuresRef.current = LOST_AFTER_FAILURES;

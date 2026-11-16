@@ -143,7 +143,7 @@ class TestTeamActivityService(unittest.TestCase):
 
         pr_response = type('Response', (), {"status_code": 200, "json": lambda self: {"value": []}})()
         return patch.object(team_service.sync_service, 'get_devops_headers', return_value={}), \
-            patch.object(team_service.requests, 'get', side_effect=get), \
+            patch.object(team_service.azure_http, 'get', side_effect=get), \
             patch.object(team_service, '_load_live_prs_summary_only', return_value=[]), \
             patch.object(team_service, '_utcnow', return_value=now), pr_response
 
@@ -151,6 +151,54 @@ class TestTeamActivityService(unittest.TestCase):
     def _cached_ids():
         with sync_service.get_db_connection() as conn:
             return {row['commit_id'] for row in conn.execute('SELECT commit_id FROM team_commits')}
+
+    def test_disabled_repository_is_not_queried_and_does_not_make_the_snapshot_partial(self):
+        self._isolated_cache()
+        now = datetime(2026, 11, 8, 12)
+        disabled = dict(self._azure_repo('Alpha.Legacy', 'Alpha', 2), isDisabled=True)
+        repos = [self._azure_repo('Alpha.Web', 'Alpha', 1), disabled]
+        recent = self._azure_commit('recent', (now - timedelta(days=2)).isoformat() + 'Z')
+        # The disabled repository has no entry: querying it would raise KeyError in the mock.
+        context = self._mock_azure(repos, {'1': [recent]}, now)
+        with context[0], context[1] as get, context[2], context[3]:
+            first = team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7)
+            queried = [c.args[0] for c in get.call_args_list]
+            second = team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7)
+        self.assertFalse(any('/repositories/2/commits' in url for url in queried))
+        self.assertEqual(first['cacheStatus']['outcome'], 'complete')
+        self.assertFalse(first['cacheStatus']['stale'])
+        self.assertEqual(second['cacheStatus']['outcome'], 'complete')
+        self.assertEqual(len(get.call_args_list), len(queried), 'the second call must be served from the cache')
+
+    def test_complete_refresh_keeps_cached_commits_of_a_disabled_repository(self):
+        self._isolated_cache()
+        now = datetime(2026, 11, 8, 12)
+        recent_date = (now - timedelta(days=2)).isoformat() + 'Z'
+        with sync_service.get_db_connection() as conn:
+            conn.execute('''INSERT INTO team_commits (commit_id, project, repository, author_name, author_email, date, comment, change_counts, url, last_synced_at)
+                VALUES ('kept', 'Alpha', 'Alpha.Legacy', 'Ada', '', ?, 'old work', '', 'https://example.test/c/kept', '2026-11-01T00:00:00')''', (recent_date,))
+        disabled = dict(self._azure_repo('Alpha.Legacy', 'Alpha', 2), isDisabled=True)
+        repos = [self._azure_repo('Alpha.Web', 'Alpha', 1), disabled]
+        context = self._mock_azure(repos, {'1': [self._azure_commit('fresh', recent_date)]}, now)
+        with context[0], context[1], context[2], context[3]:
+            result = team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7, force_refresh=True)
+        self.assertEqual(result['cacheStatus']['outcome'], 'complete')
+        self.assertEqual({c['commitId'] for c in result['commits']}, {'kept', 'fresh'})
+        self.assertEqual(self._cached_ids(), {'kept', 'fresh'})
+
+    def test_enabled_repository_failure_still_reports_partial_and_is_not_cached(self):
+        self._isolated_cache()
+        now = datetime(2026, 11, 8, 12)
+        repos = [self._azure_repo('Alpha.Web', 'Alpha', 1), self._azure_repo('Beta.Web', 'Beta', 2)]
+        recent = self._azure_commit('recent', (now - timedelta(days=2)).isoformat() + 'Z')
+        context = self._mock_azure(repos, {'1': [recent], '2': 404}, now)
+        with context[0], context[1] as get, context[2], context[3]:
+            first = team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7)
+            calls_after_first = len(get.call_args_list)
+            team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7)
+        self.assertEqual(first['cacheStatus']['outcome'], 'partial')
+        self.assertTrue(first['cacheStatus']['stale'])
+        self.assertGreater(len(get.call_args_list), calls_after_first, 'a partial snapshot must be retried, not served from the cache')
 
     def test_complete_short_then_long_window_retains_older_commits(self):
         self._isolated_cache()
@@ -257,7 +305,7 @@ class TestTeamActivityService(unittest.TestCase):
         context = self._mock_azure(repos, {'1': [commit]}, now)
         with context[0], context[1], context[2], context[3]:
             team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7, force_refresh=True)
-        failed_get = patch.object(team_service.requests, 'get', side_effect=requests.Timeout('repository timeout'))
+        failed_get = patch.object(team_service.azure_http, 'get', side_effect=requests.Timeout('repository timeout'))
         with patch.object(team_service.sync_service, 'get_devops_headers', return_value={}), failed_get, \
                 patch.object(team_service, '_load_live_prs_summary_only', return_value=[]), \
                 patch.object(team_service, '_utcnow', return_value=now + timedelta(minutes=6)):

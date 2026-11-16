@@ -16,7 +16,11 @@
     "timeout": "Azure DevOps did not answer the deployment request before it timed out.",
     "upstreamUnreachable": "The backend could not connect to Azure DevOps for deployment data.",
     "upstreamHttp": "Azure DevOps returned HTTP {{status}} for deployment data.",
-    "unknownTime": "unknown time"
+    "unknownTime": "unknown time",
+    "teamPartial": "Team data is partial; some repositories were unreachable or the data is out of date.",
+    "teamFailed": "Team activity could not be loaded.",
+    "teamRefreshFailed": "Team activity could not be refreshed; showing the previous data.",
+    "refreshing": "Refreshing"
   },
   "cards": {
     "myTasks": "My Active Tasks",

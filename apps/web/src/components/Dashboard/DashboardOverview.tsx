@@ -58,6 +58,7 @@ export const DashboardOverview: React.FC = () => {
     currentUserName,
     booting,
     refreshToken,
+    refreshData,
     syncIndicator,
     selectedWorkItem,
     setSelectedWorkItem,
@@ -93,6 +94,7 @@ export const DashboardOverview: React.FC = () => {
   const loadingTeam = booting ? !teamAvailable : teamState?.request !== request;
   const errorTasks = !loadingTasks && currentUserName && tasksState?.request === request ? tasksState.error : null;
   const errorPRs = !loadingPRs && prsState?.request === request ? prsState.error : null;
+  const errorTeam = !loadingTeam && teamState?.request === request ? teamState.error : null;
 
   useEffect(() => {
     if (request.booting) return;
@@ -142,7 +144,7 @@ export const DashboardOverview: React.FC = () => {
         setTeamState({ request, error: null, successfulScope: project });
       }, (e: any) => {
         if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
-        setTeamState(prev => ({ request, error: null, successfulScope: prev?.successfulScope }));
+        setTeamState(prev => ({ request, error: 'failed', successfulScope: prev?.successfulScope }));
       });
     return () => ctrl.abort();
   }, [request]);
@@ -155,8 +157,15 @@ export const DashboardOverview: React.FC = () => {
   const pipelineUnavailable = pipelineSummary?.cacheStatus?.outcome === 'failed' && !pipelineSummary.cacheStatus.lastSyncedAt;
   const deploymentCache = deploymentSummary?.cacheStatus;
   const formatCacheTime = (value: string) => new Date(value.endsWith('Z') ? value : `${value}Z`).toLocaleString();
+  const pipelineInitialLoading = pipelineSummaryLoading && !pipelineSummary;
+  const pipelineRefreshing = pipelineSummaryLoading && !!pipelineSummary;
+  const deploymentInitialLoading = deploymentSummaryLoading && !deploymentSummary;
+  const deploymentRefreshing = deploymentSummaryLoading && !!deploymentSummary;
+  const teamRefreshing = loadingTeam && teamAvailable;
+  const teamCacheStatus = teamSnapshot?.cacheStatus;
+  const teamPartialOrStale = !!teamCacheStatus && (teamCacheStatus.outcome !== 'complete' || teamCacheStatus.stale);
   const deploymentState = getIntegrationState({
-    loading: deploymentSummaryLoading,
+    loading: deploymentInitialLoading,
     hasData: !!deploymentSummary,
     backendReachable: source !== 'lost',
     requestError: !!deploymentSummaryError,
@@ -220,7 +229,7 @@ export const DashboardOverview: React.FC = () => {
 
           <div className="flex items-center gap-2.5">
             <button
-              onClick={() => setRefreshNonce(n => n + 1)}
+              onClick={() => { setRefreshNonce(n => n + 1); void refreshData(); }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title={t('actions.refresh', { ns: 'common' })}
             >
@@ -490,6 +499,12 @@ export const DashboardOverview: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <PlayCircle className="w-4 h-4 text-sky-500" />
                   <span className="font-bold text-xs text-slate-900 dark:text-slate-100">{t('sections.pipelineStatus')}</span>
+                  {pipelineRefreshing && (
+                    <span role="status" data-testid="dash-pipeline-loading" className="flex items-center gap-1 text-[10px] text-slate-400">
+                      <span className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+                      {t('cache.refreshing')}
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => navigateTo('pipelines')}
@@ -524,7 +539,7 @@ export const DashboardOverview: React.FC = () => {
               </div>
 
               {/* Latest Broken Build Warning Banner or Health Status */}
-              {pipelineSummaryLoading ? (
+              {pipelineInitialLoading ? (
                 <div className="py-2.5 flex items-center justify-center text-slate-400 gap-2 text-xs" data-testid="dash-pipeline-loading">
                   <div className="w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
                   <span>{t('empty.loading', { ns: 'pipelines' })}</span>
@@ -571,6 +586,12 @@ export const DashboardOverview: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <Server className="w-4 h-4 text-purple-500" />
                   <span className="font-bold text-xs text-slate-900 dark:text-slate-100">{t('sections.latestDeployment')}</span>
+                  {deploymentRefreshing && (
+                    <span role="status" data-testid="dash-deployment-loading" className="flex items-center gap-1 text-[10px] text-slate-400">
+                      <span className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+                      {t('cache.refreshing')}
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => navigateTo('deployments')}
@@ -605,10 +626,10 @@ export const DashboardOverview: React.FC = () => {
               </div>
 
               {/* Environment Distribution Chips or Status */}
-              {deploymentSummaryLoading ? (
+              {deploymentInitialLoading ? (
                 <div className="py-2.5 flex items-center justify-center text-slate-400 gap-2 text-xs" data-testid="dash-deployment-loading">
                   <div className="w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-                  <span>{t('empty.loading', { ns: 'deployments' })}{deploymentSummary?.lastSyncedAt ? ` · ${t('cache.stale', { when: formatCacheTime(deploymentSummary.lastSyncedAt) })}` : ''}</span>
+                  <span>{t('empty.loading', { ns: 'deployments' })}</span>
                 </div>
               ) : deploymentSummaryError ? (
                 <div className="p-2.5 rounded-xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-center text-xs text-rose-600 dark:text-rose-400">
@@ -720,13 +741,21 @@ export const DashboardOverview: React.FC = () => {
                   {t('sections.teamActivitySnapshotDesc')} ({filters.selectedProject === 'all' ? t('projects.all', { ns: 'common' }) : filters.selectedProject})
                 </p>
               </div>
-              <button
-                onClick={() => navigateTo('team-activity')}
-                className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:text-brand-700 flex items-center gap-1 shrink-0"
-              >
-                <span>{t('sections.viewTeam')}</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {teamRefreshing && (
+                  <span role="status" data-testid="dash-team-refreshing" className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <span className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+                    {t('cache.refreshing')}
+                  </span>
+                )}
+                <button
+                  onClick={() => navigateTo('team-activity')}
+                  className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:text-brand-700 flex items-center gap-1"
+                >
+                  <span>{t('sections.viewTeam')}</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
 
             {loadingTeam && !teamAvailable ? (
@@ -734,11 +763,27 @@ export const DashboardOverview: React.FC = () => {
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : !teamAvailable || !teamSnapshot ? (
-              <div className="py-6 text-center text-slate-400 text-xs italic">
-                {t('sections.noTeamActivity')}
+              <div className="space-y-2">
+                {errorTeam && (
+                  <div role="alert" data-testid="dash-team-error" className="p-2.5 rounded-xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-center text-xs text-rose-600 dark:text-rose-400">
+                    {t('cache.teamFailed')}
+                  </div>
+                )}
+                <div className="py-6 text-center text-slate-400 text-xs italic">
+                  {t('sections.noTeamActivity')}
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
+                {errorTeam ? (
+                  <div role="alert" data-testid="dash-team-error" className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-center text-xs text-amber-700 dark:text-amber-300">
+                    {t('cache.teamRefreshFailed')}
+                  </div>
+                ) : teamPartialOrStale ? (
+                  <div role="status" data-testid="dash-team-partial" className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-center text-xs text-amber-700 dark:text-amber-300">
+                    {t('cache.teamPartial')}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-3 gap-2 text-center text-xs">
                   <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800">
                     <div className="text-[10px] text-slate-400">{t('columns.commits', { ns: 'teamActivity' })}</div>

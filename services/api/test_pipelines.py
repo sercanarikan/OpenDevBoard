@@ -24,7 +24,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 forbidden = type('Response', (), {'status_code': 403})()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(pipeline_service.requests, 'get', side_effect=[forbidden, self._ok([])]):
+                        patch.object(pipeline_service.azure_http, 'get', side_effect=[forbidden, self._ok([])]):
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['cacheStatus']['outcome'], 'partial')
                 self.assertEqual(result['cacheStatus']['organizationQueryError'], {'kind': 'http', 'status': 403})
@@ -64,7 +64,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 with patch.object(pipeline_service, '_utcnow', return_value=pipeline_service._utcnow()), \
                         patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(pipeline_service.requests, 'get', return_value=self._ok([])) as get:
+                        patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])) as get:
                         first = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, include_cache_status=True, project_scoped=False)
                         second = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True, project_scoped=False)
                 self.assertEqual(first['items'], [])
@@ -86,7 +86,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 pipeline_service.init_pipeline_db()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(pipeline_service.requests, 'get', return_value=self._ok([])):
+                        patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])):
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['items'], [])
                 self.assertEqual(result['cacheStatus']['outcome'], 'partial')
@@ -102,7 +102,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 ]
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(pipeline_service.requests, 'get', side_effect=responses) as get:
+                        patch.object(pipeline_service.azure_http, 'get', side_effect=responses) as get:
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual({item['id'] for item in result['items']}, {10, 11})
                 self.assertEqual(get.call_count, 2)
@@ -123,7 +123,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 with patch.object(pipeline_service, '_utcnow', return_value=now), \
                         patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(pipeline_service.requests, 'get', return_value=self._ok([])) as get:
+                        patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])) as get:
                     pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True, project_scoped=False)
                 self.assertEqual(get.call_count, 1)
 
@@ -142,7 +142,7 @@ class TestPipelineHealthService(unittest.TestCase):
                     conn.close()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(pipeline_service.requests, 'get', return_value=self._ok([])):
+                        patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])):
                     pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, force_refresh=True, include_cache_status=True, project_scoped=False)
                 conn = sync_service.get_db_connection()
                 try:
@@ -166,7 +166,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 bad = type('Response', (), {'status_code': 500, 'json': lambda self: {}})()
                 with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
                         patch.object(sync_service, 'get_devops_headers', return_value={}), \
-                        patch.object(pipeline_service.requests, 'get', return_value=bad):
+                        patch.object(pipeline_service.azure_http, 'get', return_value=bad):
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['cacheStatus']['outcome'], 'failed')
                 self.assertTrue(result['cacheStatus']['stale'])
