@@ -4,6 +4,7 @@
   "subtitle": "Günlük iş durumunuz, bekleyen incelemeleriniz ve öncelikli görevleriniz",
   "cache": {
     "pipelinePartial": "Pipeline verisi kısmi; bazı sonuçlar eksik olabilir.",
+    "pipelineAccessibleScope": "Erişilebilen projelerin sonuçları gösteriliyor.",
     "pipelineFailed": "Pipeline verisi alınamadı.",
     "pipelineStale": "Pipeline verisi güncel değil.",
     "pipelineEmpty": "Bu dönemde pipeline koşumu bulunmuyor.",

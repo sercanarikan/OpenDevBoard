@@ -167,3 +167,91 @@ class PipelineProjectScopeTests(unittest.TestCase):
                 patch.object(pipeline_service, 'sync_live_pipeline_runs', return_value={}) as sync:
             api_app._load_all_pipelines(days=7, force_refresh=True)
         sync.assert_called_once_with('https://dev.azure.com/org', 'synthetic', days=7, force_refresh=True, include_cache_status=True, project_scoped=True)
+
+
+class AccessibleScopeCompletenessTests(unittest.TestCase):
+    """accessibleScopeComplete separates a finished accessible-project read from an unfinished one.
+
+    `outcome` and `organizationSnapshotComplete` keep their organization-wide meaning (covered above).
+    """
+    setUp = PipelineProjectScopeTests.setUp
+    _scoped_fetch = PipelineProjectScopeTests._scoped_fetch
+
+    def _sync(self, fetch, **kwargs):
+        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
+            return pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', include_cache_status=True, **kwargs)
+
+    def test_finished_read_is_accessible_scope_complete_and_stays_so_from_the_cache(self):
+        calls, fetch = self._scoped_fetch()
+        first = self._sync(fetch)
+        second = self._sync(fetch)
+        self.assertEqual(len(calls), 3, 'second read must be served from the cache')
+        for result in (first, second):
+            status = result['cacheStatus']
+            self.assertTrue(status['accessibleScopeComplete'])
+            self.assertTrue(status['projectDiscoveryComplete'])
+            self.assertFalse(status['organizationSnapshotComplete'])
+            self.assertEqual(status['outcome'], 'partial')
+            self.assertFalse(status['stale'])
+            self.assertEqual({x['id'] for x in result['items']}, {1, 2})
+
+    def test_successful_empty_result_is_complete_and_has_no_rows(self):
+        def fetch(url, *, headers, params, timeout):
+            if urlparse(url).path.endswith('/_apis/projects'):
+                return Response([{'name': 'Alpha'}, {'name': 'Beta'}])
+            return Response([])
+        result = self._sync(fetch, force_refresh=True)
+        self.assertEqual(result['items'], [])
+        self.assertTrue(result['cacheStatus']['accessibleScopeComplete'])
+        self.assertFalse(result['cacheStatus']['stale'])
+
+    def test_failed_project_query_is_not_accessible_scope_complete(self):
+        _, fetch = self._scoped_fetch(fail_beta=True)
+        status = self._sync(fetch)['cacheStatus']
+        self.assertFalse(status['accessibleScopeComplete'])
+        self.assertEqual(status['successfulProjects'], ['Alpha'])
+
+    def test_unreadable_project_inventory_is_not_accessible_scope_complete(self):
+        def fetch(url, *, headers, params, timeout):
+            if urlparse(url).path.endswith('/_apis/projects'):
+                return Response([], status=401)
+            return Response([])
+        status = self._sync(fetch, force_refresh=True)['cacheStatus']
+        self.assertFalse(status['accessibleScopeComplete'])
+        self.assertFalse(status['projectDiscoveryComplete'])
+
+    def test_incomplete_inventory_pagination_is_not_accessible_scope_complete(self):
+        def fetch(url, *, headers, params, timeout):
+            if urlparse(url).path.endswith('/_apis/projects'):
+                if params.get('continuationToken'):
+                    return Response([], status=403)
+                return Response([{'name': 'Alpha'}], token='next')
+            return Response([])
+        self.assertFalse(self._sync(fetch, force_refresh=True)['cacheStatus']['accessibleScopeComplete'])
+
+    def test_unfinished_build_pagination_is_not_accessible_scope_complete(self):
+        def fetch(url, *, headers, params, timeout):
+            if urlparse(url).path.endswith('/_apis/projects'):
+                return Response([{'name': 'Alpha'}, {'name': 'Beta'}])
+            if '/Alpha/' in url:
+                return Response([])
+            return Response([{'id': 1, 'project': {'name': 'Beta'}}], token='repeat')
+        self.assertFalse(self._sync(fetch, force_refresh=True)['cacheStatus']['accessibleScopeComplete'])
+
+    def test_full_page_without_continuation_is_not_accessible_scope_complete(self):
+        def fetch(url, *, headers, params, timeout):
+            if urlparse(url).path.endswith('/_apis/projects'):
+                return Response([{'name': 'Alpha'}])
+            return Response([{'id': i, 'project': {'name': 'Alpha'}} for i in range(pipeline_service.BUILD_PAGE_SIZE)])
+        self.assertFalse(self._sync(fetch, force_refresh=True)['cacheStatus']['accessibleScopeComplete'])
+
+    def test_failed_refresh_does_not_reuse_a_complete_flag_from_an_earlier_read(self):
+        calls, fetch = self._scoped_fetch()
+        self.assertTrue(self._sync(fetch)['cacheStatus']['accessibleScopeComplete'])
+        _, failing = self._scoped_fetch(fail_beta=True)
+        status = self._sync(failing, force_refresh=True)['cacheStatus']
+        self.assertFalse(status['accessibleScopeComplete'])
+        # the failed attempt must not leave a cacheable state behind
+        after = self._sync(failing)['cacheStatus']
+        self.assertFalse(after['accessibleScopeComplete'])
+

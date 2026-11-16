@@ -1,4 +1,5 @@
 import type { WorkItem } from './index';
+import type { PipelineCacheStatus } from '../utils/pipelineNotice';
 
 export type QuickFilter = 'all' | 'my-tasks' | 'unassigned' | 'blocked' | 'blocking' | 'bugs';
 export type SortBy = 'changedDate' | 'priority' | 'id' | 'title' | 'state';
@@ -307,7 +308,7 @@ export interface PipelineSummary {
   failedRuns: PipelineRun[];
   dailyStats: PipelineDailyStat[];
   lastSyncedAt?: string;
-  cacheStatus?: { outcome: string; complete: boolean; stale: boolean; lastSyncedAt?: string | null };
+  cacheStatus?: PipelineCacheStatus;
 }
 
 export interface PipelineRunsResponse {

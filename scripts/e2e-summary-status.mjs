@@ -53,6 +53,25 @@ try {
   await page.getByTestId('deployment-loading').waitFor({ state: 'hidden' });
   await page.getByText('Dağıtım verisi kısmen', { exact: false }).first().waitFor();
   check('deployment explorer shows partial status', await page.getByText('Dağıtım verisi kısmen', { exact: false }).count() > 0);
+  // A finished read of the accessible projects is a neutral note; an unfinished read keeps the warning.
+  const accessible = { ...pipeline, cacheStatus: { outcome: 'partial', complete: false, stale: false, accessibleScopeComplete: true, organizationSnapshotComplete: false } };
+  for (const [label, summary, expectWarning] of [['accessible scope complete', accessible, false], ['accessible scope incomplete', { ...pipeline, cacheStatus: { ...accessible.cacheStatus, accessibleScopeComplete: false } }, true]]) {
+    await page.unroute('**/api/pipelines/summary?*');
+    await page.unroute('**/api/pipelines/runs?*');
+    await page.route('**/api/pipelines/summary?*', route => route.fulfill({ json: summary }));
+    await page.route('**/api/pipelines/runs?*', route => route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0, hasMore: false, summary, cacheStatus: summary.cacheStatus } }));
+    await page.goto(`${process.env.WEB_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
+    await pipelineCard.getByText('%100', { exact: true }).waitFor();
+    check(`dashboard ${label}: warning ${expectWarning ? 'shown' : 'absent'}`, (await pipelineCard.getByText('Pipeline verisi kısmi', { exact: false }).count() > 0) === expectWarning);
+    check(`dashboard ${label}: neutral note ${expectWarning ? 'absent' : 'shown'}`, (await pipelineCard.getByText('Erişilebilen projelerin sonuçları gösteriliyor.', { exact: true }).count() > 0) === !expectWarning);
+    const listResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/pipelines/runs');
+    await page.goto(`${process.env.WEB_URL}/pipelines`, { waitUntil: 'domcontentloaded' });
+    await listResponse;
+    await page.getByTestId('pipeline-loading').waitFor({ state: 'hidden' });
+    await page.waitForTimeout(300);
+    check(`pipelines ${label}: warning ${expectWarning ? 'shown' : 'absent'}`, (await page.getByText('Pipeline verisi kısmi', { exact: false }).count() > 0) === expectWarning);
+    check(`pipelines ${label}: neutral note ${expectWarning ? 'absent' : 'shown'}`, (await page.getByText('Erişilebilen projelerin sonuçları gösteriliyor.', { exact: true }).count() > 0) === !expectWarning);
+  }
 } catch (error) { console.error(error); total++; } finally { await browser.close(); }
 console.log(`SUMMARY ${passed}/${total}`);
 process.exit(passed === total && total > 0 ? 0 : 1);
