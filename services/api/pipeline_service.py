@@ -7,6 +7,8 @@ pipeline differentiation, SQLite caching, and deterministic offline fixture supp
 import json
 import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import requests
@@ -190,7 +192,7 @@ def build_fixture_pipelines() -> List[Dict[str, Any]]:
 # Live Sync & SQLite Caching
 # -----------------------------------------------------------------------------
 
-def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False):
+def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False, project_scoped: bool = True):
     """Synchronizes pipeline runs from Azure DevOps and caches in SQLite."""
     if sync_service.is_fixture_mode():
         return build_fixture_pipelines()
@@ -222,77 +224,151 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     project_outcomes = {}
     fetch_failed = False
     organization_query_error = None
-    try:
-        url = f"{org_url.rstrip('/')}/_apis/build/builds"
+    project_discovery_complete = False
+    if project_scoped:
+        # Build List requires a project. Enumerate the accessible project inventory
+        # first, including pages, instead of deriving scope from cached work items.
+        projects = []
         token = None
-        seen_tokens = set()
-        for _ in range(BUILD_MAX_PAGES):
-            params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
-            if token:
-                params["continuationToken"] = token
-            res = requests.get(url, headers=headers, params=params, timeout=15)
-            if res.status_code != 200:
-                organization_query_error = {"kind": "http", "status": res.status_code}
-                fetch_failed = True
+        seen = set()
+        for _ in range(100):
+            try:
+                params = {"$top": 100, "api-version": "7.1"}
+                if token:
+                    params["continuationToken"] = token
+                response = requests.get(f"{org_url.rstrip('/')}/_apis/projects", headers=headers, params=params, timeout=15)
+                if response.status_code != 200:
+                    break
+                values = response.json().get("value", [])
+                if any(not isinstance(p, dict) or not p.get("name") for p in values):
+                    break
+                projects.extend(p["name"] for p in values)
+                next_token = (getattr(response, "headers", {}) or {}).get("x-ms-continuationtoken")
+                if not next_token:
+                    # A full page without a continuation marker cannot prove it was the last page.
+                    project_discovery_complete = len(values) < 100
+                    break
+                if next_token in seen:
+                    break
+                seen.add(next_token)
+                token = next_token
+            except (requests.RequestException, ValueError, TypeError):
                 break
-            org_fetch_succeeded = True
-            all_raw.extend(res.json().get("value", []))
-            next_token = (getattr(res, "headers", {}) or {}).get("x-ms-continuationtoken")
-            if not next_token:
-                org_fetch_complete = True
-                break
-            if next_token in seen_tokens:
-                fetch_failed = True
-                break
-            seen_tokens.add(next_token)
-            token = next_token
-        else:
-            fetch_failed = True
-    except Exception as e:
-        fetch_failed = True
-        organization_query_error = {"kind": "timeout" if isinstance(e, requests.Timeout) else "network" if isinstance(e, requests.ConnectionError) else "error"}
-        logger.warning("Org-level builds query failed: %s", e)
+        if not project_discovery_complete:
+            # Retain a useful but explicitly incomplete fallback if discovery fails.
+            try:
+                with sync_service.db_lock, sync_service.get_db_connection() as conn:
+                    projects.extend(r["project"] for r in conn.execute(
+                        "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
+                    ).fetchall())
+            except Exception:
+                pass
+        projects = list(dict.fromkeys(projects))
 
-    # Project fallback if org query returns empty
-    if not org_fetch_succeeded:
-        try:
-            with sync_service.db_lock, sync_service.get_db_connection() as conn:
-                projects = [r["project"] for r in conn.execute(
-                    "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
-                ).fetchall()]
-            if len(projects) > BUILD_MAX_PAGES:
-                projects = projects[:BUILD_MAX_PAGES]
-                fetch_failed = True
-            for proj in projects[:BUILD_MAX_PAGES]:
+        def fetch_project(project):
+            records, token, seen = [], None, set()
+            for _ in range(BUILD_MAX_PAGES):
+                params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
+                if token:
+                    params["continuationToken"] = token
                 try:
-                    url = f"{org_url.rstrip('/')}/{proj}/_apis/build/builds"
-                    token = None
-                    seen_tokens = set()
-                    project_complete = False
-                    for _ in range(BUILD_MAX_PAGES):
-                        params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
-                        if token:
-                            params["continuationToken"] = token
-                        r = requests.get(url, headers=headers, params=params, timeout=10)
-                        if r.status_code != 200:
-                            break
-                        all_raw.extend(r.json().get("value", []))
-                        next_token = (getattr(r, "headers", {}) or {}).get("x-ms-continuationtoken")
-                        if not next_token:
-                            project_complete = True
-                            break
-                        if next_token in seen_tokens:
-                            break
-                        seen_tokens.add(next_token)
-                        token = next_token
-                    project_outcomes[proj] = project_complete
-                    if not project_complete:
-                        fetch_failed = True
-                except Exception:
+                    url = f"{org_url.rstrip('/')}/{quote(project, safe='')}/_apis/build/builds"
+                    response = requests.get(url, headers=headers, params=params, timeout=10)
+                    if response.status_code != 200:
+                        return project, records, False
+                    page = response.json().get("value", [])
+                    records.extend(page)
+                    next_token = (getattr(response, "headers", {}) or {}).get("x-ms-continuationtoken")
+                    if not next_token:
+                        return project, records, len(page) < BUILD_PAGE_SIZE
+                    if next_token in seen:
+                        return project, records, False
+                    seen.add(next_token)
+                    token = next_token
+                except (requests.RequestException, ValueError, TypeError):
+                    return project, records, False
+            return project, records, False
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for project, records, complete in executor.map(fetch_project, projects):
+                all_raw.extend(records)
+                project_outcomes[project] = complete
+                if not complete:
                     fetch_failed = True
-                    project_outcomes[proj] = False
+        # A complete accessible-project inventory is not proof of an organization-wide snapshot.
+        fetch_failed = fetch_failed or not project_discovery_complete
+    else:
+        try:
+            url = f"{org_url.rstrip('/')}/_apis/build/builds"
+            token = None
+            seen_tokens = set()
+            for _ in range(BUILD_MAX_PAGES):
+                params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
+                if token:
+                    params["continuationToken"] = token
+                res = requests.get(url, headers=headers, params=params, timeout=15)
+                if res.status_code != 200:
+                    organization_query_error = {"kind": "http", "status": res.status_code}
+                    fetch_failed = True
+                    break
+                org_fetch_succeeded = True
+                all_raw.extend(res.json().get("value", []))
+                next_token = (getattr(res, "headers", {}) or {}).get("x-ms-continuationtoken")
+                if not next_token:
+                    org_fetch_complete = True
+                    break
+                if next_token in seen_tokens:
+                    fetch_failed = True
+                    break
+                seen_tokens.add(next_token)
+                token = next_token
+            else:
+                fetch_failed = True
         except Exception as e:
-            logger.error("Project fallback build fetch error: %s", e)
+            fetch_failed = True
+            organization_query_error = {"kind": "timeout" if isinstance(e, requests.Timeout) else "network" if isinstance(e, requests.ConnectionError) else "error"}
+            logger.warning("Org-level builds query failed: %s", e)
+
+        # Project fallback if org query returns empty
+        if not org_fetch_succeeded:
+            try:
+                with sync_service.db_lock, sync_service.get_db_connection() as conn:
+                    projects = [r["project"] for r in conn.execute(
+                        "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
+                    ).fetchall()]
+                if len(projects) > BUILD_MAX_PAGES:
+                    projects = projects[:BUILD_MAX_PAGES]
+                    fetch_failed = True
+                for proj in projects[:BUILD_MAX_PAGES]:
+                    try:
+                        url = f"{org_url.rstrip('/')}/{proj}/_apis/build/builds"
+                        token = None
+                        seen_tokens = set()
+                        project_complete = False
+                        for _ in range(BUILD_MAX_PAGES):
+                            params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
+                            if token:
+                                params["continuationToken"] = token
+                            r = requests.get(url, headers=headers, params=params, timeout=10)
+                            if r.status_code != 200:
+                                break
+                            all_raw.extend(r.json().get("value", []))
+                            next_token = (getattr(r, "headers", {}) or {}).get("x-ms-continuationtoken")
+                            if not next_token:
+                                project_complete = True
+                                break
+                            if next_token in seen_tokens:
+                                break
+                            seen_tokens.add(next_token)
+                            token = next_token
+                        project_outcomes[proj] = project_complete
+                        if not project_complete:
+                            fetch_failed = True
+                    except Exception:
+                        fetch_failed = True
+                        project_outcomes[proj] = False
+            except Exception as e:
+                logger.error("Project fallback build fetch error: %s", e)
 
     normalized = []
     for raw in all_raw:
@@ -308,7 +384,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     final_runs = list(unique_map.values())
 
     fetch_complete = org_fetch_complete and bool(all_raw) and not fetch_failed
-    fetch_succeeded = org_fetch_succeeded or any(project_outcomes.values())
+    fetch_succeeded = org_fetch_succeeded or any(project_outcomes.values()) or (project_scoped and project_discovery_complete and not projects)
     if final_runs and fetch_succeeded:
         with sync_service.db_lock, sync_service.get_db_connection() as conn:
             cursor = conn.cursor()
@@ -347,7 +423,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
             "paginationBounded": not fetch_complete,
             "successfulProjects": sorted(p for p, ok in project_outcomes.items() if ok),
             "completenessScope": "discovered-projects/date-window",
-            "projectDiscoveryComplete": False,
+            "projectDiscoveryComplete": project_discovery_complete,
             "organizationSnapshotComplete": False,
         }}
     return final_runs
