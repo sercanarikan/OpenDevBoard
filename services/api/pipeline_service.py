@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional
 import requests
 
 import azure_http
+import project_inventory
 import sync_service
 
 logger = logging.getLogger("pipeline_service")
@@ -231,32 +232,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     if project_scoped:
         # Build List requires a project. Enumerate the accessible project inventory
         # first, including pages, instead of deriving scope from cached work items.
-        projects = []
-        token = None
-        seen = set()
-        for _ in range(100):
-            try:
-                params = {"$top": 100, "api-version": "7.1"}
-                if token:
-                    params["continuationToken"] = token
-                response = azure_http.get(f"{org_url.rstrip('/')}/_apis/projects", headers=headers, params=params, timeout=15)
-                if response.status_code != 200:
-                    break
-                values = response.json().get("value", [])
-                if any(not isinstance(p, dict) or not p.get("name") for p in values):
-                    break
-                projects.extend(p["name"] for p in values)
-                next_token = (getattr(response, "headers", {}) or {}).get("x-ms-continuationtoken")
-                if not next_token:
-                    # A full page without a continuation marker cannot prove it was the last page.
-                    project_discovery_complete = len(values) < 100
-                    break
-                if next_token in seen:
-                    break
-                seen.add(next_token)
-                token = next_token
-            except (requests.RequestException, ValueError, TypeError):
-                break
+        projects, project_discovery_complete = project_inventory.discover_projects(org_url, headers)
         if not project_discovery_complete:
             # Retain a useful but explicitly incomplete fallback if discovery fails.
             try:
