@@ -456,6 +456,7 @@ export interface TeamActivitySummary {
   contributors: TeamContributor[];
   repositories: TeamRepositoryStat[];
   lastSyncedAt?: string;
+  cacheStatus?: { outcome: string; complete: boolean; stale: boolean };
 }
 
 export interface TeamContributorsResponse {

@@ -16,7 +16,11 @@
     "timeout": "Azure DevOps dağıtım isteğine zaman aşımından önce yanıt vermedi.",
     "upstreamUnreachable": "Backend, dağıtım verisi için Azure DevOps'a bağlanamadı.",
     "upstreamHttp": "Azure DevOps dağıtım verisi için HTTP {{status}} döndürdü.",
-    "unknownTime": "zaman bilinmiyor"
+    "unknownTime": "zaman bilinmiyor",
+    "teamPartial": "Ekip verisi kısmi; bazı depolara erişilemedi veya veri güncel değil.",
+    "teamFailed": "Ekip aktivitesi alınamadı.",
+    "teamRefreshFailed": "Ekip aktivitesi güncellenemedi; önceki veri gösteriliyor.",
+    "refreshing": "Güncelleniyor"
   },
   "cards": {
     "myTasks": "Aktif Görevlerim",
