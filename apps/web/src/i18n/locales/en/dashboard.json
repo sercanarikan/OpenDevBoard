@@ -4,6 +4,7 @@
   "subtitle": "Daily summary of your active tasks, pending code reviews, and priority work",
   "cache": {
     "pipelinePartial": "Pipeline data is partial; some results may be missing.",
+    "pipelineAccessibleScope": "Showing results for the accessible projects.",
     "pipelineFailed": "Pipeline data could not be fetched.",
     "pipelineStale": "Pipeline data is out of date.",
     "pipelineEmpty": "No pipeline runs were found for this period.",

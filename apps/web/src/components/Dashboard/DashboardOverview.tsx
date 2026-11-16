@@ -30,6 +30,7 @@ import { PipelineInspector } from '../Pipelines/PipelineInspector';
 import { DeploymentInspector } from '../Deployments/DeploymentInspector';
 import { stateLabel } from '../../i18n/labels';
 import { getIntegrationState } from '../../utils/integrationStatus';
+import { getPipelineNotice } from '../../utils/pipelineNotice';
 
 type LoadState = { request: object; error: string | null; successfulScope?: string };
 
@@ -154,6 +155,7 @@ export const DashboardOverview: React.FC = () => {
   const isPRReady = !booting && !prSummaryLoading && !prSummaryError && prSummary !== null;
   const prIdentityUnavailable = !!prSummary?.reviewerIdentityStatus && prSummary.reviewerIdentityStatus.groupMembership !== 'available';
   const prCacheStale = !!prSummary?.cacheStatus?.stale;
+  const pipelineNotice = getPipelineNotice(pipelineSummary?.cacheStatus);
   const pipelineUnavailable = pipelineSummary?.cacheStatus?.outcome === 'failed' && !pipelineSummary.cacheStatus.lastSyncedAt;
   const deploymentCache = deploymentSummary?.cacheStatus;
   const formatCacheTime = (value: string) => new Date(value.endsWith('Z') ? value : `${value}Z`).toLocaleString();
@@ -548,9 +550,9 @@ export const DashboardOverview: React.FC = () => {
                 <div className="p-2.5 rounded-xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-center text-xs text-rose-600 dark:text-rose-400">
                   {pipelineSummaryError}
                 </div>
-              ) : pipelineSummary?.cacheStatus?.outcome === 'partial' || pipelineSummary?.cacheStatus?.outcome === 'failed' || pipelineSummary?.cacheStatus?.stale ? (
+              ) : pipelineNotice === 'partial' || pipelineNotice === 'failed' || pipelineNotice === 'stale' ? (
                 <div role="status" className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-center text-xs text-amber-700 dark:text-amber-300">
-                  {pipelineSummary.cacheStatus.outcome === 'failed' ? t('cache.pipelineFailed') : pipelineSummary.cacheStatus.outcome === 'partial' ? t('cache.pipelinePartial') : t('cache.pipelineStale')}
+                  {pipelineNotice === 'failed' ? t('cache.pipelineFailed') : pipelineNotice === 'partial' ? t('cache.pipelinePartial') : t('cache.pipelineStale')}
                 </div>
               ) : pipelineSummary?.totalRuns === 0 ? (
                 <div role="status" className="p-2.5 text-center text-xs text-slate-500">{t('cache.pipelineEmpty')}</div>
@@ -578,6 +580,11 @@ export const DashboardOverview: React.FC = () => {
                   <span>{t('sections.noFailedPipelines')}</span>
                 </div>
               ) : null}
+              {!pipelineInitialLoading && !pipelineSummaryError && pipelineNotice === 'accessible' && (
+                <div role="note" data-testid="dash-pipeline-accessible-scope-note" className="text-center text-[11px] text-slate-500 dark:text-slate-400">
+                  {t('cache.pipelineAccessibleScope')}
+                </div>
+              )}
             </div>
 
             {/* Deployments Overview Card */}

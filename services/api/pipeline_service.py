@@ -205,13 +205,15 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
         with sync_service.db_lock, sync_service.get_db_connection() as conn:
             cursor = conn.cursor()
             state = cursor.execute("SELECT * FROM pipeline_cache_state WHERE id=1").fetchone()
+            # completed_at is only recorded for reads whose project inventory and every project query finished
+            # (see `cacheable` below), so a fresh partial+completed_at row is a complete accessible-project snapshot.
             if state and state["outcome"] == "partial" and state["requested_days"] == days and state["completed_at"]:
                 try:
                     last_sync_dt = datetime.fromisoformat(state["completed_at"])
                     if 0 <= (now - last_sync_dt).total_seconds() < CACHE_TTL_SECONDS:
                         cursor.execute("SELECT * FROM pipeline_runs WHERE queue_time >= ? ORDER BY queue_time DESC", ((now - timedelta(days=days)).isoformat(timespec="seconds") + "Z",))
                         cached = [_row_to_pipeline_dict(r) for r in cursor.fetchall()]
-                        return {"items": cached, "cacheStatus": {"outcome": "partial", "complete": False, "stale": False, "paginationBounded": True, "completenessScope": "discovered-projects/date-window", "projectDiscoveryComplete": False, "organizationSnapshotComplete": False}} if include_cache_status else cached
+                        return {"items": cached, "cacheStatus": {"outcome": "partial", "complete": False, "stale": False, "paginationBounded": True, "completenessScope": "discovered-projects/date-window", "projectDiscoveryComplete": True, "accessibleScopeComplete": True, "organizationSnapshotComplete": False}} if include_cache_status else cached
                 except Exception:
                     pass
 
@@ -412,6 +414,9 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     # TTL cache above can serve it; reads with failures keep completed_at empty and are retried on the next request.
     cacheable = fetch_complete or (project_scoped and fetch_succeeded and not fetch_failed)
     completed_at = now_iso if cacheable else None
+    # True only when the accessible-project inventory and every required query finished all their pages. It is
+    # independent of `outcome`/`organizationSnapshotComplete`, which keep their organization-wide meaning.
+    accessible_scope_complete = fetch_complete or (project_scoped and project_discovery_complete and fetch_succeeded and not fetch_failed)
     with sync_service.db_lock, sync_service.get_db_connection() as conn:
         conn.execute('''INSERT INTO pipeline_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
             VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET requested_days=excluded.requested_days,
@@ -429,6 +434,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
             "successfulProjects": sorted(p for p, ok in project_outcomes.items() if ok),
             "completenessScope": "discovered-projects/date-window",
             "projectDiscoveryComplete": project_discovery_complete,
+            "accessibleScopeComplete": accessible_scope_complete,
             "organizationSnapshotComplete": False,
         }}
     return final_runs

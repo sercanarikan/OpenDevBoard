@@ -15,6 +15,7 @@ import {
 import { useApp } from '../../context/useApp';
 import type { PipelineRun, PipelineSummary } from '../../types/paging';
 import { PipelineInspector } from './PipelineInspector';
+import { getPipelineNotice } from '../../utils/pipelineNotice';
 
 export const PipelineExplorer: React.FC = () => {
   const { t } = useTranslation(['pipelines', 'common', 'dashboard']);
@@ -148,13 +149,19 @@ export const PipelineExplorer: React.FC = () => {
     }
   };
 
+  const pipelineNotice = getPipelineNotice(cacheStatus);
   const isReady = !loading && summary !== null && !(cacheStatus?.outcome === 'failed' && !cacheStatus.lastSyncedAt);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
-      {!loading && !error && cacheStatus && (cacheStatus.outcome === 'partial' || cacheStatus.outcome === 'failed' || cacheStatus.stale) && (
+      {!loading && !error && pipelineNotice === 'accessible' && (
+        <div role="note" data-testid="pipelines-accessible-scope-note" className="mx-3 mt-3 text-xs text-slate-500 dark:text-slate-400">
+          {t('cache.pipelineAccessibleScope', { ns: 'dashboard' })}
+        </div>
+      )}
+      {!loading && !error && (pipelineNotice === 'partial' || pipelineNotice === 'failed' || pipelineNotice === 'stale') && (
         <div role="status" className="m-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
-          {t(cacheStatus.outcome === 'failed' ? 'cache.pipelineFailed' : cacheStatus.outcome === 'partial' ? 'cache.pipelinePartial' : 'cache.pipelineStale', { ns: 'dashboard' })}
+          {t(pipelineNotice === 'failed' ? 'cache.pipelineFailed' : pipelineNotice === 'partial' ? 'cache.pipelinePartial' : 'cache.pipelineStale', { ns: 'dashboard' })}
         </div>
       )}
       {/* 1. Summary Cards Top Strip */}
