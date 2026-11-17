@@ -140,7 +140,7 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
     <aside
       data-testid="pr-inspector"
       data-id={pr.id}
-      className="w-96 min-w-[340px] max-w-md border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] flex flex-col h-full z-10 select-text shrink-0 shadow-lg"
+      className="w-96 xl:w-[460px] min-w-[340px] max-w-lg border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] flex flex-col h-full z-10 select-text shrink-0 shadow-lg"
     >
       {/* Top Header */}
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3 bg-slate-50/50 dark:bg-slate-900/40 shrink-0">
@@ -159,6 +159,15 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
           </h2>
         </div>
 
+        <div className="flex items-center gap-2 shrink-0">
+        {pr.url && (
+          <a href={pr.url} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-md border border-slate-200 dark:border-slate-700 transition-colors"
+            title={t('inspector.openInDevops')}>
+            <span>Azure DevOps</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        )}
         <button
           onClick={onClose}
           data-testid="inspector-close"
@@ -167,22 +176,25 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
         >
           <X className="w-4 h-4" />
         </button>
+        </div>
       </div>
 
       {/* Main Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-5 text-xs">
-        {/* Open in Azure DevOps Button */}
-        {pr.url && (
-          <a
-            href={pr.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2 w-full py-2 px-3 rounded-lg bg-brand-50 hover:bg-brand-100 dark:bg-brand-950/60 dark:hover:bg-brand-900/60 text-brand-700 dark:text-brand-300 font-semibold border border-brand-200 dark:border-brand-800 transition-colors"
-          >
-            <span>{t('inspector.openInDevops')}</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        )}
+        {/* Description Section */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5 font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider text-[10px]">
+            <FileText className="w-3.5 h-3.5 text-brand-500" />
+            <span>{t('inspector.description')}</span>
+          </div>
+          <DescriptionView
+            loading={detail.status === 'loading'}
+            failed={detail.status === 'error'}
+            status={fullPr?.descriptionStatus}
+            blocks={[{ text: fullPr ? fullPr.description : detail.status === 'error' ? pr.description : '' }]}
+            onRetry={retryDetail}
+          />
+        </div>
 
         {/* Branches & Merge Status Card */}
         <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/50 space-y-2">
@@ -280,21 +292,6 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
               ))}
             </div>
           )}
-        </div>
-
-        {/* Description Section */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5 font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider text-[10px]">
-            <FileText className="w-3.5 h-3.5 text-brand-500" />
-            <span>{t('inspector.description')}</span>
-          </div>
-          <DescriptionView
-            loading={detail.status === 'loading'}
-            failed={detail.status === 'error'}
-            status={fullPr?.descriptionStatus}
-            blocks={[{ text: fullPr ? fullPr.description : detail.status === 'error' ? pr.description : '' }]}
-            onRetry={retryDetail}
-          />
         </div>
 
         {/* Associated Work Items */}
