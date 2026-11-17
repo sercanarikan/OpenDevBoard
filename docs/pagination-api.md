@@ -70,6 +70,8 @@ Sidebar/sekme sayaçları ve filtre seçenekleri için. **Liste sorgusuyla aynı
 
 Cache-first, bulunamazsa Azure'dan okur (fixture modunda yalnızca cache). Context kayıtlar (ebeveyn / bağımlılık hedefi) da döner. Silinmiş kayıt için 404 (Azure'dan tekrar bulunursa canlı veri döner).
 
+Yalnızca bu detay yanıtı açıklama alanlarını taşır (liste ve `batch` yanıtları büyük metinleri içermez): `description` (`System.Description`, HTML), `reproSteps` (Bug için `Microsoft.VSTS.TCM.ReproSteps`, HTML) ve `descriptionStatus` (`available` | `empty` | `unavailable`). Azure DevOps boş alanları göndermediği için senkronize edilmiş bir kayıtta eksik alan `empty` sayılır. Açıklama saklanmadan önce önbelleğe alınmış eski kayıtlar için metin ilk açılışta tek bir salt okunur `GET` ile okunup önbelleğe yazılır; okunamazsa `unavailable` döner (boş değil). `work_items` tablosuna `repro_steps` sütunu eklendi (mevcut önbellekte otomatik `ALTER TABLE`).
+
 ## 4. `GET /api/work-items/progress?ids=1,2,3`
 
 En fazla 500 id. Kanonik progress (`apps/web/src/utils/progress.ts` ile aynı kural), **görünür sayfadan bağımsız**, tam hiyerarşiden hesaplanır:

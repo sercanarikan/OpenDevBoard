@@ -15,9 +15,9 @@
     "searchPlaceholder": "Başlık, ID, yazar veya depoda ara..."
   },
   "status": {
-    "active": "Aktif (Açık)",
-    "completed": "Tamamlandı (Birleştirildi)",
-    "abandoned": "Terk Edildi (Kapatıldı)",
+    "active": "Aktif",
+    "completed": "Tamamlandı",
+    "abandoned": "Terk Edildi",
     "all": "Tüm Durumlar",
     "draft": "Taslak"
   },

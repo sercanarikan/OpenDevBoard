@@ -269,6 +269,7 @@ export function adaptLiveWorkItemsPool(
     const iteration: string | undefined = raw.iteration || fields['System.IterationPath'] || undefined;
     const areaPath: string | undefined = raw.areaPath || fields['System.AreaPath'] || undefined;
     const description: string | undefined = raw.description || fields['System.Description'] || undefined;
+    const reproSteps: string | undefined = raw.reproSteps || fields['Microsoft.VSTS.TCM.ReproSteps'] || undefined;
     const url: string = raw.url || `${baseUrl}/${project}/_workitems/edit/${id}`;
 
     // Normalize relations
@@ -292,6 +293,7 @@ export function adaptLiveWorkItemsPool(
       iteration,
       areaPath,
       description,
+      reproSteps,
       url,
       storyPoints,
       relations,

@@ -18,6 +18,8 @@ import type { WorkItem } from '../../types';
 import { isWorkItemCompleted, getWorkItemStateCategory } from '../../utils/workState';
 import { UserAvatar } from '../Common/UserAvatar';
 import { stateLabel } from '../../i18n/labels';
+import { DescriptionView } from '../Common/DescriptionView';
+import { useRecordDetail } from '../../hooks/useRecordDetail';
 
 interface WorkItemInspectorProps {
   item: WorkItem;
@@ -36,6 +38,15 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
 }) => {
   const { t } = useTranslation();
   const { api, refreshToken } = useApp();
+
+  // Descriptions are not part of list rows; the full record is read by id so loading, failure and "empty" stay distinct.
+  const loadDetail = React.useCallback((id: number, signal: AbortSignal) => api.item(id, signal), [api]);
+  const { state: detail, retry: retryDetail } = useRecordDetail(item.id, loadDetail);
+  const body = detail.status === 'ready' ? detail.data : null;
+  const descriptionBlocks = [
+    { text: body ? body.description ?? '' : detail.status === 'error' ? item.description ?? '' : '' },
+    { label: t('descriptionView.reproSteps'), text: body?.reproSteps ?? '' }
+  ];
 
   // The Inspector never depends on what a list currently shows: parent, children and relation targets are loaded by
   // id from the API (parents/children may be completed or outside the active scope and are not on any page).
@@ -103,7 +114,7 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
   };
 
   return (
-    <aside className="w-full sm:w-[360px] md:w-[380px] lg:w-[400px] xl:w-[420px] h-full border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E1422] flex flex-col shrink-0 overflow-hidden shadow-lg lg:shadow-none animate-in slide-in-from-right duration-150 select-none">
+    <aside className="w-full sm:w-[360px] md:w-[380px] lg:w-[400px] xl:w-[460px] h-full border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E1422] flex flex-col shrink-0 overflow-hidden shadow-lg lg:shadow-none animate-in slide-in-from-right duration-150 select-none">
       {/* Inspector Header */}
       <div className="h-14 px-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0 bg-slate-50/70 dark:bg-slate-900/40">
         <div className="flex items-center gap-2.5">
@@ -131,6 +142,8 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
 
           <button
             onClick={onClose}
+            data-testid="inspector-close"
+            aria-label={t('inspector.closeTitle')}
             className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
             title={t('inspector.closeTitle')}
           >
@@ -195,6 +208,20 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
           </div>
         </div>
 
+        {/* Description */}
+        <div className="space-y-1.5" data-testid="work-item-description">
+          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
+            {t('fields.description')}
+          </span>
+          <DescriptionView
+            loading={detail.status === 'loading'}
+            failed={detail.status === 'error'}
+            status={body?.descriptionStatus}
+            blocks={descriptionBlocks}
+            onRetry={retryDetail}
+          />
+        </div>
+
         {/* Essential Properties (Clean table without nested cards) */}
         <div className="border border-slate-200 dark:border-slate-800 rounded-lg divide-y divide-slate-100 dark:divide-slate-800 text-xs">
           <div className="flex items-center justify-between p-2.5 px-3">
@@ -236,18 +263,6 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
             </div>
           )}
         </div>
-
-        {/* Description */}
-        {item.description && (
-          <div className="space-y-1.5">
-            <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
-              {t('fields.description')}
-            </span>
-            <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-              {item.description}
-            </div>
-          </div>
-        )}
 
         {/* Parent Hierarchy */}
         <div className="space-y-2">

@@ -337,5 +337,15 @@
   "errors": {
     "pageNotFound": "Page Not Found",
     "pageNotFoundDesc": "The requested URL does not exist or may have moved. Please verify the URL or return to the dashboard."
+  },
+  "descriptionView": {
+    "loading": "Loading description…",
+    "empty": "No description was entered in Azure DevOps.",
+    "error": "The description could not be loaded. This does not mean it is empty.",
+    "partial": "The full description could not be loaded; only the text already available is shown.",
+    "retry": "Retry",
+    "showAll": "Show full description",
+    "showLess": "Show less",
+    "reproSteps": "Repro steps"
   }
 }

@@ -57,6 +57,10 @@ export interface WorkItem {
   iteration?: string;
   areaPath?: string;
   description?: string;
+  /** Bug repro steps (Microsoft.VSTS.TCM.ReproSteps); only present on the detail response. */
+  reproSteps?: string;
+  /** `available`: text exists, `empty`: confirmed none in Azure DevOps, `unavailable`: could not be read. */
+  descriptionStatus?: 'available' | 'empty' | 'unavailable';
   url: string;
   storyPoints?: number;
   relations: WorkItemRelations;
