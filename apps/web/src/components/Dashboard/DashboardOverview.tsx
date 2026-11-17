@@ -20,6 +20,8 @@ import {
   Users,
   History
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { pullRequestsPath } from '../../utils/prFilter';
 import { useApp } from '../../context/useApp';
 import type { WorkItem, ViewMode } from '../../types';
 import type { PullRequest, HistoryEvent, TeamActivitySummary } from '../../types/paging';
@@ -67,6 +69,7 @@ export const DashboardOverview: React.FC = () => {
     setSelectedPR
   } = useApp();
 
+  const navigate = useNavigate();
   const [priorityItems, setPriorityItems] = useState<WorkItem[]>([]);
   const [recentItems, setRecentItems] = useState<WorkItem[]>([]);
   const [pendingPRs, setPendingPRs] = useState<PullRequest[]>([]);
@@ -325,7 +328,7 @@ export const DashboardOverview: React.FC = () => {
 
           {/* Card 4: My Open PRs */}
           <div
-            onClick={() => navigateTo('pull-requests')}
+            onClick={() => navigate(pullRequestsPath('created-by-me', filters.selectedProject))}
             data-testid="dash-card-my-prs"
             className="group cursor-pointer p-5 rounded-2xl bg-white dark:bg-[#0E131F] border border-slate-200 dark:border-slate-800 hover:border-sky-300 dark:hover:border-sky-800/80 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between"
           >

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/useApp';
 import type { PullRequest, PRQuickFilter, PRStatus, PullRequestReviewer } from '../../types/paging';
+import { parsePRFilter } from '../../utils/prFilter';
 import { PullRequestInspector } from './PullRequestInspector';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { ReviewerRequirementBadge } from './ReviewerRequirementBadge';
@@ -33,7 +34,7 @@ export const PullRequestExplorer: React.FC = () => {
     setSelectedPR
   } = useApp();
 
-  const [quickFilter, setQuickFilter] = useState<PRQuickFilter>('needs-my-review');
+  const [quickFilter, setQuickFilter] = useState<PRQuickFilter>(() => parsePRFilter(window.location.search));
   const [statusFilter, setStatusFilter] = useState<PRStatus>('active');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
