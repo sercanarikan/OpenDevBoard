@@ -26,6 +26,8 @@ This guide applies only to the public `apps/web` React/TypeScript/Vite applicati
 
 ## Repository changes
 
+- Write titles and descriptions of new GitHub issues and pull requests in English. This convention does not change the language of user-facing documentation or private collaboration.
+
 - Keep the React/TypeScript/Vite and Flask/Python patterns used by neighboring code; add focused tests for behavior changes.
 - Keep user-facing documentation accurate and in its existing language. Do not include real customer, organization, project, work-item, or operational measurement data.
 - Keep changes focused and use Conventional Commit prefixes (`feat:`, `fix:`, `test:`, `docs:`, `chore:`). Never force-push or rewrite history.
