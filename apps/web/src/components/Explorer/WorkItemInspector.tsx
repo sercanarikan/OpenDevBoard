@@ -142,6 +142,8 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
 
           <button
             onClick={onClose}
+            data-testid="inspector-close"
+            aria-label={t('inspector.closeTitle')}
             className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
             title={t('inspector.closeTitle')}
           >

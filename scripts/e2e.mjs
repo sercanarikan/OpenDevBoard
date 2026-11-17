@@ -18,7 +18,8 @@ const defaultSuites = [
   { name: 'fixture', script: 'e2e-fixture.mjs', edition: 'public' },
   { name: 'summary-status', script: 'e2e-summary-status.mjs', edition: 'public' },
   { name: 'dashboard-cards', script: 'e2e-dashboard-cards.mjs', edition: 'public' },
-  { name: 'descriptions', script: 'e2e-descriptions.mjs', edition: 'public' }
+  { name: 'descriptions', script: 'e2e-descriptions.mjs', edition: 'public' },
+  { name: 'detail-navigation', script: 'e2e-detail-navigation.mjs', edition: 'public' }
 ];
 const liveSuites = [
   'e2e-stack.mjs', 'e2e-routing.mjs', 'e2e-smoke.mjs', 'e2e-dashboard-pr.mjs',

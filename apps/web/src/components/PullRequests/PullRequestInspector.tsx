@@ -161,6 +161,7 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
 
         <button
           onClick={onClose}
+          data-testid="inspector-close"
           aria-label={t('actions.close', { ns: 'common' })}
           className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
         >
@@ -313,6 +314,7 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
                 <button
                   key={w.id}
                   onClick={() => openWorkItem(w.id)}
+                  data-testid="pr-linked-work-item"
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-brand-50 hover:bg-brand-100 text-brand-700 dark:bg-brand-950/60 dark:text-brand-300 border border-brand-200 dark:border-brand-800 transition-colors"
                   title={t('inspector.inspectWorkItem')}
                 >

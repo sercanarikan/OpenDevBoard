@@ -18,6 +18,7 @@ import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockDat
 import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
 import i18n from '../i18n';
 import { apiErrorTranslationKey } from '../utils/apiErrorMessage';
+import { pageKeyFromPath, visibleSelection, select, closeKind, refreshWorkItem, type Selection } from '../utils/selection';
 
 export const SYNC_POLL_MS = 20000;
 const LOST_AFTER_FAILURES = 2;
@@ -92,7 +93,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const location = useLocation();
   const navigate = useNavigate();
   const viewMode = getViewFromPath(location.pathname);
-  const [selectedWorkItem, setSelectedWorkItemState] = useState<WorkItem | null>(null);
+  // One slot for the open record, tied to the page it was opened on (see utils/selection).
+  const page = pageKeyFromPath(location.pathname);
+  const pageRef = useRef(page);
+  useEffect(() => { pageRef.current = page; }, [page]);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const openSelection = visibleSelection(selection, page);
+  if (selection && !openSelection) setSelection(null);
+  const selectedWorkItem = openSelection?.kind === 'workItem' ? openSelection.value : null;
+  const selectedPR = openSelection?.kind === 'pullRequest' ? openSelection.value : null;
+  const selectedPipelineRun = openSelection?.kind === 'pipelineRun' ? openSelection.value : null;
 
   const [filters, setFilters] = useState<FilterOptions>(() => {
     const params = new URLSearchParams(location.search);
@@ -407,14 +417,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [poolEnabled, poolKey]);
 
   // ---- Inspector -----------------------------------------------------------------------------
-  const setSelectedWorkItem = useCallback((item: WorkItem | null) => setSelectedWorkItemState(item), []);
+  const setSelectedWorkItem = useCallback((item: WorkItem | null) => {
+    if (item) setSelection(select('workItem', pageRef.current, item));
+    else setSelection(cur => closeKind(cur, 'workItem'));
+  }, []);
 
   const openWorkItem = useCallback(
     async (id: number): Promise<boolean> => {
+      const origin = pageRef.current; // a slow response must not open on a page the user has already left
       try {
         const item = await api.item(id);
         if (!item) return false;
-        setSelectedWorkItemState(item);
+        setSelection(select('workItem', origin, item));
         return true;
       } catch (e) {
         console.warn('open work item failed:', errMessage(e));
@@ -434,7 +448,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     api
       .item(id, ctrl.signal)
       .then(fresh => {
-        if (fresh && !ctrl.signal.aborted) setSelectedWorkItemState(current => current?.id === id ? fresh : current);
+        if (fresh && !ctrl.signal.aborted) setSelection(current => refreshWorkItem(current, fresh));
       })
       .catch(() => undefined);
     return () => ctrl.abort();
@@ -448,8 +462,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const { data: prSummary, loading: prSummaryLoading, error: prSummaryError } = useScopedSummary(prRequest, !booting, refreshToken);
   const { data: pipelineSummary, loading: pipelineSummaryLoading, error: pipelineSummaryError } = useScopedSummary(pipelineRequest, !booting, refreshToken);
   const { data: deploymentSummary, loading: deploymentSummaryLoading, error: deploymentSummaryError } = useScopedSummary(deploymentRequest, !booting, refreshToken);
-  const [selectedPR, setSelectedPR] = useState<PullRequest | null>(null);
-  const [selectedPipelineRun, setSelectedPipelineRun] = useState<PipelineRun | null>(null);
+  const setSelectedPR = useCallback((pr: PullRequest | null) => {
+    if (pr) setSelection(select('pullRequest', pageRef.current, pr));
+    else setSelection(cur => closeKind(cur, 'pullRequest'));
+  }, []);
+  const setSelectedPipelineRun = useCallback((run: PipelineRun | null) => {
+    if (run) setSelection(select('pipelineRun', pageRef.current, run));
+    else setSelection(cur => closeKind(cur, 'pipelineRun'));
+  }, []);
 
   const [deploymentSelection, setDeploymentSelection] = useState<{ deployment: DeploymentRecord; project: string } | null>(null);
   if (deploymentSelection && deploymentSelection.project !== filters.selectedProject) {
@@ -462,10 +482,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const openPR = useCallback(
     async (id: number): Promise<boolean> => {
+      const origin = pageRef.current;
       try {
         const pr = await api.pullRequest(id);
         if (!pr) return false;
-        setSelectedPR(pr);
+        setSelection(select('pullRequest', origin, pr));
         return true;
       } catch (e) {
         console.warn('open PR failed:', errMessage(e));
@@ -485,12 +506,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsCommandPaletteOpen(true);
       } else if (e.key === 'Escape') {
         if (isCommandPaletteOpen) setIsCommandPaletteOpen(false);
-        else if (selectedWorkItem) setSelectedWorkItemState(null);
+        else if (selection) setSelection(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCommandPaletteOpen, selectedWorkItem]);
+  }, [isCommandPaletteOpen, selection]);
 
   const syncIndicator = useMemo(
     () => deriveSyncIndicator({ source, report: syncReport, isSyncing }),
