@@ -269,6 +269,17 @@ def parse_azure_pr(raw_pr: Dict[str, Any], org_url: str) -> Dict[str, Any]:
 # Deterministic Offline Fixture PRs
 # -----------------------------------------------------------------------------
 
+FIXTURE_LONG_PR_DESCRIPTION = (
+    "## Summary\n\n"
+    "Implements tenant token isolation according to RFC 6749 and adds an in-memory cache for validated session tokens.\n\n"
+    "## Changes\n\n"
+    + "\n".join(f"- Synthetic change {i}: **validates** the `tenant` claim before the cache lookup." for i in range(1, 25))
+    + "\n\n## Notes\n\n> Synthetic fixture text, longer than the 400 characters Azure DevOps keeps in list responses.\n\n"
+    "```\nconst tenant = claims.tenant;\n```\n\n"
+    "See [the design note](https://example.com/design). <script>alert('blocked')</script>\n"
+)
+
+
 def build_fixture_prs() -> List[Dict[str, Any]]:
     """Builds 16 deterministic PRs across Alpha, Beta, Gamma for CI & offline use."""
     user = {
@@ -299,7 +310,7 @@ def build_fixture_prs() -> List[Dict[str, Any]]:
         "project": "Alpha",
         "repository": "Alpha.Web",
         "title": "feat(auth): Add multi-tenant token validation and token caching",
-        "description": "Implements tenant token isolation according to RFC 6749 and adds SQLite memory cache for validated session JWTs.",
+        "description": FIXTURE_LONG_PR_DESCRIPTION,
         "status": "active",
         "isDraft": 0,
         "authorId": reviewer_ada["id"],
@@ -955,6 +966,41 @@ def get_pr_summary(all_prs: List[Dict[str, Any]], project: str = "all", current_
         "totalActive": len(active_in_scope),
         "lastSyncedAt": _utcnow().isoformat()
     }
+
+
+# Azure DevOps shortens ``description`` in pull request *list* responses; the single-PR response carries the full text.
+PR_LIST_DESCRIPTION_LIMIT = 400
+
+
+def with_full_description(pr: Dict[str, Any], org_url: Optional[str] = None, pat: Optional[str] = None) -> Dict[str, Any]:
+    """Adds ``descriptionStatus`` to a PR detail and, outside fixture mode, replaces the cached (possibly shortened)
+    description with the full text read from Azure DevOps (one GET).
+
+    ``descriptionStatus``: ``available`` (text present), ``empty`` (confirmed none) or ``unavailable`` (the full
+    text could not be read; ``description`` then holds only what the list cache has, which may be a shortened preview).
+    """
+    result = dict(pr)
+    cached = result.get("description") or ""
+    if org_url and pat:
+        try:
+            url = (f"{org_url.rstrip('/')}/{quote(str(pr.get('project') or ''), safe='')}/_apis/git/repositories/"
+                   f"{quote(str(pr.get('repository') or ''), safe='')}/pullrequests/{int(pr['id'])}")
+            res = requests.get(url, headers=sync_service.get_devops_headers(pat), params={"api-version": "7.1"}, timeout=10)
+            if res.status_code == 200:
+                full = (res.json() or {}).get("description")
+                full = full if isinstance(full, str) else ""
+                result["description"] = full
+                result["descriptionStatus"] = "available" if full.strip() else "empty"
+                return result
+        except Exception:
+            pass
+        result["descriptionStatus"] = "unavailable"
+        return result
+    if cached.strip():
+        result["descriptionStatus"] = "available"
+    else:
+        result["descriptionStatus"] = "empty"
+    return result
 
 
 def get_single_pr_details(all_prs: List[Dict[str, Any]], pr_id: int, current_user: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:

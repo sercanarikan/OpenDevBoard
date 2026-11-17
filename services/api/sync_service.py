@@ -108,6 +108,7 @@ def init_db():
             ('deleted_at', 'TEXT'),
             ('last_seen_at', 'TEXT'),
             ('is_context', 'INTEGER DEFAULT 0'),
+            ('repro_steps', 'TEXT'),
         ):
             if col not in existing_cols:
                 cursor.execute(f'ALTER TABLE work_items ADD COLUMN {col} {ddl}')
@@ -258,6 +259,10 @@ def parse_work_item(item, org_url):
             dep_ids.append(target_id)
 
     story_points = fields.get("Microsoft.VSTS.Scheduling.StoryPoints")
+    # Azure DevOps omits empty fields, so a fetched item that lacks them is a *known* empty description ('').
+    # NULL in the cache is reserved for rows synced before descriptions were stored (unknown).
+    description = _text_field(fields.get("System.Description"))
+    repro_steps = _text_field(fields.get("Microsoft.VSTS.TCM.ReproSteps"))
     url = item.get("_links", {}).get("html", {}).get("href") or f"{org_url}/{project}/_workitems/edit/{item_id}"
 
     return {
@@ -284,6 +289,8 @@ def parse_work_item(item, org_url):
         "is_blocked": 0,
         "is_blocking": 0,
         "url": url,
+        "description": description,
+        "repro_steps": repro_steps,
         "relations": {
             "predecessors": predecessors,
             "successors": successors,
@@ -295,11 +302,15 @@ def parse_work_item(item, org_url):
     }
 
 
+def _text_field(value):
+    return value if isinstance(value, str) else ""
+
+
 _UPSERT_COLUMNS = (
     "id, title, type, state, project, assigned_to, assigned_avatar, priority, iteration, area_path, "
     "parent_id, parent_title, parent_type, story_points, changed_date, created_date, is_bug, is_task, "
     "is_unassigned, is_active, is_blocked, is_blocking, url, relations_json, last_synced_at, "
-    "last_seen_at, deleted_at, is_context"
+    "last_seen_at, deleted_at, is_context, description, repro_steps"
 )
 
 _UPSERT_UPDATE = '''
@@ -327,17 +338,19 @@ _UPSERT_UPDATE = '''
     last_synced_at = excluded.last_synced_at,
     last_seen_at = excluded.last_seen_at,
     deleted_at = NULL,
-    is_context = excluded.is_context
+    is_context = excluded.is_context,
+    description = excluded.description,
+    repro_steps = excluded.repro_steps
 '''
 
 _UPSERT_MAIN_SQL = (
-    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(28))}) "
+    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(30))}) "
     f"ON CONFLICT(id) DO UPDATE SET {_UPSERT_UPDATE}"
 )
 
 # Context data must never overwrite an in-scope active row: only context rows, inactive/completed rows, or hollow rows are refreshed.
 _UPSERT_CONTEXT_SQL = (
-    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(28))}) "
+    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(30))}) "
     f"ON CONFLICT(id) DO UPDATE SET {_UPSERT_UPDATE} WHERE work_items.is_context = 1 OR work_items.is_active = 0 OR work_items.relations_json IS NULL"
 )
 
@@ -350,7 +363,8 @@ def _row_params(item, now_iso, is_context):
         item["story_points"], item["changed_date"], item["created_date"], item["is_bug"],
         item["is_task"], item["is_unassigned"], item["is_active"], item["is_blocked"],
         item["is_blocking"], item["url"], json.dumps(item["relations"]), now_iso,
-        now_iso, None, 1 if is_context else 0
+        now_iso, None, 1 if is_context else 0,
+        item.get("description"), item.get("repro_steps")
     )
 
 
@@ -874,8 +888,25 @@ def get_data_version():
 # Read paths (all exclude soft-deleted rows; lists / counts exclude context rows)
 # ----------------------------------------------------------------------------------------------
 
-def row_to_work_item_dict(row):
-    """Converts a SQLite row into DevOpsFlow WorkItem format."""
+def body_payload(description, repro_steps):
+    """Description fields of a work item detail response.
+
+    ``descriptionStatus`` keeps three situations apart: ``available`` (text exists), ``empty`` (Azure DevOps
+    confirmed there is none) and ``unavailable`` (the text could not be read, so nothing can be said about it).
+    """
+    if description is None and repro_steps is None:
+        return {"description": "", "reproSteps": "", "descriptionStatus": "unavailable"}
+    description, repro_steps = description or "", repro_steps or ""
+    has_text = bool(description.strip() or repro_steps.strip())
+    return {"description": description, "reproSteps": repro_steps,
+            "descriptionStatus": "available" if has_text else "empty"}
+
+
+def row_to_work_item_dict(row, include_body=False):
+    """Converts a SQLite row into DevOpsFlow WorkItem format.
+
+    Description bodies can be large, so list/batch payloads leave them out; only the single-item detail
+    response (``include_body=True``) carries them."""
     item_id = row['id']
     relations = {}
     if row['relations_json']:
@@ -914,7 +945,8 @@ def row_to_work_item_dict(row):
         "hasUnresolvedPredecessors": has_unresolved_predecessors(relations),
         "url": row['url'],
         "relations": relations,
-        "children": []
+        "children": [],
+        **(body_payload(row['description'], row['repro_steps']) if include_body else {}),
     }
 
 
@@ -1164,6 +1196,21 @@ def get_counts(current_user=''):
         }
 
 
+def _fetch_body_fields(item_id, org_url, pat):
+    """Reads only the description fields of one work item. Returns (description, repro_steps) or None on failure."""
+    try:
+        url = (f"{org_url}/_apis/wit/workitems/{item_id}"
+               "?fields=System.Description,Microsoft.VSTS.TCM.ReproSteps&api-version=7.1")
+        res = requests.get(url, headers=get_devops_headers(pat), timeout=10)
+        if res.status_code != 200:
+            return None
+        fields = (res.json() or {}).get("fields") or {}
+        return _text_field(fields.get("System.Description")), _text_field(fields.get("Microsoft.VSTS.TCM.ReproSteps"))
+    except Exception as ex:
+        logger.warning(f"Error fetching description of item {item_id}: {ex}")
+        return None
+
+
 def get_single_item(item_id, org_url=None, pat=None):
     """Retrieves a single item from SQLite (alive rows, context rows included) or, outside fixture mode,
     reads it live from Azure DevOps when it is not cached."""
@@ -1171,8 +1218,17 @@ def get_single_item(item_id, org_url=None, pat=None):
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM work_items WHERE id = ? AND deleted_at IS NULL", (item_id,))
         row = cursor.fetchone()
-        if row:
-            return row_to_work_item_dict(row)
+    if row:
+        if row['description'] is None and row['repro_steps'] is None and not is_fixture_mode() and org_url and pat:
+            # Row cached before descriptions were stored: read just the body fields live (GET only) and keep them.
+            body = _fetch_body_fields(item_id, org_url, pat)
+            if body is not None:
+                with db_lock, get_db_connection() as conn:
+                    conn.execute('UPDATE work_items SET description = ?, repro_steps = ? WHERE id = ?',
+                                 (body[0], body[1], item_id))
+                    conn.commit()
+                    row = conn.execute("SELECT * FROM work_items WHERE id = ? AND deleted_at IS NULL", (item_id,)).fetchone() or row
+        return row_to_work_item_dict(row, include_body=True)
 
     if is_fixture_mode():
         return None
@@ -1209,7 +1265,8 @@ def get_single_item(item_id, org_url=None, pat=None):
                     "isBlocking": False,
                     "url": parsed["url"],
                     "relations": parsed["relations"],
-                    "children": []
+                    "children": [],
+                    **body_payload(parsed["description"], parsed["repro_steps"]),
                 }
         except Exception as ex:
             logger.warning(f"Error on-demand fetching item {item_id}: {ex}")

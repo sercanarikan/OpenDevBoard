@@ -118,6 +118,16 @@ Dashboard kartları ve kenar çubuğu sayaçları için hafif (lightweight) öze
 ### 2.3. `GET /api/pull-requests/<id>`
 Belirli bir PR'ın tam açıklama, tüm inceleyenler ve ilişkili Work Item detaylarını döndürür.
 
+Azure DevOps, PR **liste** yanıtlarında `description` alanını kısaltır (yaklaşık 400 karakter). Bu yüzden detay yanıtı, canlı modda tek bir salt okunur `GET` (`.../_apis/git/repositories/{repo}/pullrequests/{id}`) ile tam açıklamayı okur. Yanıta `descriptionStatus` eklenir:
+
+| Değer | Anlam |
+|---|---|
+| `available` | Açıklama metni var. |
+| `empty` | Azure DevOps'ta açıklama girilmemiş (doğrulandı). |
+| `unavailable` | Tam metin okunamadı; `description` yalnızca önbellekteki (kısaltılmış olabilecek) metni içerir. Arayüz bunu "boş" olarak göstermez. |
+
+Liste yanıtının şeması değişmedi. Arayüz açıklamayı Markdown/HTML olarak güvenli biçimde (betik, olay işleyicisi, `javascript:` bağlantısı, form ve gömülü içerik temizlenerek) gösterir.
+
 ---
 
 ## 3. Reviewer Kimlik ve Oy Eşleme Kuralları

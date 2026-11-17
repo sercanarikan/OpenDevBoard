@@ -206,6 +206,8 @@ export interface PullRequest {
   repository: string;
   title: string;
   description: string;
+  /** Set by the detail endpoint: list responses only carry a shortened description. */
+  descriptionStatus?: 'available' | 'empty' | 'unavailable';
   status: 'active' | 'completed' | 'abandoned';
   isDraft: number | boolean;
   authorId: string;

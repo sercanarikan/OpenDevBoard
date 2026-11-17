@@ -15,6 +15,8 @@ import {
 import type { PullRequest, PullRequestReviewer } from '../../types/paging';
 import { useApp } from '../../context/useApp';
 import { ReviewerRequirementBadge } from './ReviewerRequirementBadge';
+import { DescriptionView } from '../Common/DescriptionView';
+import { useRecordDetail } from '../../hooks/useRecordDetail';
 
 interface PullRequestInspectorProps {
   pr: PullRequest;
@@ -23,7 +25,12 @@ interface PullRequestInspectorProps {
 
 export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, onClose }) => {
   const { t } = useTranslation(['pullRequests', 'common']);
-  const { openWorkItem } = useApp();
+  const { openWorkItem, api } = useApp();
+
+  // The list only carries a shortened description; the full text comes from the single-PR response.
+  const loadDetail = React.useCallback((id: number, signal: AbortSignal) => api.pullRequest(id, signal), [api]);
+  const { state: detail, retry: retryDetail } = useRecordDetail(pr.id, loadDetail);
+  const fullPr = detail.status === 'ready' ? detail.data : null;
 
   const getVoteBadge = (reviewer: PullRequestReviewer) => {
     switch (reviewer.vote) {
@@ -280,9 +287,13 @@ export const PullRequestInspector: React.FC<PullRequestInspectorProps> = ({ pr, 
             <FileText className="w-3.5 h-3.5 text-brand-500" />
             <span>{t('inspector.description')}</span>
           </div>
-          <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 text-slate-700 dark:text-slate-300 text-[11.5px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
-            {pr.description ? pr.description : <span className="italic text-slate-400">{t('inspector.noDescription')}</span>}
-          </div>
+          <DescriptionView
+            loading={detail.status === 'loading'}
+            failed={detail.status === 'error'}
+            status={fullPr?.descriptionStatus}
+            blocks={[{ text: fullPr ? fullPr.description : detail.status === 'error' ? pr.description : '' }]}
+            onRetry={retryDetail}
+          />
         </div>
 
         {/* Associated Work Items */}

@@ -302,6 +302,18 @@ class SeedAndGuardTests(unittest.TestCase):
         self.assertEqual(_count_rows(), first['total_rows'])
         self.assertEqual(_meta_snapshot()['last_full_sync'], before['last_full_sync'])
 
+    def test_seed_backfills_descriptions_of_a_fixture_seeded_before_they_were_stored(self):
+        fixture_data.seed_fixture()
+        conn = sync_service.get_db_connection()
+        conn.execute('UPDATE work_items SET repro_steps = NULL')
+        conn.commit()
+        conn.close()
+        self.assertFalse(fixture_data.seed_fixture()['seeded'])
+        conn = sync_service.get_db_connection()
+        bug = conn.execute("SELECT repro_steps FROM work_items WHERE is_bug = 1 AND is_context = 0 LIMIT 1").fetchone()
+        conn.close()
+        self.assertIn('<ol>', bug['repro_steps'])
+
     def test_ensure_on_empty_db_returns_true(self):
         self.assertTrue(fixture_data.ensure_fixture_database())
         self.assertEqual(_meta_snapshot()['fixture_mode'], '1')

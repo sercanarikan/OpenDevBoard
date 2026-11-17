@@ -431,6 +431,8 @@ def get_pull_request_by_id(pr_id):
         pr = pr_service.get_single_pr_details(all_prs, pr_id, current_user=current_user)
         if not pr:
             return jsonify({"error": f"Pull request #{pr_id} not found"}), 404
+        live = not sync_service.is_fixture_mode()
+        pr = pr_service.with_full_description(pr, get_devops_org_url() if live else None, get_devops_pat() if live else None)
         return jsonify(pr), 200
     except Exception as e:
         app.logger.error(f"Error in get_pull_request_by_id: {e}", exc_info=True)

@@ -26,7 +26,7 @@ COLUMNS = [
     'iteration', 'area_path', 'parent_id', 'parent_title', 'parent_type', 'story_points',
     'changed_date', 'created_date', 'is_bug', 'is_task', 'is_unassigned', 'is_active',
     'is_blocked', 'is_blocking', 'url', 'description', 'relations_json', 'last_synced_at',
-    'deleted_at', 'last_seen_at', 'is_context',
+    'deleted_at', 'last_seen_at', 'is_context', 'repro_steps',
 ]
 
 _ACTIVE_STATE_WEIGHTS = [('New', 42), ('To Do', 10), ('In Progress', 14), ('Active', 10),
@@ -251,7 +251,10 @@ def _row(node, synced_at):
         'is_blocked': 1 if blocked else 0,
         'is_blocking': 1 if node['succs'] else 0,
         'url': URL_TEMPLATE.format(project=node['project'], id=node['id']),
-        'description': f"Fixture {lower_type} in {node['project']}.",
+        'description': (f"<p>Fixture {lower_type} in {node['project']}.</p>" if 'task' in lower_type
+                        else f"Fixture {lower_type} in {node['project']}."),
+        'repro_steps': ('<ol><li>Open the synthetic page.</li><li>Press <b>Save</b>.</li></ol>'
+                        '<p>Expected: it saves. Actual: nothing happens.</p>' if 'bug' in lower_type else ''),
         'relations_json': json.dumps(relations),
         'last_synced_at': synced_at,
         'deleted_at': None,
@@ -374,6 +377,12 @@ def _seed_locked(conn, rows, summary):
     row_count = cur.execute('SELECT COUNT(*) FROM work_items').fetchone()[0]
     marker = _read_meta(conn, 'fixture_mode')
     if row_count and marker == '1':
+        # A fixture seeded before descriptions were stored: backfill just those text columns, nothing else.
+        stale = cur.execute('SELECT COUNT(*) FROM work_items WHERE repro_steps IS NULL').fetchone()[0]
+        if stale:
+            cur.executemany('UPDATE work_items SET description = ?, repro_steps = ? WHERE id = ? AND repro_steps IS NULL',
+                            [(r['description'], r['repro_steps'], r['id']) for r in rows])
+            conn.commit()
         return {**summary, 'seeded': False, 'rows_written': 0}
     if row_count:
         raise RuntimeError('refusing to seed fixture over non-fixture data')

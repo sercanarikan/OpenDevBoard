@@ -18,6 +18,8 @@ import type { WorkItem } from '../../types';
 import { isWorkItemCompleted, getWorkItemStateCategory } from '../../utils/workState';
 import { UserAvatar } from '../Common/UserAvatar';
 import { stateLabel } from '../../i18n/labels';
+import { DescriptionView } from '../Common/DescriptionView';
+import { useRecordDetail } from '../../hooks/useRecordDetail';
 
 interface WorkItemInspectorProps {
   item: WorkItem;
@@ -36,6 +38,15 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
 }) => {
   const { t } = useTranslation();
   const { api, refreshToken } = useApp();
+
+  // Descriptions are not part of list rows; the full record is read by id so loading, failure and "empty" stay distinct.
+  const loadDetail = React.useCallback((id: number, signal: AbortSignal) => api.item(id, signal), [api]);
+  const { state: detail, retry: retryDetail } = useRecordDetail(item.id, loadDetail);
+  const body = detail.status === 'ready' ? detail.data : null;
+  const descriptionBlocks = [
+    { text: body ? body.description ?? '' : detail.status === 'error' ? item.description ?? '' : '' },
+    { label: t('descriptionView.reproSteps'), text: body?.reproSteps ?? '' }
+  ];
 
   // The Inspector never depends on what a list currently shows: parent, children and relation targets are loaded by
   // id from the API (parents/children may be completed or outside the active scope and are not on any page).
@@ -238,16 +249,18 @@ export const WorkItemInspector: React.FC<WorkItemInspectorProps> = ({
         </div>
 
         {/* Description */}
-        {item.description && (
-          <div className="space-y-1.5">
-            <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
-              {t('fields.description')}
-            </span>
-            <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-              {item.description}
-            </div>
-          </div>
-        )}
+        <div className="space-y-1.5" data-testid="work-item-description">
+          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
+            {t('fields.description')}
+          </span>
+          <DescriptionView
+            loading={detail.status === 'loading'}
+            failed={detail.status === 'error'}
+            status={body?.descriptionStatus}
+            blocks={descriptionBlocks}
+            onRetry={retryDetail}
+          />
+        </div>
 
         {/* Parent Hierarchy */}
         <div className="space-y-2">

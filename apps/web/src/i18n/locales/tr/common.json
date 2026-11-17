@@ -337,5 +337,15 @@
   "errors": {
     "pageNotFound": "Sayfa Bulunamadı",
     "pageNotFoundDesc": "İstediğiniz adres mevcut değil veya taşınmış olabilir. Lütfen URL adresini kontrol edin veya ana panele dönün."
+  },
+  "descriptionView": {
+    "loading": "Açıklama yükleniyor…",
+    "empty": "Azure DevOps'ta açıklama girilmemiş.",
+    "error": "Açıklama yüklenemedi. Bu, açıklamanın boş olduğu anlamına gelmez.",
+    "partial": "Açıklamanın tamamı yüklenemedi; yalnızca elde olan metin gösteriliyor.",
+    "retry": "Yeniden dene",
+    "showAll": "Açıklamanın tamamını göster",
+    "showLess": "Daha az göster",
+    "reproSteps": "Tekrar adımları"
   }
 }
