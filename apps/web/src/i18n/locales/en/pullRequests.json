@@ -15,9 +15,9 @@
     "searchPlaceholder": "Search by title, ID, author, or repository..."
   },
   "status": {
-    "active": "Active (Open)",
-    "completed": "Completed (Merged)",
-    "abandoned": "Abandoned (Closed)",
+    "active": "Active",
+    "completed": "Completed",
+    "abandoned": "Abandoned",
     "all": "All Statuses",
     "draft": "Draft"
   },
