@@ -18,6 +18,7 @@ import { generateMockPoolResponse, CURRENT_USER_NAME } from '../services/mockDat
 import { deriveSyncIndicator, type DataSourceKind } from '../utils/syncState';
 import i18n from '../i18n';
 import { apiErrorTranslationKey } from '../utils/apiErrorMessage';
+import type { DashboardFeedCache } from '../utils/dashboardFeedCache';
 import { pageKeyFromPath, visibleSelection, select, closeKind, refreshWorkItem, type Selection } from '../utils/selection';
 
 export const SYNC_POLL_MS = 20000;
@@ -93,6 +94,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const location = useLocation();
   const navigate = useNavigate();
   const viewMode = getViewFromPath(location.pathname);
+  // Results of the dashboard cards that load their own data; a stable object that outlives the dashboard page.
+  const [dashboardFeedCache] = useState<DashboardFeedCache>(() => ({}));
+
   // One slot for the open record, tied to the page it was opened on (see utils/selection).
   const page = pageKeyFromPath(location.pathname);
   const pageRef = useRef(page);
@@ -579,6 +583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     deploymentSummary,
     deploymentSummaryLoading,
     deploymentSummaryError,
+    dashboardFeedCache,
     selectedDeployment,
     setSelectedDeployment
   };

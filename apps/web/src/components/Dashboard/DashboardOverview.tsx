@@ -32,6 +32,7 @@ import { PipelineInspector } from '../Pipelines/PipelineInspector';
 import { DeploymentInspector } from '../Deployments/DeploymentInspector';
 import { stateLabel } from '../../i18n/labels';
 import { getIntegrationState } from '../../utils/integrationStatus';
+import { seedFor, taskFeedScope } from '../../utils/dashboardFeedCache';
 import { getPipelineNotice } from '../../utils/pipelineNotice';
 
 type LoadState = { request: object; error: string | null; successfulScope?: string };
@@ -42,6 +43,7 @@ export const DashboardOverview: React.FC = () => {
     api,
     source,
     filters,
+    dashboardFeedCache: feeds,
     setFilters,
     setViewMode,
     summary,
@@ -70,17 +72,25 @@ export const DashboardOverview: React.FC = () => {
   } = useApp();
 
   const navigate = useNavigate();
-  const [priorityItems, setPriorityItems] = useState<WorkItem[]>([]);
-  const [recentItems, setRecentItems] = useState<WorkItem[]>([]);
-  const [pendingPRs, setPendingPRs] = useState<PullRequest[]>([]);
+  // Cards start from the last result for the same scope, so coming back to the dashboard never shows an empty
+  // spinner; the request below refreshes them in the background.
+  const seedTasks = seedFor(feeds, 'tasks', taskFeedScope(filters.selectedProject, currentUserName));
+  const seedPRs = seedFor(feeds, 'prs', filters.selectedProject);
+  const seedHistory = seedFor(feeds, 'history', filters.selectedProject);
+  const seedTeam = seedFor(feeds, 'team', filters.selectedProject);
+  const seededState = (scope?: string): LoadState | null => (scope === undefined ? null : { request: {}, error: null, successfulScope: scope });
 
-  const [tasksState, setTasksState] = useState<LoadState | null>(null);
-  const [prsState, setPrsState] = useState<LoadState | null>(null);
-  const [historyState, setHistoryState] = useState<LoadState | null>(null);
-  const [teamState, setTeamState] = useState<LoadState | null>(null);
+  const [priorityItems, setPriorityItems] = useState<WorkItem[]>(() => seedTasks?.priority ?? []);
+  const [recentItems, setRecentItems] = useState<WorkItem[]>(() => seedTasks?.recent ?? []);
+  const [pendingPRs, setPendingPRs] = useState<PullRequest[]>(() => seedPRs?.items ?? []);
 
-  const [recentEvents, setRecentEvents] = useState<HistoryEvent[]>([]);
-  const [teamSnapshot, setTeamSnapshot] = useState<TeamActivitySummary | null>(null);
+  const [tasksState, setTasksState] = useState<LoadState | null>(() => seededState(seedTasks?.scope));
+  const [prsState, setPrsState] = useState<LoadState | null>(() => seededState(seedPRs?.scope));
+  const [historyState, setHistoryState] = useState<LoadState | null>(() => seededState(seedHistory?.scope));
+  const [teamState, setTeamState] = useState<LoadState | null>(() => seededState(seedTeam?.scope));
+
+  const [recentEvents, setRecentEvents] = useState<HistoryEvent[]>(() => seedHistory?.items ?? []);
+  const [teamSnapshot, setTeamSnapshot] = useState<TeamActivitySummary | null>(() => seedTeam?.snapshot ?? null);
 
   const [refreshNonce, setRefreshNonce] = useState(0);
 
@@ -114,6 +124,7 @@ export const DashboardOverview: React.FC = () => {
           const recent = await api.list({ project, currentUser: currentUserName, quickFilter: 'my-tasks', sortBy: 'changedDate', sortOrder: 'desc', limit: 5 }, ctrl.signal);
           if (ctrl.signal.aborted) return;
           setRecentItems(recent.items);
+          feeds.tasks = { scope, priority: priority.items, recent: recent.items };
           setTasksState({ request, error: null, successfulScope: scope });
         }).catch((e: any) => {
           if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
@@ -125,6 +136,7 @@ export const DashboardOverview: React.FC = () => {
       .then(res => {
         if (ctrl.signal.aborted) return;
         setPendingPRs(res.items);
+        feeds.prs = { scope: project, items: res.items };
         setPrsState({ request, error: null, successfulScope: project });
       }, (e: any) => {
         if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
@@ -135,6 +147,7 @@ export const DashboardOverview: React.FC = () => {
       .then(res => {
         if (ctrl.signal.aborted) return;
         setRecentEvents(res.items);
+        feeds.history = { scope: project, items: res.items };
         setHistoryState({ request, error: null, successfulScope: project });
       }, (e: any) => {
         if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
@@ -145,13 +158,14 @@ export const DashboardOverview: React.FC = () => {
       .then(res => {
         if (ctrl.signal.aborted) return;
         setTeamSnapshot(res);
+        feeds.team = { scope: project, snapshot: res };
         setTeamState({ request, error: null, successfulScope: project });
       }, (e: any) => {
         if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
         setTeamState(prev => ({ request, error: 'failed', successfulScope: prev?.successfulScope }));
       });
     return () => ctrl.abort();
-  }, [request]);
+  }, [request, feeds]);
 
   const scope = summary?.scope;
   const isScopeReady = !booting && !!currentUserName && (!loadingTasks || tasksAvailable) && typeof scope?.myTasks === 'number';
@@ -376,7 +390,7 @@ export const DashboardOverview: React.FC = () => {
             </div>
 
             {loadingTasks && !tasksAvailable ? (
-              <div className="py-12 flex justify-center text-slate-400">
+              <div data-testid="dash-feed-loading" className="py-12 flex justify-center text-slate-400">
                 <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : errorTasks ? (
@@ -441,7 +455,7 @@ export const DashboardOverview: React.FC = () => {
             </div>
 
             {loadingPRs && !prsAvailable ? (
-              <div className="py-12 flex justify-center text-slate-400">
+              <div data-testid="dash-feed-loading" className="py-12 flex justify-center text-slate-400">
                 <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : errorPRs ? (
@@ -695,7 +709,7 @@ export const DashboardOverview: React.FC = () => {
             </div>
 
             {loadingHistory && !historyAvailable ? (
-              <div className="py-6 flex justify-center text-slate-400">
+              <div data-testid="dash-feed-loading" className="py-6 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : !historyAvailable || recentEvents.length === 0 ? (
@@ -769,7 +783,7 @@ export const DashboardOverview: React.FC = () => {
             </div>
 
             {loadingTeam && !teamAvailable ? (
-              <div className="py-6 flex justify-center text-slate-400">
+              <div data-testid="dash-feed-loading" className="py-6 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : !teamAvailable || !teamSnapshot ? (
@@ -849,7 +863,7 @@ export const DashboardOverview: React.FC = () => {
             </div>
 
             {loadingTasks && !tasksAvailable ? (
-              <div className="py-8 flex justify-center text-slate-400">
+              <div data-testid="dash-feed-loading" className="py-8 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : !currentUserName ? (

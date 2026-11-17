@@ -1,3 +1,4 @@
+import type { DashboardFeedCache } from '../utils/dashboardFeedCache';
 import { createContext, useContext } from 'react';
 import type React from 'react';
 import type { WorkItem, WorkItemsPoolResponse, ViewMode, FilterOptions } from '../types';
@@ -58,6 +59,9 @@ export interface AppContextType {
   resetFilters: () => void;
   isCommandPaletteOpen: boolean;
   setIsCommandPaletteOpen: (open: boolean) => void;
+
+  /** Last successful dashboard card results; survives leaving the dashboard (see utils/dashboardFeedCache). */
+  dashboardFeedCache: DashboardFeedCache;
 
   prSummary: PullRequestsSummary | null;
   prSummaryLoading: boolean;
