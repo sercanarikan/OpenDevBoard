@@ -637,7 +637,7 @@ def _collect_context(client, org_url, main_rows, run, alive, retry=None, retry_s
     dep_only = {}
     retry = retry or {}
     retry_sources = retry_sources or {}
-    refs = defaultdict(set)  # target id -> ids of the rows read in this run that link to it
+    refs = defaultdict(dict)  # target id -> {id of a row read in this run that links to it: 'hier' | 'dep'}
 
     for round_no in range(MAX_CLOSURE_ROUNDS):
         want_hier, want_dep = set(), set()
@@ -646,11 +646,10 @@ def _collect_context(client, org_url, main_rows, run, alive, retry=None, retry_s
             want_hier.update(i for i, kind in retry.items() if kind == 'hier')
             want_dep.update(i for i, kind in retry.items() if kind != 'hier')
         for r in frontier:
-            targets = set(r['_child_ids']) | set(r['_dep_ids'])
-            if r['parent_id']:
-                targets.add(r['parent_id'])
-            for t in targets:
-                refs[t].add(r['id'])
+            for t in r['_dep_ids']:
+                refs[t].setdefault(r['id'], 'dep')
+            for t in list(r['_child_ids']) + ([r['parent_id']] if r['parent_id'] else []):
+                refs[t][r['id']] = 'hier'  # a hierarchy link wins over a dependency link from the same row
             if r['parent_id']:
                 want_hier.add(r['parent_id'])
             want_hier.update(r['_child_ids'])
@@ -674,9 +673,13 @@ def _collect_context(client, org_url, main_rows, run, alive, retry=None, retry_s
             run.warn(f"context_missing:{len(fr.missing)}")  # dangling link (deleted / inaccessible), not a data gap
             for i in fr.missing:
                 carried = retry_sources.get(i, [])
-                sources = None if carried is None else sorted(refs[i] | set(carried))
-                run.closure_missing[i] = ('hier' if i in want_hier else 'dep',
-                                          None if sources is None or len(sources) > CLOSURE_SOURCES_MAX else sources)
+                if carried is None:
+                    sources = None
+                else:
+                    merged = dict(carried)
+                    merged.update(refs[i])
+                    sources = None if len(merged) > CLOSURE_SOURCES_MAX else sorted(merged.items())
+                run.closure_missing[i] = ('hier' if i in want_hier else 'dep', sources)
 
         frontier = []
         for item_id, raw in fr.items.items():
@@ -726,7 +729,14 @@ def _plan_reconciliation(client, org_url, scope_ids, run):
 def _load_closure_missing():
     try:
         raw = json.loads(get_sync_meta('closure_missing') or '{}')
-        return {int(i): (v[0], v[1], v[2] if len(v) > 2 else None) for i, v in raw.items()}
+        out = {}
+        for i, v in raw.items():
+            sources = None
+            if len(v) > 2 and v[2] is not None:
+                # [[row id, 'hier' | 'dep'], ...]; a plain id (earlier format) takes the entry's kind
+                sources = [(int(x[0]), x[1]) if isinstance(x, list) else (int(x), v[0]) for x in v[2]]
+            out[int(i)] = (v[0], v[1], sources)
+        return out
     except (ValueError, TypeError, IndexError, AttributeError):
         return {}
 
@@ -856,9 +866,12 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
         if sources is None:
             retry[i], retry_sources[i] = kind, None
             continue
-        still_linked = [s for s in sources if s in alive and s not in read_now]
+        still_linked = [(s, k) for s, k in sources if s in alive and s not in read_now]
         if still_linked:
-            retry[i], retry_sources[i] = kind, still_linked
+            # the target is read the way the rows that still link to it would read it: as a child / parent (its own
+            # children and ancestors follow) if one of them links by hierarchy, otherwise as a dependency only
+            retry[i] = 'hier' if any(k == 'hier' for _, k in still_linked) else 'dep'
+            retry_sources[i] = still_linked
     context_rows = _collect_context(client, org_url, main_rows, run, alive, retry, retry_sources)
     closure_missing = {str(i): [kind, prior_missing[i][1] if i in retry else now_iso, sources]
                        for i, (kind, sources) in run.closure_missing.items()}

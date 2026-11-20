@@ -345,7 +345,7 @@ class RemovedLinksEndTheRetry(ProbeBase):
 
     def test_another_valid_link_to_the_same_target_keeps_the_retry(self):
         fake = self.setup_missing({3: {'succs': [99]}, 4: {'succs': [99]}})
-        self.assertEqual(sync_service._load_closure_missing()[99][2], [3, 4])
+        self.assertEqual(sync_service._load_closure_missing()[99][2], [(3, 'dep'), (4, 'dep')])
         fake.edit(3)                                       # 3 drops its link, 4 (unchanged, skipped by the probe) keeps it
         run_sync(fake)
         self.assertEqual(row(99)['is_context'], 1)
@@ -357,7 +357,7 @@ class RemovedLinksEndTheRetry(ProbeBase):
         del fake.items[99]
         fake.edit(3)
         run_sync(fake)
-        self.assertEqual(sync_service._load_closure_missing()[99][2], [4])
+        self.assertEqual(sync_service._load_closure_missing()[99][2], [(4, 'dep')])
         self.assertIn(99, fake.full_ids)                   # still asked for through source 4
         fake.items[99] = rev_item(99, state='Done', changed='2020-01-01T00:00:00Z')
         run_sync(fake)
@@ -371,6 +371,50 @@ class RemovedLinksEndTheRetry(ProbeBase):
             c.commit()
         run_sync(fake)
         self.assertEqual(row(99)['is_context'], 1)
+
+
+class RetryKindFollowsTheRemainingLinks(ProbeBase):
+    """The retry reads the target the way the rows that still link to it would: as a child (its own children follow)
+    when one of them links by hierarchy, otherwise as a dependency only."""
+
+    def setup_two_kinds(self):
+        fake = ProbingAzure([rev_item(i) for i in range(1, 7)] +
+                            [rev_item(99, state='Done', changed='2020-01-01T00:00:00Z', children=[98]),
+                             rev_item(98, state='Done', changed='2020-01-01T00:00:00Z', parent=99)])
+        original = fake._match_wiql
+        fake._match_wiql = lambda q: [i for i in original(q) if i not in (98, 99)] if sync_service.SCOPE_WHERE in q else original(q)
+        self.synced(fake)
+        stash = {i: fake.items.pop(i) for i in (98, 99)}
+        fake.edit(3, children=[99])                       # A: hierarchy link
+        fake.edit(4, succs=[99])                          # B: dependency link
+        run_sync(fake)
+        self.assertEqual(sync_service._load_closure_missing()[99][2], [(3, 'hier'), (4, 'dep')])
+        fake.items.update(stash)
+        fake.full_reads.clear(); fake.probe_reads.clear()
+        return fake
+
+    def test_dependency_link_left_alone_reads_the_target_without_its_children(self):
+        fake = self.setup_two_kinds()
+        fake.edit(3)                                      # A drops the hierarchy link, B is unchanged and skipped by the probe
+        run_sync(fake)
+        self.assertNotIn(4, fake.full_ids)
+        self.assertEqual(row(99)['is_context'], 1)
+        self.assertIsNone(row(98))                        # dependency targets do not pull their children in
+        run_sync(fake, force_full=True)
+        self.assertIsNone(row(98))
+
+    def test_hierarchy_link_left_alone_reads_the_target_with_its_children(self):
+        fake = self.setup_two_kinds()
+        fake.edit(4)                                      # B drops the dependency, A keeps the hierarchy link (skipped)
+        run_sync(fake)
+        self.assertEqual(row(99)['is_context'], 1)
+        self.assertEqual(row(98)['is_context'], 1)
+
+    def test_sources_stored_as_plain_ids_take_the_entry_kind(self):
+        with sync_service.db_lock, sync_service.get_db_connection() as c:
+            sync_service._set_meta(c, 'closure_missing', '{"99": ["hier", "2026-11-05T00:00:00", [3, 4]]}')
+            c.commit()
+        self.assertEqual(sync_service._load_closure_missing()[99], ('hier', '2026-11-05T00:00:00', [(3, 'hier'), (4, 'hier')]))
 
 
 class ThrottledProbeAcrossBatches(ProbeBase):
