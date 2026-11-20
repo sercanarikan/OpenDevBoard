@@ -60,6 +60,7 @@ Create a PAT with only the read scopes required for the Azure DevOps data you in
 | `DEVOPS_FIXTURE_MODE` | Defaults to `1` for deterministic offline demo data; set `0` only for live Azure DevOps |
 | `DEVOPS_DATA_DIR` | Backend SQLite data directory; Compose uses `/data` |
 | `SYNC_INTERVAL_SEC` | Background synchronization interval in seconds |
+| `SYNC_DETAIL_WORKERS` | Concurrent read-only work item detail requests during sync. Defaults to `1` (sequential); `4` is the recommended opt-in, capped at `8`. Invalid or non-positive values fall back to `1` |
 | `DISABLE_BACKGROUND_SYNC` | Set to `1` to disable automatic background synchronization |
 | `WEB_PORT` | Host port for the web service; defaults to `5174` |
 | `VITE_API_BASE_URL` | Frontend API base path for local development; defaults to `/api` |
