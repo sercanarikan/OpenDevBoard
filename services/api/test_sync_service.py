@@ -4,13 +4,13 @@ Run:  .venv\\Scripts\\python.exe -m unittest test_sync_service -v
 """
 import os
 import re
-import tempfile
 import unittest
 from unittest import mock
 
-os.environ['DEVOPS_DATA_DIR'] = tempfile.mkdtemp(prefix='devopsflow-test-')
-
+import testsupport  # noqa: F401  (must precede the project imports)
 import sync_service  # noqa: E402
+
+testsupport.isolate_database(globals())
 
 
 def make_item(item_id, state='Active', assigned='Ada', project='P1', changed='2026-11-05T08:00:00Z',

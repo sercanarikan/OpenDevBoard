@@ -5,8 +5,11 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlparse
 
+import testsupport  # noqa: F401  (must precede the project imports)
 import pipeline_service
 import sync_service
+
+testsupport.isolate_database(globals())
 
 
 class Response:

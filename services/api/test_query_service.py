@@ -3,11 +3,10 @@
 Run:  .venv\\Scripts\\python.exe -m unittest test_query_service -v
 """
 import os
-import tempfile
 import time
 import unittest
 
-os.environ['DEVOPS_DATA_DIR'] = tempfile.mkdtemp(prefix='devopsflow-qs-test-')
+import testsupport  # noqa: F401  (must precede the project imports)
 
 _PREVIOUS_FIXTURE_MODE = os.environ.get('DEVOPS_FIXTURE_MODE')
 
@@ -28,6 +27,8 @@ def tearDownModule():
 import sync_service  # noqa: E402
 import fixture_data  # noqa: E402
 import query_service as qs  # noqa: E402
+
+testsupport.isolate_database(globals())
 
 QUICK = ['all', 'my-tasks', 'unassigned', 'blocked', 'blocking', 'bugs']
 SORTS = ['changedDate', 'priority', 'id', 'title', 'state']

@@ -3,8 +3,11 @@
 import unittest
 from unittest.mock import patch
 
+import testsupport  # noqa: F401  (must precede the project imports)
 import app as api_app
 import pr_service
+
+testsupport.isolate_database(globals())
 
 
 class TestPullRequestFailureResponses(unittest.TestCase):

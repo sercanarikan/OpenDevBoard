@@ -12,10 +12,11 @@ import threading
 import unittest
 from unittest import mock
 
-os.environ['DEVOPS_DATA_DIR'] = tempfile.mkdtemp(prefix='devopsflow-hardening-')
-
+import testsupport  # noqa: E402,F401  (must precede the project imports)
 import azure_client  # noqa: E402
 import sync_service  # noqa: E402
+
+testsupport.isolate_database(globals())
 
 ORG = 'https://dev.azure.com/o'
 

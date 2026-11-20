@@ -2,7 +2,10 @@
 
 import unittest
 from datetime import datetime
+import testsupport  # noqa: F401  (must precede the project imports)
 import history_service
+
+testsupport.isolate_database(globals())
 
 
 class TestMyHistoryService(unittest.TestCase):

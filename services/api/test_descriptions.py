@@ -1,15 +1,14 @@
 """Synthetic tests for full pull request / work item descriptions (no Azure DevOps access required)."""
 
-import os
-import tempfile
 import unittest
 from unittest import mock
 
-os.environ.setdefault('DEVOPS_DATA_DIR', tempfile.mkdtemp(prefix='devopsflow-test-'))
-
+import testsupport  # noqa: E402,F401  (must precede the project imports)
 import app as api_app  # noqa: E402
 import pr_service  # noqa: E402
 import sync_service  # noqa: E402
+
+testsupport.isolate_database(globals())
 
 LONG_MARKDOWN = "## Summary\n\n" + "\n".join(f"- change {i}: **synthetic** detail line" for i in range(60))
 BUG_REPRO_HTML = "<ol><li>Open the synthetic page</li><li>Click <b>Save</b></li></ol><script>alert(1)</script>"

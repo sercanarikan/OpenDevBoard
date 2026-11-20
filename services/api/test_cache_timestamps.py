@@ -4,7 +4,10 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import testsupport  # noqa: F401  (must precede the project imports)
 import app as api_app
+
+testsupport.isolate_database(globals())
 
 
 class CacheTimestampTests(unittest.TestCase):
