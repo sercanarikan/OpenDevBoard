@@ -6,8 +6,11 @@ import gc
 import os
 import tempfile
 from unittest.mock import patch
+import testsupport  # noqa: F401  (must precede the project imports)
 import pr_service
 import sync_service
+
+testsupport.isolate_database(globals())
 
 
 class TestPullRequestsService(unittest.TestCase):

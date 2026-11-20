@@ -4,14 +4,13 @@ Covers the dependency placeholder regression: relation targets that are complete
 scope) must resolve to their REAL title/state, and targets that cannot be verified must stay "unknown" instead of
 getting an invented state or a Blocked/Clear verdict.
 """
-import os
-import tempfile
 import unittest
 
-os.environ.setdefault('DEVOPS_DATA_DIR', tempfile.mkdtemp(prefix='devopsflow-relint-'))
-
+import testsupport  # noqa: F401  (must precede the project imports)
 import sync_service  # noqa: E402
 from test_sync_hardening import FakeAzure, raw_item, reset_db, row, run_sync  # noqa: E402
+
+testsupport.isolate_database(globals())
 
 
 def only(fake, ids):

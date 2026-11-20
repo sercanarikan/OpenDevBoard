@@ -2,7 +2,10 @@
 
 import unittest
 
+import testsupport  # noqa: F401  (must precede the project imports)
 import app as api_app
+
+testsupport.isolate_database(globals())
 
 
 class TestDaysValidation(unittest.TestCase):

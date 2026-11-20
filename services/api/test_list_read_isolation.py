@@ -11,11 +11,9 @@ directory; ``tearDownModule`` restores the previous path and removes the directo
 
 Run:  python -m unittest discover -s services/api -p "test_list_read_isolation.py" -v
 """
-import atexit
 import os
 import shutil
 import sqlite3
-import sys
 import tempfile
 import threading
 import time
@@ -23,28 +21,10 @@ import unittest
 from contextlib import contextmanager
 from unittest import mock
 
-
-def _import_sync_service():
-    """Imports ``sync_service`` without letting ``DEVOPS_DATA_DIR`` decide where its import-time ``init_db()``
-    writes. When the module is already imported (the usual case inside ``unittest discover``) nothing happens."""
-    if 'sync_service' in sys.modules:
-        return sys.modules['sync_service']
-    boot_dir = tempfile.mkdtemp(prefix='devopsflow-isolation-import-')
-    atexit.register(shutil.rmtree, boot_dir, ignore_errors=True)
-    previous = os.environ.get('DEVOPS_DATA_DIR')
-    os.environ['DEVOPS_DATA_DIR'] = boot_dir
-    try:
-        import sync_service as module
-    finally:
-        if previous is None:
-            os.environ.pop('DEVOPS_DATA_DIR', None)
-        else:
-            os.environ['DEVOPS_DATA_DIR'] = previous
-    return module
-
-
-sync_service = _import_sync_service()
+import testsupport  # noqa: E402  (imports sync_service against a throwaway directory)
 import query_service as qs  # noqa: E402
+
+sync_service = testsupport.sync_service
 
 ROWS = 200
 CHUNK = 20

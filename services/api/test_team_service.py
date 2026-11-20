@@ -9,8 +9,11 @@ import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 import requests
+import testsupport  # noqa: F401  (must precede the project imports)
 import team_service
 import sync_service
+
+testsupport.isolate_database(globals())
 
 
 class TestTeamActivityService(unittest.TestCase):

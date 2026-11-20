@@ -5,8 +5,11 @@ from datetime import datetime, timedelta
 import os
 import tempfile
 from unittest.mock import patch
+import testsupport  # noqa: F401  (must precede the project imports)
 import pipeline_service
 import sync_service
+
+testsupport.isolate_database(globals())
 
 
 class TestPipelineHealthService(unittest.TestCase):

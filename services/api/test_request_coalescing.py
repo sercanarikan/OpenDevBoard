@@ -3,8 +3,11 @@ import threading
 import unittest
 from unittest.mock import patch
 
+import testsupport  # noqa: F401  (must precede the project imports)
 import app as api_app
 import request_coalescing
+
+testsupport.isolate_database(globals())
 
 
 class CoalescerTests(unittest.TestCase):

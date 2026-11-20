@@ -8,12 +8,13 @@ import tempfile
 import time
 import unittest
 
-os.environ['DEVOPS_DATA_DIR'] = tempfile.mkdtemp(prefix='devopsflow-fixture-test-')
-
+import testsupport  # noqa: E402,F401  (must precede the project imports)
 import sync_service  # noqa: E402
 import fixture_data  # noqa: E402
 from fixture_data import FIXTURE_USER, PROJECTS, COLUMNS  # noqa: E402
 from fixture_data import UNRESOLVED_TARGET_ID, UNRESOLVED_DEPENDENT_TITLE  # noqa: E402
+
+testsupport.isolate_database(globals())
 
 
 def _use_fresh_db():
