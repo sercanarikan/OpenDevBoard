@@ -63,6 +63,7 @@ Kural (istemcideki `hierarchy.ts` ile aynı): `blocked` = tamamlanmamış en az 
 
 - Aynı anda tek sync (`sync_lock`, bloklamayan). İkinci çağrı `in_progress` döner ve meta'ya dokunmaz.
 - Tek transaction: hata/istisna → `ROLLBACK`, önceki sağlıklı snapshot aynen kalır.
+- Altı Work Item okuma yolu (`GET /api/work-items`, `/api/work-items/summary`, `/api/work-items/<id>/children`, `/api/work-items/batch`, `/api/work-items/progress`, `/api/kanban`) `db_lock` almaz, dolayısıyla sync'in yazma aşamasını **beklemez**. Her biri tek bir commit edilmiş snapshot üzerinde (`read_snapshot`) çalışır; döndürdüğü satırlar, sayımlar, `dataVersion` ve `lastSyncedAt` aynı snapshot'a aittir. Sync commit edilene kadar bu istekler önceki tutarlı veriyi görür, yarım uygulanmış bir sync'i görmez. Bu davranış **yalnızca bu altı yol için** geçerlidir: sistemin geri kalanı (örn. `/api/sync-status`, `/api/work-items/counts`, `/api/work-items-pool`, `/api/work-items/<id>`, yazıcılar ve diğer servisler) hâlâ `db_lock` kullanır ve apply süresince bekleyebilir.
 - `sync_status` `finally` yolunda her zaman `idle` / `partial` / `error` olur; süreç sync ortasında ölürse açılışta `syncing` → `idle` sıfırlanır.
 - Incremental: WIQL `ChangedDate` yalnızca tarih hassasiyetindedir (saat HTTP 400 verir); sorgu watermark'ın **bir gün öncesinden** başlar (kontrollü overlap, upsert idempotent).
 - Arka plan döngüsü: ilk açılışta full, sonra her `SYNC_INTERVAL_SEC` (300 sn) incremental; ek olarak `RECONCILE_INTERVAL_SEC` (6 saat, `0` = kapalı) dolunca full + uzlaştırma. Hatada üstel geri çekilme.
