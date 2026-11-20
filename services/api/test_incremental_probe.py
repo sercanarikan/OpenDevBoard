@@ -29,7 +29,8 @@ class ProbingAzure(FakeAzure):
         super().__init__(items)
         self.full_reads, self.probe_reads = [], []
         self.fail_probe = False
-        self.probe_429 = 0      # first N probe reads -> HTTP 429 with Retry-After
+        self.probe_429 = 0      # N probe reads -> HTTP 429 with Retry-After ...
+        self.probe_429_after = 0  # ... starting after this many probe reads
         self.full_429 = 0       # first N full reads -> HTTP 429 with Retry-After
         self.probe_override = None  # callable(item) -> probe payload item, to model odd server answers
 
@@ -47,7 +48,7 @@ class ProbingAzure(FakeAzure):
                 return Resp(status=429, headers={'Retry-After': '3'})
             return super().get(url, headers, timeout)
         self.probe_reads.append(ids)
-        if self.probe_429 > 0:
+        if self.probe_429 > 0 and len(self.probe_reads) > self.probe_429_after:
             self.probe_429 -= 1
             return Resp(status=429, headers={'Retry-After': '2'})
         if self.probe_override:
@@ -308,6 +309,112 @@ class UnreachableTargetsAreRetriedWithoutTheSource(ProbeBase):
         self.assertNotIn(99, fake.full_ids)              # out of the window: only the periodic full sync picks it up
         run_sync(fake, force_full=True)
         self.assertEqual(row(99)['is_context'], 1)
+
+
+class RemovedLinksEndTheRetry(ProbeBase):
+    """A retry record must not outlive the link it was recorded for: a removed relation may not create a context
+    row, while another still-valid link to the same target keeps the retry alive."""
+
+    def setup_missing(self, links):
+        fake = ProbingAzure([rev_item(i) for i in range(1, 7)] + [rev_item(99, state='Done', changed='2020-01-01T00:00:00Z')])
+        self.synced(fake)
+        target = fake.items.pop(99)
+        for item_id, kw in links.items():
+            fake.edit(item_id, **kw)
+        run_sync(fake)
+        self.assertIn(99, sync_service._load_closure_missing())
+        fake.items[99] = target
+        fake.full_reads.clear(); fake.probe_reads.clear()
+        return fake
+
+    def test_removed_dependency_link_does_not_pull_the_target_in(self):
+        fake = self.setup_missing({3: {'succs': [99]}})
+        fake.edit(3)                                       # the link is gone, the target is reachable
+        run_sync(fake)
+        self.assertIsNone(row(99))
+        self.assertNotIn(99, sync_service._load_closure_missing())
+        run_sync(fake); run_sync(fake, force_full=True)
+        self.assertTrue(row(99) is None or row(99)['deleted_at'] is not None)
+
+    def test_removed_hierarchy_link_does_not_pull_the_target_in(self):
+        fake = self.setup_missing({3: {'children': [99]}})
+        fake.edit(3)
+        run_sync(fake)
+        self.assertIsNone(row(99))
+        self.assertNotIn(99, sync_service._load_closure_missing())
+
+    def test_another_valid_link_to_the_same_target_keeps_the_retry(self):
+        fake = self.setup_missing({3: {'succs': [99]}, 4: {'succs': [99]}})
+        self.assertEqual(sync_service._load_closure_missing()[99][2], [3, 4])
+        fake.edit(3)                                       # 3 drops its link, 4 (unchanged, skipped by the probe) keeps it
+        run_sync(fake)
+        self.assertEqual(row(99)['is_context'], 1)
+        self.assertNotIn(4, fake.full_ids)
+        self.assertNotIn(99, sync_service._load_closure_missing())
+
+    def test_remaining_source_is_remembered_while_the_target_stays_unreachable(self):
+        fake = self.setup_missing({3: {'succs': [99]}, 4: {'succs': [99]}})
+        del fake.items[99]
+        fake.edit(3)
+        run_sync(fake)
+        self.assertEqual(sync_service._load_closure_missing()[99][2], [4])
+        self.assertIn(99, fake.full_ids)                   # still asked for through source 4
+        fake.items[99] = rev_item(99, state='Done', changed='2020-01-01T00:00:00Z')
+        run_sync(fake)
+        self.assertEqual(row(99)['is_context'], 1)
+
+    def test_entries_without_source_information_are_always_retried(self):
+        fake = self.setup_missing({3: {'succs': [99]}})
+        with sync_service.db_lock, sync_service.get_db_connection() as c:
+            first_seen = sync_service._load_closure_missing()[99][1]
+            sync_service._set_meta(c, 'closure_missing', '{"99": ["dep", "%s"]}' % first_seen)   # older two-field format
+            c.commit()
+        run_sync(fake)
+        self.assertEqual(row(99)['is_context'], 1)
+
+
+class ThrottledProbeAcrossBatches(ProbeBase):
+    def setUp(self):
+        super().setUp()
+        self.fake = ProbingAzure([rev_item(i) for i in range(1, 451)])   # three probe batches
+        self.synced(self.fake)
+
+    def run_recording(self):
+        sleeps = []
+        with self.fake.patch_all(), mock.patch.object(sync_service, '_sleep', sleeps.append):
+            res = sync_service.sync_work_items(ORG, 'pat')
+        return res, sleeps
+
+    def test_exhausted_first_batch_stops_probing_and_reads_the_window_in_full(self):
+        self.fake.probe_429 = 99
+        res, sleeps = self.run_recording()
+        self.assertEqual(res['status'], 'success')
+        self.assertEqual(len(self.fake.probe_reads), 4)            # one batch: 1 try + 3 retries; batches 2 and 3 not attempted
+        self.assertEqual(sleeps, [2.0, 2.0, 2.0])                  # Retry-After honoured, nothing skipped
+        self.assertEqual(sorted(set(self.fake.full_ids)), list(range(1, 451)))
+        self.assertEqual(len(self.fake.full_reads), 3)             # the same three reads as without a probe
+        self.assertTrue(any(w.startswith('probe_failed') for w in res['warnings']))
+
+    def test_batches_proved_unchanged_before_the_failure_stay_skipped(self):
+        self.fake.probe_429, self.fake.probe_429_after = 99, 1     # batch 1 answers, batch 2 is throttled for good
+        res, sleeps = self.run_recording()
+        self.assertEqual(res['status'], 'success')
+        self.assertEqual(res['unchanged_skipped'], 200)
+        self.assertEqual(sorted(set(self.fake.full_ids)), list(range(201, 451)))
+        self.assertEqual(len(self.fake.probe_reads), 1 + 4)        # batch 1 once, batch 2 four times, batch 3 never
+        self.assertEqual(sleeps, [2.0, 2.0, 2.0])
+
+    def test_throttled_fallback_read_fails_the_run_and_the_watermark_stays(self):
+        watermark = sync_service.get_sync_meta('watermark')
+        before = row(10)
+        self.fake.edit(10, title='edited', changed='2026-11-09T00:00:00Z')
+        self.fake.probe_429, self.fake.full_429 = 99, 99
+        res, sleeps = self.run_recording()
+        self.assertEqual(res['status'], 'error')
+        # probe backoff (one batch), then the full read's own backoff for each of its three batches, as without a probe
+        self.assertEqual(sleeps, [2.0] * 3 + [3.0] * 9)
+        self.assertEqual(sync_service.get_sync_meta('watermark'), watermark)
+        self.assertEqual(row(10), before)
 
 
 class RetryListLimit(ProbeBase):

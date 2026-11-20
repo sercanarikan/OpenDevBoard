@@ -50,6 +50,8 @@ PROBE_FIELDS = ('System.Rev', 'System.ChangedDate')
 # therefore how long the target was retried before the probe existed; afterwards the periodic full sync is what
 # picks the target up, as before. The list is capped, newest first.
 CLOSURE_RETRY_MAX = 2000
+# Rows remembered per unreachable target; a target linked from more rows than this is simply always retried.
+CLOSURE_SOURCES_MAX = 50
 
 SCOPE_WHERE = "[System.State] NOT IN ('Closed', 'Completed', 'Done', 'Removed')"
 
@@ -627,13 +629,15 @@ def _alive_ids(conn=None):
             conn.close()
 
 
-def _collect_context(client, org_url, main_rows, run, alive, retry=None):
+def _collect_context(client, org_url, main_rows, run, alive, retry=None, retry_sources=None):
     """Fetches ancestors, descendants (needed for canonical progress) and dependency targets that are not cached."""
     known = {r['id'] for r in main_rows}
     context = {}
     frontier = list(main_rows)
     dep_only = {}
     retry = retry or {}
+    retry_sources = retry_sources or {}
+    refs = defaultdict(set)  # target id -> ids of the rows read in this run that link to it
 
     for round_no in range(MAX_CLOSURE_ROUNDS):
         want_hier, want_dep = set(), set()
@@ -642,6 +646,11 @@ def _collect_context(client, org_url, main_rows, run, alive, retry=None):
             want_hier.update(i for i, kind in retry.items() if kind == 'hier')
             want_dep.update(i for i, kind in retry.items() if kind != 'hier')
         for r in frontier:
+            targets = set(r['_child_ids']) | set(r['_dep_ids'])
+            if r['parent_id']:
+                targets.add(r['parent_id'])
+            for t in targets:
+                refs[t].add(r['id'])
             if r['parent_id']:
                 want_hier.add(r['parent_id'])
             want_hier.update(r['_child_ids'])
@@ -664,7 +673,10 @@ def _collect_context(client, org_url, main_rows, run, alive, retry=None):
         if fr.missing:
             run.warn(f"context_missing:{len(fr.missing)}")  # dangling link (deleted / inaccessible), not a data gap
             for i in fr.missing:
-                run.closure_missing[i] = 'hier' if i in want_hier else 'dep'
+                carried = retry_sources.get(i, [])
+                sources = None if carried is None else sorted(refs[i] | set(carried))
+                run.closure_missing[i] = ('hier' if i in want_hier else 'dep',
+                                          None if sources is None or len(sources) > CLOSURE_SOURCES_MAX else sources)
 
         frontier = []
         for item_id, raw in fr.items.items():
@@ -714,7 +726,7 @@ def _plan_reconciliation(client, org_url, scope_ids, run):
 def _load_closure_missing():
     try:
         raw = json.loads(get_sync_meta('closure_missing') or '{}')
-        return {int(i): (v[0], v[1]) for i, v in raw.items()}
+        return {int(i): (v[0], v[1], v[2] if len(v) > 2 else None) for i, v in raw.items()}
     except (ValueError, TypeError, IndexError, AttributeError):
         return {}
 
@@ -756,15 +768,21 @@ def _probe_unchanged(client, ids, run):
     if not candidates:
         return ids, []
 
-    fr = client.get_items(candidates, expand_relations=False, fields=PROBE_FIELDS, error_policy_omit=True)
-    run.probed = len(candidates)
-    if fr.failed_batches:
-        run.warn(f"probe_failed:{sum(len(b) for b in fr.failed_batches)}")
     unchanged = []
-    for item_id, raw in fr.items.items():
-        remote = (_rev_of(raw), (raw.get('fields') or {}).get('System.ChangedDate'))
-        if remote[0] is not None and remote[1] and remote == cached[item_id]:
-            unchanged.append((item_id, remote[1]))
+    for start in range(0, len(candidates), azure_client.BATCH_SIZE):
+        batch = candidates[start:start + azure_client.BATCH_SIZE]
+        fr = client.get_items(batch, expand_relations=False, fields=PROBE_FIELDS, error_policy_omit=True)
+        run.probed += len(batch)
+        for item_id, raw in fr.items.items():
+            remote = (_rev_of(raw), (raw.get('fields') or {}).get('System.ChangedDate'))
+            if remote[0] is not None and remote[1] and remote == cached[item_id]:
+                unchanged.append((item_id, remote[1]))
+        if fr.failed_batches:
+            # The client already spent its retries (and honoured Retry-After) on this batch. Stop probing: the ids
+            # from here on are read in full below, so a throttled or failing probe costs one batch of attempts,
+            # not one per remaining batch.
+            run.warn(f"probe_failed:{len(candidates) - start}")
+            break
     skip = {i for i, _ in unchanged}
     return [i for i in ids if i not in skip], unchanged
 
@@ -827,11 +845,23 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
         alive = _alive_ids()
     prior_missing = _load_closure_missing()
     now_iso = _utcnow().isoformat()
-    retry = {i: kind for i, (kind, first_seen) in prior_missing.items() if not _retry_expired(first_seen, last_watermark)}
-    context_rows = _collect_context(client, org_url, main_rows, run, alive, retry)
-    closure_missing = {str(i): [kind, prior_missing.get(i, (None, now_iso))[1]
-                                if i in retry else now_iso]
-                       for i, kind in run.closure_missing.items()}
+    # A remembered target is retried only while a row that linked to it still does and was not re-read in this run
+    # (a re-read row decides for itself: the normal closure asks for what it still links to). Removing the link
+    # therefore ends the retry instead of creating a context row nobody needs.
+    read_now = {r['id'] for r in main_rows}
+    retry, retry_sources = {}, {}
+    for i, (kind, first_seen, sources) in prior_missing.items():
+        if _retry_expired(first_seen, last_watermark):
+            continue
+        if sources is None:
+            retry[i], retry_sources[i] = kind, None
+            continue
+        still_linked = [s for s in sources if s in alive and s not in read_now]
+        if still_linked:
+            retry[i], retry_sources[i] = kind, still_linked
+    context_rows = _collect_context(client, org_url, main_rows, run, alive, retry, retry_sources)
+    closure_missing = {str(i): [kind, prior_missing[i][1] if i in retry else now_iso, sources]
+                       for i, (kind, sources) in run.closure_missing.items()}
 
     # Reconcile hollow / unverified cached rows (missing relations or last_seen_at) during full sync
     if not is_incremental and run.complete and not truncated:
