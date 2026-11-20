@@ -38,6 +38,20 @@ MAX_CONTEXT_ITEMS = 25000
 MASS_DELETE_FLOOR = 50
 MASS_DELETE_RATIO = 0.10
 MAX_WARNINGS = 20
+# An incremental run whose WIQL window holds more ids than this first asks Azure DevOps for the cheap
+# (Rev, ChangedDate) pair of the ids it already has cached and only reads full details (with relations) for the
+# ids that really changed. Within one batch of ids the probe costs a request without saving one, so smaller
+# windows go straight to the full read.
+PROBE_MIN_IDS = azure_client.BATCH_SIZE
+PROBE_FIELDS = ('System.Rev', 'System.ChangedDate')
+# Relation targets that Azure DevOps could not return (deleted, or not accessible yet) are asked for again on every
+# run while the run that first missed them is still inside the incremental WIQL window (the window starts one day
+# before the watermark's day). That is exactly how long the item linking to them used to be re-read in full, and
+# therefore how long the target was retried before the probe existed; afterwards the periodic full sync is what
+# picks the target up, as before. The list is capped, newest first.
+CLOSURE_RETRY_MAX = 2000
+# Rows remembered per unreachable target; a target linked from more rows than this is simply always retried.
+CLOSURE_SOURCES_MAX = 50
 
 SCOPE_WHERE = "[System.State] NOT IN ('Closed', 'Completed', 'Done', 'Removed')"
 
@@ -110,6 +124,7 @@ def init_db():
             ('last_seen_at', 'TEXT'),
             ('is_context', 'INTEGER DEFAULT 0'),
             ('repro_steps', 'TEXT'),
+            ('rev', 'INTEGER'),
         ):
             if col not in existing_cols:
                 cursor.execute(f'ALTER TABLE work_items ADD COLUMN {col} {ddl}')
@@ -218,6 +233,20 @@ def _rel_target_id(url):
         return None
 
 
+def _rev_of(item):
+    """Revision number of a raw work item (top-level ``rev``, or ``System.Rev`` when requested as a field)."""
+    rev = item.get("rev")
+    if rev is None:
+        rev = (item.get("fields") or {}).get("System.Rev")
+    if isinstance(rev, bool):
+        return None
+    if isinstance(rev, int):
+        return rev
+    if isinstance(rev, str) and rev.isdigit():
+        return int(rev)
+    return None
+
+
 def parse_work_item(item, org_url):
     """Converts a raw Azure DevOps work item (with relations) into a cache row.
 
@@ -320,6 +349,7 @@ def parse_work_item(item, org_url):
         "url": url,
         "description": description,
         "repro_steps": repro_steps,
+        "rev": _rev_of(item),
         "relations": {
             "predecessors": predecessors,
             "successors": successors,
@@ -339,7 +369,7 @@ _UPSERT_COLUMNS = (
     "id, title, type, state, project, assigned_to, assigned_avatar, priority, iteration, area_path, "
     "parent_id, parent_title, parent_type, story_points, changed_date, created_date, is_bug, is_task, "
     "is_unassigned, is_active, is_blocked, is_blocking, url, relations_json, last_synced_at, "
-    "last_seen_at, deleted_at, is_context, description, repro_steps"
+    "last_seen_at, deleted_at, is_context, description, repro_steps, rev"
 )
 
 _UPSERT_UPDATE = '''
@@ -369,17 +399,18 @@ _UPSERT_UPDATE = '''
     deleted_at = NULL,
     is_context = excluded.is_context,
     description = excluded.description,
-    repro_steps = excluded.repro_steps
+    repro_steps = excluded.repro_steps,
+    rev = excluded.rev
 '''
 
 _UPSERT_MAIN_SQL = (
-    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(30))}) "
+    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(31))}) "
     f"ON CONFLICT(id) DO UPDATE SET {_UPSERT_UPDATE}"
 )
 
 # Context data must never overwrite an in-scope active row: only context rows, inactive/completed rows, or hollow rows are refreshed.
 _UPSERT_CONTEXT_SQL = (
-    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(30))}) "
+    f"INSERT INTO work_items ({_UPSERT_COLUMNS}) VALUES ({', '.join('?' for _ in range(31))}) "
     f"ON CONFLICT(id) DO UPDATE SET {_UPSERT_UPDATE} WHERE work_items.is_context = 1 OR work_items.is_active = 0 OR work_items.relations_json IS NULL"
 )
 
@@ -393,7 +424,7 @@ def _row_params(item, now_iso, is_context):
         item["is_task"], item["is_unassigned"], item["is_active"], item["is_blocked"],
         item["is_blocking"], item["url"], json.dumps(item["relations"]), now_iso,
         now_iso, None, 1 if is_context else 0,
-        item.get("description"), item.get("repro_steps")
+        item.get("description"), item.get("repro_steps"), item.get("rev")
     )
 
 
@@ -543,6 +574,10 @@ class _Run:
         self.context_upserted = 0
         self.orphans_removed = 0
         self.skipped = 0
+        self.probed = 0
+        self.unchanged_skipped = 0
+        self.closure_missing = {}  # relation targets that could not be read in this run: id -> 'hier' | 'dep'
+        self.details_fetched = 0
         self.partitions = 1
         self.derived = None
         self.total_scope = None
@@ -565,6 +600,9 @@ class _Run:
             "context_upserted": self.context_upserted,
             "orphans_removed": self.orphans_removed,
             "skipped": self.skipped,
+            "probed": self.probed,
+            "unchanged_skipped": self.unchanged_skipped,
+            "details_fetched": self.details_fetched,
             "partitions": self.partitions,
             "warnings": list(self.warnings),
             "derived": self.derived,
@@ -591,16 +629,27 @@ def _alive_ids(conn=None):
             conn.close()
 
 
-def _collect_context(client, org_url, main_rows, run, alive):
+def _collect_context(client, org_url, main_rows, run, alive, retry=None, retry_sources=None):
     """Fetches ancestors, descendants (needed for canonical progress) and dependency targets that are not cached."""
     known = {r['id'] for r in main_rows}
     context = {}
     frontier = list(main_rows)
     dep_only = {}
+    retry = retry or {}
+    retry_sources = retry_sources or {}
+    refs = defaultdict(dict)  # target id -> {id of a row read in this run that links to it: 'hier' | 'dep'}
 
-    for _ in range(MAX_CLOSURE_ROUNDS):
+    for round_no in range(MAX_CLOSURE_ROUNDS):
         want_hier, want_dep = set(), set()
+        if round_no == 0:
+            # targets that could not be read earlier (see CLOSURE_RETRY_DAYS)
+            want_hier.update(i for i, kind in retry.items() if kind == 'hier')
+            want_dep.update(i for i, kind in retry.items() if kind != 'hier')
         for r in frontier:
+            for t in r['_dep_ids']:
+                refs[t].setdefault(r['id'], 'dep')
+            for t in list(r['_child_ids']) + ([r['parent_id']] if r['parent_id'] else []):
+                refs[t][r['id']] = 'hier'  # a hierarchy link wins over a dependency link from the same row
             if r['parent_id']:
                 want_hier.add(r['parent_id'])
             want_hier.update(r['_child_ids'])
@@ -622,6 +671,15 @@ def _collect_context(client, org_url, main_rows, run, alive):
             run.warn(f"context_fetch_failed:{sum(len(b) for b in fr.failed_batches)}", partial=True)
         if fr.missing:
             run.warn(f"context_missing:{len(fr.missing)}")  # dangling link (deleted / inaccessible), not a data gap
+            for i in fr.missing:
+                carried = retry_sources.get(i, [])
+                if carried is None:
+                    sources = None
+                else:
+                    merged = dict(carried)
+                    merged.update(refs[i])
+                    sources = None if len(merged) > CLOSURE_SOURCES_MAX else sorted(merged.items())
+                run.closure_missing[i] = ('hier' if i in want_hier else 'dep', sources)
 
         frontier = []
         for item_id, raw in fr.items.items():
@@ -668,6 +726,77 @@ def _plan_reconciliation(client, org_url, scope_ids, run):
     return rows, list(fr.missing)
 
 
+def _load_closure_missing():
+    try:
+        raw = json.loads(get_sync_meta('closure_missing') or '{}')
+        out = {}
+        for i, v in raw.items():
+            sources = None
+            if len(v) > 2 and v[2] is not None:
+                # [[row id, 'hier' | 'dep'], ...]; a plain id (earlier format) takes the entry's kind
+                sources = [(int(x[0]), x[1]) if isinstance(x, list) else (int(x), v[0]) for x in v[2]]
+            out[int(i)] = (v[0], v[1], sources)
+        return out
+    except (ValueError, TypeError, IndexError, AttributeError):
+        return {}
+
+
+def _retry_expired(first_seen, last_watermark):
+    """True once the run that first missed a target has left the incremental window."""
+    if not last_watermark:
+        return False
+    try:
+        window_start = (dtparser.parse(last_watermark) - timedelta(days=1)).strftime('%Y-%m-%d')
+        return first_seen[:10] < window_start
+    except Exception:  # noqa: BLE001 - an unreadable timestamp must not keep a target in the retry list forever
+        return True
+
+
+def _probe_unchanged(client, ids, run):
+    """Splits an incremental window into ids that must be read in full and ids that provably did not change.
+
+    An id is skipped only when the cache already holds it as a live, in-scope (not context) row with relations,
+    a stored revision and the same (Rev, ChangedDate) that Azure DevOps reports now. Everything else is read in
+    full exactly as before: uncached ids, context rows (they must be promoted to in-scope), soft-deleted rows
+    (they must be restored), rows without a stored revision (cache written before revisions were kept) and any id
+    the probe could not answer (failed batch, omitted item). The probe is an optimisation only: its failure never
+    fails the sync and never skips a read.
+    Returns (ids_to_read_in_full, [(id, changed_date) of skipped ids]).
+    """
+    cached = {}
+    with db_lock, get_db_connection() as conn:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ','.join('?' for _ in chunk)
+            for r in conn.execute(
+                f'SELECT id, rev, changed_date FROM work_items WHERE id IN ({marks}) AND deleted_at IS NULL '
+                'AND is_context = 0 AND rev IS NOT NULL AND relations_json IS NOT NULL AND last_seen_at IS NOT NULL',
+                chunk,
+            ):
+                cached[r['id']] = (r['rev'], r['changed_date'])
+    candidates = [i for i in ids if i in cached]
+    if not candidates:
+        return ids, []
+
+    unchanged = []
+    for start in range(0, len(candidates), azure_client.BATCH_SIZE):
+        batch = candidates[start:start + azure_client.BATCH_SIZE]
+        fr = client.get_items(batch, expand_relations=False, fields=PROBE_FIELDS, error_policy_omit=True)
+        run.probed += len(batch)
+        for item_id, raw in fr.items.items():
+            remote = (_rev_of(raw), (raw.get('fields') or {}).get('System.ChangedDate'))
+            if remote[0] is not None and remote[1] and remote == cached[item_id]:
+                unchanged.append((item_id, remote[1]))
+        if fr.failed_batches:
+            # The client already spent its retries (and honoured Retry-After) on this batch. Stop probing: the ids
+            # from here on are read in full below, so a throttled or failing probe costs one batch of attempts,
+            # not one per remaining batch.
+            run.warn(f"probe_failed:{len(candidates) - start}")
+            break
+    skip = {i for i, _ in unchanged}
+    return [i for i in ids if i not in skip], unchanged
+
+
 def _fetch_phase(org_url, pat, run, force_full, max_items, client):
     last_watermark = get_sync_meta('watermark')
     is_incremental = bool(last_watermark) and not force_full
@@ -699,10 +828,18 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
         ids = ids[:max_items]
         truncated = True
 
+    unchanged = []
+    read_ids = ids
+    if is_incremental and len(ids) > PROBE_MIN_IDS and get_sync_meta('closure_dirty') != '1':
+        # A partial run may have left holes in the ancestor / descendant / dependency closure that only a full
+        # re-read of the window heals, so the probe is skipped until a complete run clears the flag.
+        read_ids, unchanged = _probe_unchanged(client, ids, run)
+    run.unchanged_skipped = len(unchanged)
+
     main_rows = []
     returned_ids = set()
-    if ids:
-        fr = client.get_items(ids, expand_relations=True, error_policy_omit=True)
+    if read_ids:
+        fr = client.get_items(read_ids, expand_relations=True, error_policy_omit=True)
         if fr.failed_batches:
             raise SyncError(f"details_fetch_failed:{sum(len(b) for b in fr.failed_batches)} ids "
                             f"({'; '.join(fr.errors[:2])})")
@@ -711,11 +848,33 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
         for raw in fr.items.values():
             main_rows.append(parse_work_item(raw, org_url))
         returned_ids = set(fr.items)
-    run.fetched = len(main_rows)
+    run.details_fetched = len(main_rows)
+    run.fetched = len(main_rows) + len(unchanged)  # rows brought up to date in this window, as before
 
     with db_lock:
         alive = _alive_ids()
-    context_rows = _collect_context(client, org_url, main_rows, run, alive)
+    prior_missing = _load_closure_missing()
+    now_iso = _utcnow().isoformat()
+    # A remembered target is retried only while a row that linked to it still does and was not re-read in this run
+    # (a re-read row decides for itself: the normal closure asks for what it still links to). Removing the link
+    # therefore ends the retry instead of creating a context row nobody needs.
+    read_now = {r['id'] for r in main_rows}
+    retry, retry_sources = {}, {}
+    for i, (kind, first_seen, sources) in prior_missing.items():
+        if _retry_expired(first_seen, last_watermark):
+            continue
+        if sources is None:
+            retry[i], retry_sources[i] = kind, None
+            continue
+        still_linked = [(s, k) for s, k in sources if s in alive and s not in read_now]
+        if still_linked:
+            # the target is read the way the rows that still link to it would read it: as a child / parent (its own
+            # children and ancestors follow) if one of them links by hierarchy, otherwise as a dependency only
+            retry[i] = 'hier' if any(k == 'hier' for _, k in still_linked) else 'dep'
+            retry_sources[i] = still_linked
+    context_rows = _collect_context(client, org_url, main_rows, run, alive, retry, retry_sources)
+    closure_missing = {str(i): [kind, prior_missing[i][1] if i in retry else now_iso, sources]
+                       for i, (kind, sources) in run.closure_missing.items()}
 
     # Reconcile hollow / unverified cached rows (missing relations or last_seen_at) during full sync
     if not is_incremental and run.complete and not truncated:
@@ -739,6 +898,8 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
     return {
         "is_incremental": is_incremental,
         "ids": ids,
+        "unchanged": unchanged,
+        "closure_missing": closure_missing,
         "main_rows": main_rows + reconcile_rows,
         "context_rows": context_rows,
         "delete_ids": delete_ids,
@@ -751,8 +912,8 @@ def _apply_phase(plan, run):
     now_iso = _utcnow().isoformat()
     main_rows = plan["main_rows"]
     new_watermark = plan["last_watermark"]
-    for r in main_rows:
-        cd = r.get("changed_date")
+    unchanged = plan.get("unchanged") or []
+    for cd in [r.get("changed_date") for r in main_rows] + [cd for _, cd in unchanged]:
         if cd and (not new_watermark or cd > new_watermark):
             new_watermark = cd
 
@@ -769,7 +930,13 @@ def _apply_phase(plan, run):
                         continue
                     seen.add(r['id'])
                     conn.execute(_UPSERT_MAIN_SQL, _row_params(r, now_iso, False))
-                run.upserted = len(seen)
+                if unchanged:
+                    # Same content as Azure DevOps reports: only the "seen in this sync" bookkeeping moves.
+                    conn.executemany(
+                        'UPDATE work_items SET last_synced_at = ?, last_seen_at = ? '
+                        'WHERE id = ? AND deleted_at IS NULL AND is_context = 0',
+                        [(now_iso, now_iso, i) for i, _ in unchanged])
+                run.upserted = len(seen) + len(unchanged)
 
                 ctx_count = 0
                 for r in plan["context_rows"]:
@@ -793,7 +960,15 @@ def _apply_phase(plan, run):
 
                 run.derived = recompute_derived(conn)
 
+                cm = plan.get("closure_missing") or {}
+                cm_overflow = len(cm) > CLOSURE_RETRY_MAX
+                if cm_overflow:
+                    # More unreachable targets than the retry list can hold: keep the newest and let the next run
+                    # re-read its whole window (probe off, as for a partial run) so none of them is forgotten.
+                    cm = dict(sorted(cm.items(), key=lambda kv: kv[1][1], reverse=True)[:CLOSURE_RETRY_MAX])
+                _set_meta(conn, 'closure_dirty', '0' if run.complete and not cm_overflow else '1', now_iso)
                 if run.complete:
+                    _set_meta(conn, 'closure_missing', json.dumps(cm), now_iso)
                     if new_watermark:
                         _set_meta(conn, 'watermark', new_watermark, now_iso)
                     if not plan["is_incremental"]:
