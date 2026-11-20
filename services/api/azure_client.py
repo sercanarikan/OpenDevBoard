@@ -4,16 +4,26 @@ Only HTTP GET and the WIQL query POST (``/_apis/wit/wiql``) are issued.
 """
 
 import base64
+import logging
+import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import requests
+
+logger = logging.getLogger('azure_client')
 
 WIQL_RESULT_LIMIT = 20000
 BATCH_SIZE = 200
 API_VERSION = '7.1'
 RETRY_STATUSES = (429, 502, 503, 504)
 RETRY_AFTER_CAP = 30
+# Bounded parallelism for the read-only detail GETs of get_items(); SYNC_DETAIL_WORKERS selects it.
+# 1 (the default) is the previous strictly sequential behaviour; anything above MAX_DETAIL_WORKERS is clamped.
+DEFAULT_DETAIL_WORKERS = 1
+MAX_DETAIL_WORKERS = 8
 SIZE_LIMIT_MARKERS = ('VS402337', 'size limit')
 WIQL_PATH = '/_apis/wit/wiql'
 
@@ -69,15 +79,105 @@ def _json(resp):
         raise AzureError('invalid JSON from Azure DevOps', status=getattr(resp, 'status_code', None)) from e
 
 
+def normalize_workers(raw, default=DEFAULT_DETAIL_WORKERS):
+    """Maps a configured worker count to an int in [1, MAX_DETAIL_WORKERS]. Never raises.
+
+    None / empty -> default. A value that is not a whole number (text, float with a fraction, bool), zero or negative
+    -> 1 (sequential, the safe choice) with a warning. Above MAX_DETAIL_WORKERS -> MAX_DETAIL_WORKERS with a warning.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    value = None
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        value = raw
+    elif isinstance(raw, float) and raw.is_integer():
+        value = int(raw)
+    elif isinstance(raw, str):
+        try:
+            value = int(raw.strip())
+        except ValueError:
+            value = None
+    if value is None or value < 1:
+        logger.warning('Invalid detail worker count %r; using 1 (sequential).', raw)
+        return 1
+    if value > MAX_DETAIL_WORKERS:
+        logger.warning('Detail worker count %r exceeds the maximum; using %d.', raw, MAX_DETAIL_WORKERS)
+        return MAX_DETAIL_WORKERS
+    return value
+
+
+class _Limiter:
+    """Concurrency cap that can only shrink while a fan-out runs (halved on a throttling answer: HTTP 429 or any
+    response that carries Retry-After)."""
+
+    def __init__(self, limit):
+        self.limit, self.active = max(1, limit), 0
+        self.last_shrink = 0.0
+        self._cond = threading.Condition()
+
+    def acquire(self):
+        with self._cond:
+            while self.active >= self.limit:
+                self._cond.wait()
+            self.active += 1
+
+    def release(self):
+        with self._cond:
+            self.active -= 1
+            self._cond.notify_all()
+
+    def shrink(self, request_started):
+        """Halves the cap, but only for a request that started after the previous shrink: the other requests that
+        were already in flight when the limit was hit report the same overload and must not shrink it again."""
+        with self._cond:
+            if request_started > self.last_shrink:
+                self.limit = max(1, self.limit // 2)
+                self.last_shrink = time.monotonic()
+
+
 class AzureClient:
-    def __init__(self, org_url, pat, sleep=time.sleep, max_retries=3, timeout=30):
+    def __init__(self, org_url, pat, sleep=time.sleep, max_retries=3, timeout=30, workers=None):
         self._org = org_url.rstrip('/')
         token = base64.b64encode(f':{pat}'.encode('utf-8')).decode('ascii')
         self._headers = {'Authorization': f'Basic {token}', 'Accept': 'application/json'}
         self._sleep = sleep
         self._max_retries = max_retries
         self._timeout = timeout
-        self.stats = {'requests': 0, 'retries': 0, 'wiql_calls': 0, 'batches': 0}
+        self.stats = {'requests': 0, 'retries': 0, 'wiql_calls': 0, 'batches': 0, 'throttled': 0}
+        self._workers = normalize_workers(os.environ.get('SYNC_DETAIL_WORKERS') if workers is None else workers)
+        # Shared state of a parallel fan-out. _stats_lock guards `stats` and `_gate_until`; `_limiter` is only set
+        # while a fan-out runs and is owned by it (`_fanout_lock`: a second concurrent get_items runs sequentially).
+        self._stats_lock = threading.Lock()
+        self._fanout_lock = threading.Lock()
+        self._gate_until = 0.0     # monotonic time before which no worker issues a request (Retry-After honoured fleet-wide)
+        self._limiter = None
+
+    def _bump(self, key):
+        with self._stats_lock:
+            self.stats[key] += 1
+
+    def _wait_gate(self):
+        while self._limiter is not None:
+            with self._stats_lock:
+                remaining = self._gate_until - time.monotonic()
+            if remaining <= 0:
+                return
+            self._sleep(remaining)
+
+    def _send(self, method, url, kw):
+        """One HTTP attempt. During a parallel fan-out it holds a concurrency slot for the attempt only, never while
+        backing off: a retry queues behind the (possibly just shrunk) cap like any other request instead of keeping
+        the slot it got before the 429."""
+        limiter = self._limiter
+        if limiter is not None:
+            limiter.acquire()
+        try:
+            if method == 'GET':
+                return requests.get(url, headers=self._headers, timeout=self._timeout)
+            return requests.post(url, headers=self._headers, json=kw.get('json'), timeout=self._timeout)
+        finally:
+            if limiter is not None:
+                limiter.release()
 
     def _request(self, method, url, **kw):
         if method == 'GET':
@@ -91,13 +191,12 @@ class AzureClient:
 
         attempt = 0
         while True:
-            self.stats['requests'] += 1
+            self._wait_gate()
+            self._bump('requests')
+            started = time.monotonic()
             retry_after = None
             try:
-                if method == 'GET':
-                    resp = requests.get(url, headers=self._headers, timeout=self._timeout)
-                else:
-                    resp = requests.post(url, headers=self._headers, json=kw.get('json'), timeout=self._timeout)
+                resp = self._send(method, url, kw)
             except (requests.ConnectionError, requests.Timeout):
                 failure = AzureError('network error contacting Azure DevOps', retryable=True)
             else:
@@ -117,8 +216,18 @@ class AzureClient:
             if attempt >= self._max_retries:
                 raise failure
             delay = retry_after if retry_after is not None else float(2 ** attempt)
+            limiter = self._limiter
+            if limiter is not None and (failure.status == 429 or retry_after is not None):
+                # Parallel fan-out, throttling answer: pause every worker for the advertised time and halve the
+                # concurrency for the rest of this fan-out, so the retry does not meet the same limit again. Other
+                # transient failures (5xx, network) only back off the request that met them: pausing the whole fleet
+                # for each of them would serialise the retries of an outage.
+                with self._stats_lock:
+                    self._gate_until = max(self._gate_until, time.monotonic() + delay)
+                    self.stats['throttled'] += 1
+                limiter.shrink(started)
             self._sleep(delay)
-            self.stats['retries'] += 1
+            self._bump('retries')
             attempt += 1
 
     def wiql_ids(self, where, order_by='[System.Id]', top=None):
@@ -171,18 +280,17 @@ class AzureClient:
     def get_items(self, ids, expand_relations=True, fields=None, error_policy_omit=False, raise_on_error=False):
         requested = list(dict.fromkeys(int(i) for i in ids))
         result = FetchResult()
-        for start in range(0, len(requested), BATCH_SIZE):
-            batch = requested[start:start + BATCH_SIZE]
+        batches = [requested[s:s + BATCH_SIZE] for s in range(0, len(requested), BATCH_SIZE)]
+        if self._workers > 1 and len(batches) > 1 and not raise_on_error:
+            outcomes = self._fetch_parallel(batches, expand_relations, fields, error_policy_omit)
+        else:
+            outcomes = (self._fetch_one(b, expand_relations, fields, error_policy_omit, raise_on_error) for b in batches)
+        # Outcomes are consumed in batch order, so items / missing / errors are ordered exactly as in a sequential run.
+        for batch, (data, error) in zip(batches, outcomes):
             result.batches += 1
-            self.stats['batches'] += 1
-            url = self._items_url(batch, expand_relations, fields, error_policy_omit)
-            try:
-                data = _json(self._request('GET', url))
-            except AzureError as e:
-                if raise_on_error:
-                    raise
+            if error is not None:
                 result.failed_batches.append(batch)
-                result.errors.append(f'batch {result.batches}: {e}')
+                result.errors.append(f'batch {result.batches}: {error}')
                 continue
             returned = set()
             for item in (data.get('value') or []):
@@ -193,6 +301,41 @@ class AzureClient:
                 returned.add(item_id)
             result.missing.extend(i for i in batch if i not in returned)
         return result
+
+    def _fetch_one(self, batch, expand_relations, fields, error_policy_omit, raise_on_error):
+        self._bump('batches')
+        url = self._items_url(batch, expand_relations, fields, error_policy_omit)
+        try:
+            return _json(self._request('GET', url)), None
+        except AzureError as e:
+            if raise_on_error:
+                raise
+            return None, e
+
+    def _fetch_parallel(self, batches, expand_relations, fields, error_policy_omit):
+        if not self._fanout_lock.acquire(blocking=False):
+            # another thread is already fanning out on this client: stay sequential rather than share its limiter
+            return [self._fetch_one(b, expand_relations, fields, error_policy_omit, False) for b in batches]
+        limiter = _Limiter(self._workers)
+        with self._stats_lock:
+            self._gate_until = 0.0
+        self._limiter = limiter
+
+        def task(batch):
+            return self._fetch_one(batch, expand_relations, fields, error_policy_omit, False)
+
+        pool = ThreadPoolExecutor(max_workers=min(self._workers, len(batches)), thread_name_prefix='azure-detail')
+        try:
+            futures = [pool.submit(task, b) for b in batches]
+            return [f.result() for f in futures]  # batch order, whatever order the workers finished in
+        except BaseException:
+            # an unexpected error (not an AzureError, which is returned per batch): do not start the batches still queued
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
+        finally:
+            pool.shutdown(wait=True)
+            self._limiter = None
+            self._fanout_lock.release()
 
     def _items_url(self, batch, expand_relations, fields, error_policy_omit):
         parts = [f'ids={",".join(str(i) for i in batch)}']

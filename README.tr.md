@@ -60,6 +60,7 @@ Görüntülemek istediğiniz Azure DevOps verileri için gerekli salt okunur kap
 | `DEVOPS_FIXTURE_MODE` | Deterministik çevrimdışı demo verisi için varsayılan `1`; yalnız canlı Azure DevOps için `0` yapın |
 | `DEVOPS_DATA_DIR` | Backend SQLite veri dizini; Compose değeri `/data` |
 | `SYNC_INTERVAL_SEC` | Arka plan eşitleme aralığı (saniye) |
+| `SYNC_DETAIL_WORKERS` | Eşitleme sırasında eşzamanlı, salt okunur Work Item detay istekleri. Varsayılan `1` (sıralı); önerilen opt-in değeri `4`, üst sınır `8`. Geçersiz veya pozitif olmayan değerler `1`'e düşer |
 | `DISABLE_BACKGROUND_SYNC` | Otomatik eşitlemeyi kapatmak için `1` yapın |
 | `WEB_PORT` | Web servisi host portu; varsayılan `5174` |
 | `VITE_API_BASE_URL` | Yerel geliştirmede frontend API yolu; varsayılan `/api` |

@@ -44,4 +44,4 @@ docker compose down
 
 ## Portlar ve ortam
 
-Frontend portu varsayılan olarak `5174`'tür ve `WEB_PORT` ile değiştirilebilir. API host'a açılmaz. İlgili backend ayarları `DEVOPS_DATA_DIR` (Compose varsayılanı `/data`), `SYNC_INTERVAL_SEC` (varsayılan `300`) ve otomatik eşitlemeyi kapatan `DISABLE_BACKGROUND_SYNC=1` değişkenleridir. Şablon değerleri için `.env.example` dosyasına bakın.
+Frontend portu varsayılan olarak `5174`'tür ve `WEB_PORT` ile değiştirilebilir. API host'a açılmaz. İlgili backend ayarları `DEVOPS_DATA_DIR` (Compose varsayılanı `/data`), `SYNC_INTERVAL_SEC` (varsayılan `300`), `SYNC_DETAIL_WORKERS` (varsayılan `1`; ilk eşitlemeyi hızlandırmak için önerilen opt-in değeri `4`, üst sınır `8`) ve otomatik eşitlemeyi kapatan `DISABLE_BACKGROUND_SYNC=1` değişkenleridir. Kök `.env` dosyasında ayarlayın; Compose bu dosyayı `api` container'ına geçirir, dosyayı düzenledikten sonra container'ı yeniden oluşturun (`docker compose up -d`). Şablon değerleri için `.env.example` dosyasına bakın.
