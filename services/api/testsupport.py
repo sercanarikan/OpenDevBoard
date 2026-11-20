@@ -71,6 +71,28 @@ def import_service_modules():
 import_service_modules()
 
 
+def import_app():
+    """``app`` keeps its own cache table in a *relative* ``devops_cache.db`` (``app.DB_PATH``) and creates it while
+    it is imported, independent of ``DEVOPS_DATA_DIR``. Import it from a throwaway working directory and park
+    ``app.DB_PATH`` on a throwaway file, so neither the import nor a test can create or modify a
+    ``devops_cache.db`` in the real working directory."""
+    if 'app' in sys.modules:
+        return sys.modules['app']
+    scratch = tempfile.mkdtemp(prefix='devopsflow-test-app-')
+    atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+    cwd = os.getcwd()
+    os.chdir(scratch)
+    try:
+        module = importlib.import_module('app')
+    finally:
+        os.chdir(cwd)
+    module.DB_PATH = os.path.join(scratch, 'devops_cache.db')
+    return module
+
+
+app = import_app()
+
+
 def isolate_database(module_globals):
     """Gives the calling test module its own temporary SQLite database for the duration of the module."""
     state = {}
@@ -82,6 +104,9 @@ def isolate_database(module_globals):
         state['dir'] = tempfile.mkdtemp(prefix='devopsflow-test-db-')
         sync_service.DB_PATH = os.path.join(state['dir'], 'devops_cache.db')
         sync_service.init_db()
+        state['previous_app_db_path'] = app.DB_PATH
+        app.DB_PATH = os.path.join(state['dir'], 'app_cache.db')
+        app.init_db()
         if previous_setup:
             previous_setup()
 
@@ -91,6 +116,7 @@ def isolate_database(module_globals):
                 previous_teardown()
         finally:
             sync_service.DB_PATH = state.pop('previous_db_path')
+            app.DB_PATH = state.pop('previous_app_db_path')
             shutil.rmtree(state.pop('dir'), ignore_errors=True)
 
     module_globals['setUpModule'] = setUpModule
