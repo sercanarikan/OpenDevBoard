@@ -4,27 +4,69 @@ Two guarantees:
   * a read request never waits for ``sync_service.db_lock`` (the writer lock the sync apply phase holds), and
   * what a read request returns is ONE committed snapshot, and its ``dataVersion`` / ``lastSyncedAt`` belong to it.
 
+The tests delete and rewrite ``work_items`` / ``sync_state``, so they never use whatever database
+``sync_service`` happens to point at. ``setUpModule`` binds ``sync_service.DB_PATH`` to a fresh temporary
+directory; ``tearDownModule`` restores the previous path and removes the directory. Neither a pre-set
+``DEVOPS_DATA_DIR`` nor an earlier import of ``sync_service`` can redirect the destructive statements.
+
 Run:  python -m unittest discover -s services/api -p "test_list_read_isolation.py" -v
 """
+import atexit
 import os
-import tempfile
+import shutil
 import sqlite3
+import sys
+import tempfile
 import threading
 import time
 import unittest
 from contextlib import contextmanager
 from unittest import mock
 
-os.environ.setdefault('DEVOPS_DATA_DIR', tempfile.mkdtemp(prefix='devopsflow-isolation-test-'))
 
-import sync_service  # noqa: E402
+def _import_sync_service():
+    """Imports ``sync_service`` without letting ``DEVOPS_DATA_DIR`` decide where its import-time ``init_db()``
+    writes. When the module is already imported (the usual case inside ``unittest discover``) nothing happens."""
+    if 'sync_service' in sys.modules:
+        return sys.modules['sync_service']
+    boot_dir = tempfile.mkdtemp(prefix='devopsflow-isolation-import-')
+    atexit.register(shutil.rmtree, boot_dir, ignore_errors=True)
+    previous = os.environ.get('DEVOPS_DATA_DIR')
+    os.environ['DEVOPS_DATA_DIR'] = boot_dir
+    try:
+        import sync_service as module
+    finally:
+        if previous is None:
+            os.environ.pop('DEVOPS_DATA_DIR', None)
+        else:
+            os.environ['DEVOPS_DATA_DIR'] = previous
+    return module
+
+
+sync_service = _import_sync_service()
 import query_service as qs  # noqa: E402
 
 ROWS = 200
 CHUNK = 20
+_STATE = {}
+
+
+def setUpModule():
+    _STATE['previous_db_path'] = sync_service.DB_PATH
+    _STATE['dir'] = tempfile.mkdtemp(prefix='devopsflow-isolation-test-')
+    sync_service.DB_PATH = os.path.join(_STATE['dir'], 'work_items_isolation.db')
+    sync_service.init_db()
+
+
+def tearDownModule():
+    sync_service.DB_PATH = _STATE.pop('previous_db_path')
+    shutil.rmtree(_STATE.pop('dir'), ignore_errors=True)
 
 
 def _seed(generation=0):
+    # Safety net before any destructive statement: only ever wipe the database created in setUpModule.
+    if not _STATE.get('dir') or os.path.dirname(os.path.abspath(sync_service.DB_PATH)) != os.path.abspath(_STATE['dir']):
+        raise RuntimeError(f'refusing to wipe a database outside the test directory: {sync_service.DB_PATH}')
     sync_service.init_db()
     conn = sync_service.get_db_connection()
     try:
