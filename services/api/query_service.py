@@ -288,13 +288,10 @@ def order_sql(p, qualify=''):
     return f"{q}id {d}"
 
 
-def _connect():
-    return sync_service.get_db_connection()
-
-
-def _last_synced():
-    return (sync_service.get_sync_meta('last_success_at') or sync_service.get_sync_meta('last_incremental_sync')
-            or sync_service.get_sync_meta('last_full_sync'))
+def _last_synced(conn=None):
+    return (sync_service.get_sync_meta('last_success_at', conn=conn)
+            or sync_service.get_sync_meta('last_incremental_sync', conn=conn)
+            or sync_service.get_sync_meta('last_full_sync', conn=conn))
 
 
 def _data_scope():
@@ -314,15 +311,15 @@ def list_work_items(params):
     where, wparams = build_where(params)
     order = order_sql(params)
     limit, offset = params['limit'], params['offset']
-    with sync_service.db_lock, _connect() as conn:
+    with sync_service.read_snapshot() as conn:
         register_functions(conn)
         total = conn.execute(f"SELECT COUNT(*) AS c FROM work_items WHERE {where}", wparams).fetchone()['c']
         rows = conn.execute(
             f"SELECT * FROM work_items WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
             wparams + [limit, offset],
         ).fetchall()
-        version = sync_service.get_data_version()
-        last = _last_synced()
+        version = sync_service.get_data_version(conn)
+        last = _last_synced(conn)
     items = _rows_to_items(rows)
     total_pages = max(1, math.ceil(total / limit)) if total else 1
     page = offset // limit + 1
@@ -358,9 +355,9 @@ def summary(project='all', current_user=''):
     base = parse_list_params({'project': project or 'all', 'quickFilter': 'all'})
     base['currentUser'] = current_user or ''
     scope_where, scope_params = build_where(base, quick=False)
-    with sync_service.db_lock, _connect() as conn:
+    with sync_service.read_snapshot() as conn:
         register_functions(conn)
-        version = sync_service.get_data_version()
+        version = sync_service.get_data_version(conn)
 
         def count_for(qf):
             p = dict(base, quickFilter=qf)
@@ -483,11 +480,11 @@ def progress_for(ids):
     ids = list(dict.fromkeys(int(i) for i in ids))
     if len(ids) > MAX_PROGRESS_IDS:
         raise ParamError(f"at most {MAX_PROGRESS_IDS} ids per request")
-    with sync_service.db_lock, _connect() as conn:
+    with sync_service.read_snapshot() as conn:
         rows = conn.execute(
             'SELECT id, parent_id, state, is_blocked, is_unassigned FROM work_items WHERE deleted_at IS NULL'
         ).fetchall()
-        version = sync_service.get_data_version()
+        version = sync_service.get_data_version(conn)
     full = compute_progress_map(rows)
     return {
         'progress': {str(i): full[i] for i in ids if i in full},
@@ -524,7 +521,7 @@ def _parse_id_list(raw, limit, name):
 def children(item_id):
     """Implements GET /api/work-items/<id>/children (doc §9). Includes context and completed rows.
     Returns None when the parent itself is not alive."""
-    with sync_service.db_lock, _connect() as conn:
+    with sync_service.read_snapshot() as conn:
         parent = conn.execute('SELECT 1 FROM work_items WHERE id = ? AND deleted_at IS NULL', (item_id,)).fetchone()
         if parent is None:
             return None
@@ -536,7 +533,7 @@ def children(item_id):
             'ORDER BY is_active DESC, priority ASC, id ASC LIMIT ?',
             (item_id, CHILDREN_LIMIT),
         ).fetchall()
-        version = sync_service.get_data_version()
+        version = sync_service.get_data_version(conn)
     return {
         'items': _rows_to_items(rows),
         'total': total,
@@ -548,12 +545,12 @@ def children(item_id):
 def batch(raw_ids):
     """Implements GET /api/work-items/batch (doc §10). Context rows allowed; order = request order."""
     ids = _parse_id_list(raw_ids, BATCH_LIMIT, 'ids')
-    with sync_service.db_lock, _connect() as conn:
+    with sync_service.read_snapshot() as conn:
         marks = ','.join('?' for _ in ids)
         rows = conn.execute(
             f'SELECT * FROM work_items WHERE id IN ({marks}) AND deleted_at IS NULL', ids
         ).fetchall()
-        version = sync_service.get_data_version()
+        version = sync_service.get_data_version(conn)
     by_id = {r['id']: r for r in rows}
     return {
         'items': [sync_service.row_to_work_item_dict(by_id[i]) for i in ids if i in by_id],
@@ -615,9 +612,9 @@ def kanban(params):
     lane_expr = _LANE_EXPR[mode]
     col_expr = column_case_sql()
     order = order_sql(params)
-    with sync_service.db_lock, _connect() as conn:
+    with sync_service.read_snapshot() as conn:
         register_functions(conn)
-        version = sync_service.get_data_version()
+        version = sync_service.get_data_version(conn)
         col_totals = {c: 0 for c in COLUMNS}
         for r in conn.execute(
             f"SELECT {col_expr} AS c, COUNT(*) AS n FROM work_items WHERE {where} GROUP BY c", wparams
@@ -648,33 +645,35 @@ def kanban(params):
                 cards.setdefault((r['lk'], r['col']), []).append(r)
                 samples.setdefault(r['lk'], r)
 
-        progress_map = None
+        # Only SQL happens inside the snapshot; the in-memory work below runs after the read transaction is closed.
+        alive = None
         if mode == 'parent':
             alive = conn.execute(
                 'SELECT id, parent_id, state, is_blocked, is_unassigned FROM work_items WHERE deleted_at IS NULL'
             ).fetchall()
-            progress_map = compute_progress_map(alive)
+        metas = {lk: _lane_meta(conn, mode, lk, samples.get(lk)) for lk in window}
 
-        lanes = []
-        for lk in window:
-            counts = lane_counts.get(lk, {c: 0 for c in COLUMNS})
-            total = lane_totals[lk]
-            meta = _lane_meta(conn, mode, lk, samples.get(lk))
-            columns = {c: _rows_to_items(cards.get((lk, c), [])) for c in COLUMNS}
-            progress = None
-            if mode == 'parent' and lk != 'none' and int(lk) in progress_map:
-                pm = progress_map[int(lk)]
-                progress = {k: pm[k] for k in ('totalUnits', 'completedUnits', 'percent')}
-            if progress is None:
-                done = counts['done']
-                progress = {'totalUnits': total, 'completedUnits': done,
-                            'percent': int(_js_round(done / total * 100)) if total else 0}
-            lane = {
-                'id': meta['id'], 'key': meta['key'], 'mode': mode,
-                'title': meta['title'], 'type': meta['type'], 'project': meta['project'],
-                'total': total, 'counts': counts, 'columns': columns, 'progress': progress,
-            }
-            lanes.append(lane)
+    progress_map = compute_progress_map(alive) if alive is not None else None
+    lanes = []
+    for lk in window:
+        counts = lane_counts.get(lk, {c: 0 for c in COLUMNS})
+        total = lane_totals[lk]
+        meta = metas[lk]
+        columns = {c: _rows_to_items(cards.get((lk, c), [])) for c in COLUMNS}
+        progress = None
+        if mode == 'parent' and lk != 'none' and int(lk) in progress_map:
+            pm = progress_map[int(lk)]
+            progress = {k: pm[k] for k in ('totalUnits', 'completedUnits', 'percent')}
+        if progress is None:
+            done = counts['done']
+            progress = {'totalUnits': total, 'completedUnits': done,
+                        'percent': int(_js_round(done / total * 100)) if total else 0}
+        lane = {
+            'id': meta['id'], 'key': meta['key'], 'mode': mode,
+            'title': meta['title'], 'type': meta['type'], 'project': meta['project'],
+            'total': total, 'counts': counts, 'columns': columns, 'progress': progress,
+        }
+        lanes.append(lane)
 
     return {
         'columns': col_totals,

@@ -14,6 +14,7 @@ import sqlite3
 import logging
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
 from threading import Lock, RLock
@@ -129,9 +130,37 @@ def init_db():
 init_db()
 
 
-def get_sync_meta(key, default=None):
-    with db_lock, get_db_connection() as conn:
-        cursor = conn.cursor()
+@contextmanager
+def read_snapshot():
+    """A read-only connection pinned to ONE committed snapshot, taken without ``db_lock``.
+
+    ``db_lock`` serialises writers (the sync apply phase holds it for its whole transaction). Readers do not need
+    it: the database is in WAL mode, so a reader keeps seeing the last committed state while a write transaction is
+    open and never sees a half-applied sync. The explicit ``BEGIN`` matters: without it every statement would run in
+    its own autocommit snapshot and one request could mix rows from two syncs. Everything a request returns
+    (rows, counts, ``get_data_version(conn)``, ``get_sync_meta(..., conn=conn)``) must be read through this
+    connection so that the version belongs to the data.
+    """
+    conn = get_db_connection()
+    conn.isolation_level = None
+    try:
+        conn.execute('BEGIN')  # deferred: the snapshot is fixed by the first read below
+        yield conn
+    finally:
+        try:
+            conn.execute('ROLLBACK')
+        except sqlite3.Error:
+            pass
+        conn.close()
+
+
+def get_sync_meta(key, default=None, conn=None):
+    """``conn`` reads inside the caller's snapshot (see read_snapshot); without it the call is self-contained."""
+    if conn is not None:
+        row = conn.execute('SELECT val FROM sync_state WHERE key = ?', (key,)).fetchone()
+        return row['val'] if row else default
+    with db_lock, get_db_connection() as own:
+        cursor = own.cursor()
         cursor.execute('SELECT val FROM sync_state WHERE key = ?', (key,))
         row = cursor.fetchone()
         return row['val'] if row else default
@@ -874,14 +903,21 @@ def get_sync_report():
     }
 
 
-def get_data_version():
-    """Cheap token that changes whenever the served data may have changed."""
-    with db_lock, get_db_connection() as conn:
-        c = conn.cursor()
-        row = c.execute(
-            'SELECT COUNT(*) AS n, MAX(last_synced_at) AS m FROM work_items WHERE deleted_at IS NULL').fetchone()
-        deleted = c.execute('SELECT COUNT(*) FROM work_items WHERE deleted_at IS NOT NULL').fetchone()[0]
-    return f"{row['n']}:{row['m'] or ''}:{get_sync_meta('last_success_at') or ''}:{deleted}"
+def _data_version_from(conn):
+    row = conn.execute(
+        'SELECT COUNT(*) AS n, MAX(last_synced_at) AS m FROM work_items WHERE deleted_at IS NULL').fetchone()
+    deleted = conn.execute('SELECT COUNT(*) FROM work_items WHERE deleted_at IS NOT NULL').fetchone()[0]
+    return f"{row['n']}:{row['m'] or ''}:{get_sync_meta('last_success_at', conn=conn) or ''}:{deleted}"
+
+
+def get_data_version(conn=None):
+    """Token that changes whenever the served data may have changed (format unchanged).
+
+    Pass the request's ``read_snapshot()`` connection so the token describes the very rows being returned."""
+    if conn is not None:
+        return _data_version_from(conn)
+    with db_lock, get_db_connection() as own:
+        return _data_version_from(own)
 
 
 # ----------------------------------------------------------------------------------------------
