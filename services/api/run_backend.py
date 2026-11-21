@@ -22,6 +22,7 @@ sys.path.insert(0, str(api_dir))
 from app import app  # noqa: E402
 import sync_service  # noqa: E402
 import fixture_data  # noqa: E402
+import observability  # noqa: E402
 
 logger = logging.getLogger("run_backend")
 
@@ -61,8 +62,10 @@ def _record_scheduler_result(result):
     if status == 'success' and mode == 'full':
         sync_service.set_sync_meta_many({INITIAL_FULL_PARTIAL_COUNT_META: 0,
                                          INITIAL_FULL_RETRY_AT_META: ''})
+        observability.best_effort(observability.set_scheduler_backoff, 0)
         return None
     if status != 'partial' or mode != 'full' or last_full:
+        observability.best_effort(observability.set_scheduler_backoff, 0)
         return None
 
     try:
@@ -75,6 +78,7 @@ def _record_scheduler_result(result):
     retry_at = (_utcnow() + timedelta(seconds=delay)).isoformat()
     sync_service.set_sync_meta_many({INITIAL_FULL_PARTIAL_COUNT_META: partial_count,
                                      INITIAL_FULL_RETRY_AT_META: retry_at})
+    observability.best_effort(observability.set_scheduler_backoff, delay)
     return delay
 
 
@@ -86,6 +90,7 @@ def _wait_for_initial_full_retry():
     waited = False
     while True:
         if sync_service.get_sync_meta('last_full_sync'):
+            observability.best_effort(observability.set_scheduler_backoff, 0)
             return waited
         retry_at = sync_service.get_sync_meta(INITIAL_FULL_RETRY_AT_META)
         if not retry_at:
@@ -98,7 +103,9 @@ def _wait_for_initial_full_retry():
         except (TypeError, ValueError):
             return False
         if remaining <= 0:
+            observability.best_effort(observability.set_scheduler_backoff, 0)
             return False
+        observability.best_effort(observability.set_scheduler_backoff, remaining)
         time.sleep(min(remaining, INITIAL_FULL_RETRY_CHECK_SEC))
         waited = True
 
@@ -123,6 +130,7 @@ def background_sync_loop():
             status = result.get('status')
             if status == 'error':
                 logger.warning("Sync failed, retrying in %ss", backoff)
+                observability.best_effort(observability.set_scheduler_backoff, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, max(SYNC_INTERVAL_SEC, 5))
                 continue
@@ -135,6 +143,7 @@ def background_sync_loop():
                     time.sleep(SYNC_INTERVAL_SEC)
                 continue
             backoff = 5
+            observability.best_effort(observability.set_scheduler_backoff, 0)
         except Exception as ex:  # keep loop alive
             logger.error("Background sync crashed: %s", ex)
         time.sleep(delay)

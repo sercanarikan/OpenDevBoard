@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask import Response
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
 from base64 import b64encode
@@ -15,6 +16,8 @@ from threading import Lock
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import request_coalescing
+import observability
+import ipaddress
 
 # Azure DevOps SDK imports
 from msrest.authentication import BasicAuthentication
@@ -136,6 +139,30 @@ def get_current_user_info():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy", "message": "API is running."}), 200
+
+
+@app.route('/metrics', methods=['GET'])
+def metrics_endpoint():
+    """Internal-only Prometheus scrape endpoint; it is deliberately outside the nginx /api proxy."""
+    try:
+        remote = ipaddress.ip_address(request.remote_addr or '')
+        if not (remote.is_private or remote.is_loopback or remote.is_link_local):
+            return jsonify({"error": "not found"}), 404
+        if not observability.enabled():
+            return jsonify({"error": "metrics disabled"}), 404
+        try:
+            observability.set_sync_state(
+                last_success=sync_service.get_sync_meta('last_success_at'),
+                partial=sync_service.get_sync_meta('sync_status') == 'partial',
+                closure_dirty=sync_service.get_sync_meta('closure_dirty', '0') == '1',
+            )
+        except Exception:
+            pass
+        payload = observability.render_metrics()
+        return Response(payload, content_type='text/plain; version=0.0.4; charset=utf-8')
+    except Exception:
+        app.logger.warning('Metrics scrape failed', exc_info=True)
+        return Response('metrics scrape unavailable\n', status=503, mimetype='text/plain')
 
 @app.route('/api/env-check', methods=['GET'])
 def env_check():

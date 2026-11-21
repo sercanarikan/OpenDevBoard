@@ -8,3 +8,5 @@ azure-devops
 flask-caching
 apscheduler
 sqlite-utils
+prometheus-client
+python-dotenv

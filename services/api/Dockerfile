@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt constraints.txt .
-RUN pip install --no-cache-dir -c constraints.txt -r requirements.txt python-dateutil python-dotenv
+RUN pip install --no-cache-dir -c constraints.txt -r requirements.txt python-dateutil
 
 # Test image: every source file, including test_*.py
 FROM base AS test
