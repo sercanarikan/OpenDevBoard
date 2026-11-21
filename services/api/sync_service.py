@@ -220,6 +220,13 @@ def _set_meta(conn, key, val, now_iso=None):
     ''', (key, str(val), now_iso or _utcnow().isoformat()))
 
 
+def _clear_initial_full_sync_backoff(conn, now_iso=None):
+    """Clear scheduler-only retry state on the same transaction as a successful full sync."""
+    now_iso = now_iso or _utcnow().isoformat()
+    _set_meta(conn, 'initial_full_partial_count', 0, now_iso)
+    _set_meta(conn, 'initial_full_retry_at', '', now_iso)
+
+
 # Terminal states where item is deemed completed (Resolved is NOT completed).
 TERMINAL_STATES = {'done', 'closed', 'completed'}
 
@@ -1041,8 +1048,7 @@ def _apply_phase(plan, run):
                     if not plan["is_incremental"]:
                         _set_meta(conn, 'last_full_sync', now_iso, now_iso)
                         _set_meta(conn, 'total_org_active', run.total_scope or 0, now_iso)
-                        _set_meta(conn, 'initial_full_partial_count', 0, now_iso)
-                        _set_meta(conn, 'initial_full_retry_at', '', now_iso)
+                        _clear_initial_full_sync_backoff(conn, now_iso)
                     _set_meta(conn, 'last_incremental_sync', now_iso, now_iso)
                     _set_meta(conn, 'last_success_at', now_iso, now_iso)
                 conn.execute('COMMIT')

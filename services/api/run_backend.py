@@ -31,6 +31,7 @@ INITIAL_FULL_PARTIAL_COUNT_META = 'initial_full_partial_count'
 INITIAL_FULL_RETRY_AT_META = 'initial_full_retry_at'
 INITIAL_FULL_BACKOFF_BASE_SEC = 600
 INITIAL_FULL_BACKOFF_MAX_SEC = 3600
+INITIAL_FULL_RETRY_CHECK_SEC = 30
 
 
 def _utcnow():
@@ -78,21 +79,28 @@ def _record_scheduler_result(result):
 
 
 def _wait_for_initial_full_retry():
-    """Honor a persisted initial-full retry deadline after a process restart."""
-    if sync_service.get_sync_meta('last_full_sync'):
-        return
-    retry_at = sync_service.get_sync_meta(INITIAL_FULL_RETRY_AT_META)
-    if not retry_at:
-        return
-    try:
-        retry = datetime.fromisoformat(retry_at)
-        if retry.tzinfo is None:
-            retry = retry.replace(tzinfo=timezone.utc)
-        remaining = (retry - _utcnow()).total_seconds()
-    except (TypeError, ValueError):
-        return
-    if remaining > 0:
-        time.sleep(remaining)
+    """Honor the retry deadline, but wake periodically if a manual full sync completes first.
+
+    Returns True when a full sync completed during this wait; callers can then resume the normal sync interval.
+    """
+    waited = False
+    while True:
+        if sync_service.get_sync_meta('last_full_sync'):
+            return waited
+        retry_at = sync_service.get_sync_meta(INITIAL_FULL_RETRY_AT_META)
+        if not retry_at:
+            return False
+        try:
+            retry = datetime.fromisoformat(retry_at)
+            if retry.tzinfo is None:
+                retry = retry.replace(tzinfo=timezone.utc)
+            remaining = (retry - _utcnow()).total_seconds()
+        except (TypeError, ValueError):
+            return False
+        if remaining <= 0:
+            return False
+        time.sleep(min(remaining, INITIAL_FULL_RETRY_CHECK_SEC))
+        waited = True
 
 
 def background_sync_loop():
@@ -105,7 +113,8 @@ def background_sync_loop():
         return
 
     backoff = 5
-    _wait_for_initial_full_retry()
+    if _wait_for_initial_full_retry():
+        time.sleep(SYNC_INTERVAL_SEC)
     while True:
         delay = SYNC_INTERVAL_SEC
         try:
@@ -121,8 +130,10 @@ def background_sync_loop():
                 logger.warning("Sync finished partially: %s", result.get('message', ''))
             partial_delay = _record_scheduler_result(result)
             if partial_delay is not None:
-                delay = partial_delay
-                logger.warning("Initial full sync remains partial; next attempt in %ss", delay)
+                logger.warning("Initial full sync remains partial; next attempt in %ss", partial_delay)
+                if _wait_for_initial_full_retry():
+                    time.sleep(SYNC_INTERVAL_SEC)
+                continue
             backoff = 5
         except Exception as ex:  # keep loop alive
             logger.error("Background sync crashed: %s", ex)

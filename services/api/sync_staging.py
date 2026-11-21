@@ -709,6 +709,7 @@ def apply_phase(plan, run):
                     if not plan['is_incremental']:
                         ss._set_meta(conn, 'last_full_sync', now_iso, now_iso)
                         ss._set_meta(conn, 'total_org_active', run.total_scope or 0, now_iso)
+                        ss._clear_initial_full_sync_backoff(conn, now_iso)
                     ss._set_meta(conn, 'last_incremental_sync', now_iso, now_iso)
                     ss._set_meta(conn, 'last_success_at', now_iso, now_iso)
                 conn.execute('COMMIT')

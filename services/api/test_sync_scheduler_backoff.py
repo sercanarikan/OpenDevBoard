@@ -7,6 +7,7 @@ from unittest import mock
 import testsupport  # noqa: F401  (must precede project imports)
 import app as api_app
 import sync_service
+from test_sync_hardening import FakeAzure, ORG, raw_item
 
 testsupport.isolate_database(globals())
 
@@ -55,7 +56,8 @@ class InitialFullSyncBackoffTests(unittest.TestCase):
         with mock.patch.object(self.rb, '_utcnow', restarted_clock.utcnow), \
                 mock.patch.object(self.rb.time, 'sleep', restarted_clock.sleep):
             self.rb._wait_for_initial_full_retry()
-        self.assertEqual(restarted_clock.sleeps, [400])
+        self.assertEqual(sum(restarted_clock.sleeps), 400)
+        self.assertTrue(all(seconds <= 30 for seconds in restarted_clock.sleeps))
         self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '1')
 
     def test_partial_error_then_recovery_preserves_streak_until_full_success(self):
@@ -104,7 +106,7 @@ class InitialFullSyncBackoffTests(unittest.TestCase):
     def test_six_hour_synthetic_request_attempts_fall_without_advancing_completion_markers(self):
         rb, clock, runs = self.rb, self.clock, []
 
-        class StopLoop(Exception):
+        class StopLoop(BaseException):
             pass
 
         def fake_sync(_org, _pat, force_full=False):
@@ -171,7 +173,56 @@ class InitialFullSyncBackoffTests(unittest.TestCase):
         with mock.patch.object(self.rb, '_utcnow', self.clock.utcnow), \
                 mock.patch.object(self.rb.time, 'sleep', self.clock.sleep):
             self.rb._wait_for_initial_full_retry()
-        self.assertEqual(self.clock.sleeps, [600])
+        self.assertEqual(sum(self.clock.sleeps), 600)
+        self.assertTrue(all(seconds <= 30 for seconds in self.clock.sleeps))
+
+    def test_manual_chunked_full_success_interrupts_backoff_and_resumes_regular_schedule(self):
+        rb, clock = self.rb, self.clock
+        scheduled_calls, manual_results, manual_active = [], [], [False]
+        fake = FakeAzure([raw_item(1)])
+        real_sync = sync_service.sync_work_items
+
+        class StopLoop(BaseException):
+            pass
+
+        def dispatch_sync(org_url, pat, force_full=False):
+            if manual_active[0]:
+                with fake.patch_all(), mock.patch.object(sync_service, '_sleep', lambda _seconds: None):
+                    result = real_sync(org_url, pat, force_full=force_full)
+                manual_results.append(result)
+                return result
+            scheduled_calls.append((clock.now, force_full))
+            return {'status': 'partial', 'mode': 'full'}
+
+        def fake_sleep(seconds):
+            clock.sleep(seconds)
+            if not manual_results:
+                manual_active[0] = True
+                with mock.patch.dict(os.environ, {'SYNC_CHUNKED': '1'}), \
+                        mock.patch.object(api_app, 'get_devops_org_url', return_value=ORG), \
+                        mock.patch.object(api_app, 'get_devops_pat', return_value='synthetic'):
+                    response = api_app.app.test_client().post('/api/sync', json={'mode': 'full'})
+                self.assertEqual(response.status_code, 200)
+                manual_active[0] = False
+            else:
+                raise StopLoop
+
+        env = {'AZURE_DEVOPS_ORG_URL': ORG, 'AZURE_DEVOPS_PAT': 'synthetic'}
+        with mock.patch.dict(os.environ, env), mock.patch.object(rb, '_utcnow', clock.utcnow), \
+                mock.patch.object(rb.sync_service, 'sync_work_items', dispatch_sync), \
+                mock.patch.object(rb.time, 'sleep', fake_sleep):
+            with self.assertRaises(StopLoop):
+                rb.background_sync_loop()
+
+        self.assertEqual(clock.sleeps, [30, 300])
+        self.assertEqual(len(scheduled_calls), 1)
+        self.assertEqual(len(manual_results), 1)
+        self.assertEqual(manual_results[0]['status'], 'success')
+        self.assertTrue(sync_service.get_sync_meta('watermark'))
+        self.assertTrue(sync_service.get_sync_meta('last_full_sync'))
+        self.assertEqual(sync_service.get_sync_meta('closure_dirty'), '0')
+        self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '0')
+        self.assertEqual(sync_service.get_sync_meta('initial_full_retry_at'), '')
 
 
 if __name__ == '__main__':
