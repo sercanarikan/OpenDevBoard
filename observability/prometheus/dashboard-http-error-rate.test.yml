@@ -1,0 +1,31 @@
+# Synthetic counters validate the Grafana HTTP error ratio's result, not only its syntax.
+rule_files: []
+evaluation_interval: 1m
+fuzzy_compare: true
+
+tests:
+  - name: count 429 and 503 as errors while excluding 2xx
+    interval: 1m
+    input_series:
+      - series: 'opendevboard_http_results_total{result="2xx"}'
+        values: '0+960x5'
+      - series: 'opendevboard_http_results_total{result="429"}'
+        values: '0+10x5'
+      - series: 'opendevboard_http_results_total{result="503"}'
+        values: '0+10x5'
+      - series: 'opendevboard_http_results_total{result="4xx"}'
+        values: '0+5x5'
+      - series: 'opendevboard_http_results_total{result="5xx"}'
+        values: '0+5x5'
+      - series: 'opendevboard_http_results_total{result="network"}'
+        values: '0+5x5'
+      - series: 'opendevboard_http_results_total{result="other"}'
+        values: '0+5x5'
+      - series: 'opendevboard_http_attempts_total{method="GET"}'
+        values: '0+1000x5'
+    promql_expr_test:
+      - expr: 'sum(rate(opendevboard_http_results_total{result=~"429|503|4xx|5xx|network|other"}[5m])) / clamp_min(sum(rate(opendevboard_http_attempts_total[5m])), 1e-9)'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0.04

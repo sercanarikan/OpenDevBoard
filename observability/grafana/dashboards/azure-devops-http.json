@@ -203,7 +203,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(opendevboard_http_results_total{result=~\"4xx|5xx|network\"}[$__rate_interval])) / clamp_min(sum(rate(opendevboard_http_attempts_total[$__rate_interval])), 1e-9)",
+          "expr": "sum(rate(opendevboard_http_results_total{result=~\"429|503|4xx|5xx|network|other\"}[$__rate_interval])) / clamp_min(sum(rate(opendevboard_http_attempts_total[$__rate_interval])), 1e-9)",
           "legendFormat": "errors / attempts",
           "range": true,
           "instant": false

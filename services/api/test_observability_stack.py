@@ -91,6 +91,20 @@ class OptionalObservabilityStackTests(unittest.TestCase):
                 for metric in re.findall(r'opendevboard_[a-zA-Z0-9_]+', query):
                     self.assertIn(metric, allowed_metrics, (path.name, metric))
 
+    def test_http_error_rate_covers_failure_labels_and_matches_result_fixture(self):
+        dashboard = json.loads((OBS / 'grafana' / 'dashboards' / 'azure-devops-http.json').read_text(encoding='utf-8'))
+        panel = next(panel for panel in dashboard['panels'] if panel['title'] == 'HTTP error rate / attempt')
+        dashboard_expr = panel['targets'][0]['expr'].replace('$__rate_interval', '5m')
+        rule_test = (OBS / 'prometheus' / 'dashboard-http-error-rate.test.yml').read_text(encoding='utf-8')
+        match = re.search(r"(?m)^\s*- expr: '(.+)'$", rule_test)
+        self.assertIsNotNone(match)
+        self.assertEqual(dashboard_expr, match.group(1))
+        for category in ('429', '503', '4xx', '5xx', 'network', 'other'):
+            self.assertIn(category, dashboard_expr)
+        self.assertNotIn('result="2xx"', dashboard_expr)
+        self.assertIn('opendevboard_http_attempts_total', dashboard_expr)
+        self.assertRegex(rule_test, r'(?m)^\s*value: 0\.04$')
+
 
 if __name__ == '__main__':
     unittest.main()
