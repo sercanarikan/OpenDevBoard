@@ -16,12 +16,16 @@ HTTP error or a partial run before that point leaves the cache, its watermark an
 (readers keep seeing the last committed state, as before). The staging file is private to one run: it is deleted
 before a run starts and after it ends, and it is never read by any query.
 """
-import fcntl
 import json
 import os
 import shutil
 import sqlite3
 from urllib.parse import quote
+
+try:  # POSIX only. Its absence (native Windows) must never stop the backend from importing this module.
+    import fcntl
+except ImportError:  # pragma: no cover - exercised by test_sync_chunked with a simulated missing module
+    fcntl = None
 
 import sync_service as ss
 
@@ -81,9 +85,19 @@ def _lock_path(stage_path):
     return os.path.join(os.path.dirname(stage_path), LOCK_FILE)
 
 
+def locking_supported():
+    return fcntl is not None
+
+
 def _acquire_lock(stage_path):
     """Exclusive, non-blocking flock on the lock file; None when a live run holds it. The kernel drops the lock when
-    the owner dies (kill -9 included), which is what makes leftover staging files provably stale."""
+    the owner dies (kill -9 included), which is what makes leftover staging files provably stale.
+
+    Raises SyncError where advisory locking does not exist: staging never runs without the lock, because the lock is
+    what proves a leftover file is stale and keeps two processes off the same file."""
+    if fcntl is None:
+        raise ss.SyncError('staging_unsupported_platform: SYNC_CHUNKED=1 needs POSIX advisory file locking (fcntl), '
+                           'which this platform lacks; run the backend in the Linux container or set SYNC_CHUNKED=0')
     handle = open(_lock_path(stage_path), 'a')
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -107,6 +121,8 @@ def _remove_owned(stage_path):
 def cleanup_stale_stage(directory=None):
     """Removes the staging files of an interrupted run (boot-time cleanup). Touches only this feature's own files and
     only when no live run holds the lock. Returns the removed file names."""
+    if fcntl is None:
+        return []  # staleness cannot be proven without the lock: delete nothing, never block startup
     path = os.path.join(directory or os.path.dirname(ss.DB_PATH), STAGE_FILE)
     lock = _acquire_lock(path)
     if lock is None:
@@ -125,7 +141,7 @@ class StageStore:
         self.rows_staged = 0
         self.expected_rows = 0
         self.conn = None
-        self._lock = _acquire_lock(path)
+        self._lock = _acquire_lock(path)  # raises on platforms without advisory locking
         if self._lock is None:
             raise ss.SyncError('staging_in_use: another process owns the staging file')
         try:

@@ -571,6 +571,57 @@ class DiskSafety(unittest.TestCase):
         self.assertFalse(os.path.exists(stage.path))
 
 
+class PlatformWithoutFcntl(unittest.TestCase):
+    """Native Windows has no ``fcntl``: the backend must still start and sync as before, and staging must refuse to
+    run (never lock-free)."""
+
+    def test_default_mode_starts_and_syncs_and_staging_is_refused_explicitly(self):
+        with tempfile.TemporaryDirectory() as data_dir:
+            stale = os.path.join(data_dir, sync_staging.STAGE_FILE)
+            script = textwrap.dedent("""
+                import json, os, sys
+                sys.modules['fcntl'] = None          # `import fcntl` now raises ImportError, as on native Windows
+                sys.path.insert(0, %r)
+                os.environ['DEVOPS_DATA_DIR'] = %r
+                with open(os.path.join(%r, 'devops_stage.db'), 'wb') as f:
+                    f.write(b'stale file we cannot prove stale')
+                import sync_service, sync_staging    # boot incl. the boot-time cleanup: must not raise
+                import app                            # the backend's own import chain
+                assert sync_staging.fcntl is None and not sync_staging.locking_supported()
+                from test_sync_chunked import build_org, sync_once
+                from test_sync_hardening import FakeAzure
+                out = {'boot_cleanup_left_file': os.path.exists(os.path.join(%r, 'devops_stage.db')),
+                       'cleanup_returns': sync_staging.cleanup_stale_stage()}
+                default = sync_once(FakeAzure(build_org(n_tasks=300)), False, force_full=True)
+                out['default'] = [default['status'], default['upserted']]
+                with sync_service.get_db_connection() as c:
+                    before = c.execute('SELECT COUNT(*), MAX(changed_date) FROM work_items').fetchone()[:]
+                fake = FakeAzure(build_org(n_tasks=300))
+                opted = sync_once(fake, True, force_full=True)
+                out['chunked'] = [opted['status'], opted['error']]
+                out['requests_made_before_refusal'] = len(fake.writes)
+                with sync_service.get_db_connection() as c:
+                    out['cache_unchanged'] = tuple(c.execute('SELECT COUNT(*), MAX(changed_date) FROM work_items').fetchone()[:]) == tuple(before)
+                out['stale_file_still_there'] = os.path.exists(os.path.join(%r, 'devops_stage.db'))
+                out['lock_file_created'] = os.path.exists(os.path.join(%r, 'devops_stage.lock'))
+                print('RESULT' + json.dumps(out))
+            """) % (os.path.dirname(os.path.abspath(__file__)), data_dir, data_dir, data_dir, data_dir, data_dir)
+            env = {k: v for k, v in os.environ.items() if k not in ('SYNC_CHUNKED', 'DEVOPS_DATA_DIR')}
+            proc = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=180, env=env)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-1500:])
+            out = json.loads(proc.stdout.split('RESULT', 1)[1])
+            self.assertTrue(out['boot_cleanup_left_file'])        # nothing deleted that cannot be proven stale
+            self.assertEqual(out['cleanup_returns'], [])
+            self.assertEqual(out['default'][0], 'success')        # SYNC_CHUNKED unset: unchanged behaviour
+            self.assertEqual(out['chunked'][0], 'error')
+            self.assertIn('staging_unsupported_platform', out['chunked'][1])
+            self.assertEqual(out['requests_made_before_refusal'], 0)  # refused before the first request
+            self.assertTrue(out['cache_unchanged'])
+            self.assertTrue(out['stale_file_still_there'])
+            self.assertFalse(out['lock_file_created'])             # no lock-free fallback was attempted
+            self.assertTrue(os.path.exists(stale))
+
+
 class PartialRunsAreNeverCompleteSyncs(unittest.TestCase):
     def setUp(self):
         reset_db()

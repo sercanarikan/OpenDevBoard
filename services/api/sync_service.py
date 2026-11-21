@@ -1519,5 +1519,5 @@ import sync_staging  # noqa: E402  (bottom import: sync_staging needs the names 
 
 try:
     sync_staging.cleanup_stale_stage()  # boot: drop the staging files of an interrupted run (own files, lock-checked)
-except OSError:
-    pass
+except Exception as _cleanup_error:  # noqa: BLE001 - housekeeping must never stop the backend from starting
+    logger.warning("Stale staging cleanup skipped: %s", _cleanup_error)
