@@ -22,6 +22,7 @@ import requests
 from base64 import b64encode
 
 import azure_client
+import observability
 
 logger = logging.getLogger("sync_service")
 
@@ -879,7 +880,8 @@ def _select_ids(run, force_full, max_items, client):
         where = SCOPE_WHERE
         logger.info("Running full sync for all active work items...")
 
-    collected = client.collect_ids(where)
+    with observability.phase('wiql'):
+        collected = client.collect_ids(where)
     run.partitions = collected.partitions
     for w in collected.warnings:
         run.warn(w)
@@ -944,7 +946,8 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
             # children and ancestors follow) if one of them links by hierarchy, otherwise as a dependency only
             retry[i] = 'hier' if any(k == 'hier' for _, k in still_linked) else 'dep'
             retry_sources[i] = still_linked
-    context_rows = _collect_context(client, org_url, main_rows, run, alive, retry, retry_sources)
+    with observability.phase('context_closure'):
+        context_rows = _collect_context(client, org_url, main_rows, run, alive, retry, retry_sources)
     closure_missing = {str(i): [kind, prior_missing[i][1] if i in retry else now_iso, sources]
                        for i, (kind, sources) in run.closure_missing.items()}
 
@@ -964,7 +967,8 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
 
     reconcile_rows, delete_ids = [], []
     if not is_incremental and run.complete and not truncated:
-        reconcile_rows, delete_ids = _plan_reconciliation(client, org_url, set(ids) | returned_ids, run)
+        with observability.phase('reconciliation'):
+            reconcile_rows, delete_ids = _plan_reconciliation(client, org_url, set(ids) | returned_ids, run)
         for r in reconcile_rows:
             if r['is_active'] == 0:
                 run.out_of_scope += 1
@@ -1059,7 +1063,7 @@ def _apply_phase(plan, run):
         conn.close()
 
 
-def sync_work_items(org_url, pat, force_full=False, max_items=None, client=None):
+def _sync_work_items(org_url, pat, force_full=False, max_items=None, client=None):
     """Synchronises work items from Azure DevOps (read-only) into the local SQLite store.
 
     * full sync        : every in-scope item + ancestors/descendants/dependency targets, then reconciliation
@@ -1093,7 +1097,8 @@ def sync_work_items(org_url, pat, force_full=False, max_items=None, client=None)
                          if request_limit is not None and hasattr(client, 'request_budget') else nullcontext())
         with request_scope:
             plan = fetch(org_url, pat, run, force_full, max_items, client)
-        apply(plan, run)
+        with observability.phase('sqlite_publish'):
+            apply(plan, run)
         status = 'success' if run.complete else 'partial'
     except Exception as e:  # noqa: BLE001 - every failure must end in a persisted error state
         logger.error("Error in sync_work_items: %s", e, exc_info=True)
@@ -1123,6 +1128,35 @@ def sync_work_items(org_url, pat, force_full=False, max_items=None, client=None)
     if error:
         out["error"] = error
     return out
+
+
+def sync_work_items(org_url, pat, force_full=False, max_items=None, client=None):
+    """Run sync with isolated, best-effort process metrics around the unchanged sync implementation."""
+    try:
+        mode = 'incremental' if (get_sync_meta('watermark') and not force_full) else 'full'
+    except Exception:
+        mode = 'full'
+    with observability.track_sync(mode) as metric_state:
+        result = _sync_work_items(org_url, pat, force_full=force_full, max_items=max_items, client=client)
+        status = result.get('status', 'error')
+        is_sync_run = result.get('error') != 'fixture_mode'
+        metric_state['record_sync'] = is_sync_run and status in ('success', 'partial', 'error')
+    if is_sync_run:
+        observability.best_effort(lambda: observability.SYNC_RUNS.labels(
+            mode=result.get('mode', mode), status=status).inc())
+        observability.best_effort(lambda: observability.ITEMS.labels(kind='fetched').inc(int(result.get('fetched') or 0)))
+        observability.best_effort(lambda: observability.ITEMS.labels(kind='upserted').inc(int(result.get('upserted') or 0)))
+        observability.best_effort(lambda: observability.CONTEXT_ITEMS.inc(int(result.get('context_upserted') or 0)))
+    try:
+        if is_sync_run and status != 'in_progress' and observability.enabled():
+            observability.set_sync_state(
+                last_success=get_sync_meta('last_success_at'),
+                partial=status == 'partial',
+                closure_dirty=get_sync_meta('closure_dirty', '0') == '1',
+            )
+    except Exception:
+        pass
+    return result
 
 
 # ----------------------------------------------------------------------------------------------

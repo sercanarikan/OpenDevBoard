@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import requests
+import observability
 
 logger = logging.getLogger('azure_client')
 
@@ -195,6 +196,7 @@ class AzureClient:
         if limiter is not None:
             limiter.acquire()
         try:
+            observability.best_effort(observability.observe_http_attempt, method)
             if method == 'GET':
                 return requests.get(url, headers=self._headers, timeout=self._timeout)
             return requests.post(url, headers=self._headers, json=kw.get('json'), timeout=self._timeout)
@@ -221,9 +223,18 @@ class AzureClient:
             try:
                 resp = self._send(method, url, kw)
             except (requests.ConnectionError, requests.Timeout):
+                observability.best_effort(observability.observe_http_result, 'network')
                 failure = AzureError('network error contacting Azure DevOps', retryable=True)
+            except requests.RequestException:
+                observability.best_effort(observability.observe_http_result, 'network')
+                raise
             else:
                 status = resp.status_code
+                result = ('2xx' if 200 <= status < 300 else
+                          str(status) if status in (429, 503) else
+                          '4xx' if 400 <= status < 500 else
+                          '5xx' if 500 <= status < 600 else 'other')
+                observability.best_effort(observability.observe_http_result, result)
                 if 200 <= status < 300:
                     return resp
                 body = _body_text(resp)
@@ -251,6 +262,7 @@ class AzureClient:
                 limiter.shrink(started)
             self._sleep(delay)
             self._bump('retries')
+            observability.best_effort(observability.observe_retry)
             attempt += 1
 
     def wiql_ids(self, where, order_by='[System.Id]', top=None):
@@ -259,6 +271,7 @@ class AzureClient:
         if top is not None:
             url += f'&$top={int(top)}'
         self.stats['wiql_calls'] += 1
+        observability.best_effort(observability.observe_wiql)
         data = _json(self._request('POST', url, json={'query': query}))
         return [int(w['id']) for w in (data.get('workItems') or [])]
 
@@ -301,6 +314,13 @@ class AzureClient:
         return left + right, left_leaves + right_leaves
 
     def get_items(self, ids, expand_relations=True, fields=None, error_policy_omit=False, raise_on_error=False):
+        started = time.monotonic()
+        try:
+            return self._get_items(ids, expand_relations, fields, error_policy_omit, raise_on_error)
+        finally:
+            observability.best_effort(observability.observe_phase, 'detail_fetch', started)
+
+    def _get_items(self, ids, expand_relations=True, fields=None, error_policy_omit=False, raise_on_error=False):
         requested = list(dict.fromkeys(int(i) for i in ids))
         result = FetchResult()
         batches = [requested[s:s + BATCH_SIZE] for s in range(0, len(requested), BATCH_SIZE)]
@@ -334,6 +354,7 @@ class AzureClient:
         ``errors``) exactly as ``get_items`` reports it; an unexpected error propagates and cancels queued batches.
         Close the generator (or exhaust it) so that the worker pool and the fan-out lock are released.
         """
+        started = time.monotonic()
         requested = list(dict.fromkeys(int(i) for i in ids))
         total = (len(requested) + BATCH_SIZE - 1) // BATCH_SIZE
         stream = None
@@ -346,6 +367,7 @@ class AzureClient:
                 yield self._batch_result(batch, number, data, error)
         finally:
             stream.close()
+            observability.best_effort(observability.observe_phase, 'detail_fetch', started)
 
     @staticmethod
     def _batch_result(batch, number, data, error):
