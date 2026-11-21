@@ -61,6 +61,7 @@ Görüntülemek istediğiniz Azure DevOps verileri için gerekli salt okunur kap
 | `DEVOPS_DATA_DIR` | Backend SQLite veri dizini; Compose değeri `/data` |
 | `SYNC_INTERVAL_SEC` | Arka plan eşitleme aralığı (saniye) |
 | `SYNC_DETAIL_WORKERS` | Eşitleme sırasında eşzamanlı, salt okunur Work Item detay istekleri. Varsayılan `1` (sıralı); önerilen opt-in değeri `4`, üst sınır `8`. Geçersiz veya pozitif olmayan değerler `1`'e düşer |
+| `SYNC_CHUNKED` | Eşitleme için isteğe bağlı disk tabanlı staging: çalışma SQLite'ta hazırlanır ve tek transaction'da yayınlanır, bellek sabit kalır. `0` (varsayılan) bellek içi eşitlemeyi korur; `1` staging'i açar. Eşitleme sürerken cache boyutunun yaklaşık 3 katı boş disk ve POSIX dosya kilidi (Linux, macOS, Docker imajı) gerekir; yerel Windows `1` değerini hatayla reddeder, `0` etkilenmez |
 | `DISABLE_BACKGROUND_SYNC` | Otomatik eşitlemeyi kapatmak için `1` yapın |
 | `WEB_PORT` | Web servisi host portu; varsayılan `5174` |
 | `VITE_API_BASE_URL` | Yerel geliştirmede frontend API yolu; varsayılan `/api` |
