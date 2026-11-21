@@ -159,6 +159,14 @@ class SyncHardeningBase(unittest.TestCase):
 
 
 class NoSilentTruncation(SyncHardeningBase):
+    def test_successful_full_sync_clears_initial_partial_scheduler_backoff(self):
+        sync_service.set_sync_meta('initial_full_partial_count', 4)
+        sync_service.set_sync_meta('initial_full_retry_at', '2026-11-22T01:00:00+00:00')
+        result = run_sync(FakeAzure([raw_item(1)]), force_full=True)
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '0')
+        self.assertEqual(sync_service.get_sync_meta('initial_full_retry_at'), '')
+
     def test_more_than_the_old_2500_cap_is_fully_stored(self):
         fake = FakeAzure([raw_item(i) for i in range(1, 5301)])
         res = run_sync(fake, force_full=True)
