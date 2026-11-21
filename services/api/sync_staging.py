@@ -470,10 +470,8 @@ def _fetch_into_stage(stage, org_url, run, force_full, max_items, client):
             'ORDER BY id')]
         hollow_needed = _not_staged(stage, hollow_ids)
         for fr in _stream(client, hollow_needed, expand_relations=True, error_policy_omit=True):
-            if fr.failed_batches:
-                if any('http_attempt_budget_exhausted' in error for error in fr.errors):
-                    run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
-                run.warn(f"hollow_fetch_failed:{sum(len(batch) for batch in fr.failed_batches)}", partial=True)
+            if any('http_attempt_budget_exhausted' in error for error in fr.errors):
+                run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
             stage.add_rows([ss.parse_work_item(raw, org_url) for raw in fr.items.values()], KIND_HOLLOW, -1)
 
     delete_ids = []

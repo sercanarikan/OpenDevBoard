@@ -5,6 +5,7 @@ from unittest import mock
 import testsupport  # noqa: F401
 import azure_client
 import sync_service
+import sync_staging
 from test_sync_hardening import FakeAzure, raw_item, reset_db, rows, run_sync
 from test_azure_client import FakeResponse
 
@@ -168,9 +169,34 @@ class SyncWideAttemptBudget(unittest.TestCase):
                 result, client = configured_sync(no_link_fake, budget=2, chunked=chunked)
                 self.assertEqual(result['status'], 'partial')
                 self.assertEqual(client.stats['requests'], 2)
-                self.assertTrue(any(w.startswith('hollow_fetch_failed:') for w in result['warnings']))
+                self.assertIn('request_budget_reached:2', result['warnings'])
                 self.assertEqual(before, {key: sync_service.get_sync_meta(key) for key in before})
                 self.assertEqual(sync_service.get_sync_meta('closure_dirty'), '1')
+
+    def test_default_hollow_fetch_failure_preserves_legacy_completion_semantics(self):
+        for chunked in (False, True):
+            with self.subTest(chunked=chunked):
+                reset_db()
+                initial = FakeAzure([raw_item(1, state='Active', children=[2]),
+                                     raw_item(2, state='Closed', parent=1)])
+                self.assertEqual(run_sync(initial, force_full=True)['status'], 'success')
+                with sync_service.get_db_connection() as conn:
+                    conn.execute('UPDATE work_items SET relations_json = NULL, last_seen_at = NULL WHERE id = 2')
+
+                fake = FakeAzure([raw_item(1, state='Active'), raw_item(2, state='Closed')])
+                fake.fail_ids = {2}  # only the hollow refresh fails; reconciliation itself is isolated below
+                client = azure_client.AzureClient('https://dev.azure.com/synthetic', 'synthetic',
+                                                  sleep=lambda _: None, workers=4)
+                env = {'SYNC_CONTEXT_POLICY': '', 'SYNC_CONTEXT_MAX_ITEMS': '',
+                       'SYNC_CONTEXT_MAX_REQUESTS': '', 'SYNC_CHUNKED': '1' if chunked else '0'}
+                with (mock.patch.dict(os.environ, env), fake.patch_all(),
+                      mock.patch.object(sync_service, '_plan_reconciliation', return_value=([], [])),
+                      mock.patch.object(sync_staging, '_plan_reconciliation', return_value=[])):
+                    result = sync_service.sync_work_items('https://dev.azure.com/synthetic', 'synthetic',
+                                                          force_full=True, client=client)
+                self.assertEqual(result['status'], 'success')
+                self.assertTrue(sync_service.get_sync_meta('last_full_sync'))
+                self.assertEqual(sync_service.get_sync_meta('closure_dirty'), '0')
 
 
 class ConcurrentAttemptBudget(unittest.TestCase):

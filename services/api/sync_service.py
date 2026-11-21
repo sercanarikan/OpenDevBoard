@@ -941,10 +941,8 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
         hollow_needed = [i for i in hollow_ids if i not in returned_ids and i not in {r['id'] for r in context_rows}]
         if hollow_needed:
             fr_hollow = client.get_items(hollow_needed, expand_relations=True, error_policy_omit=True)
-            if fr_hollow.failed_batches:
-                if any('http_attempt_budget_exhausted' in e for e in fr_hollow.errors):
-                    run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
-                run.warn(f"hollow_fetch_failed:{sum(len(b) for b in fr_hollow.failed_batches)}", partial=True)
+            if any('http_attempt_budget_exhausted' in e for e in fr_hollow.errors):
+                run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
             for raw in fr_hollow.items.values():
                 context_rows.append(parse_work_item(raw, org_url))
 
