@@ -3,8 +3,9 @@
 import os
 import re
 import importlib
+import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -117,19 +118,36 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(observability.HTTP_RESULTS.labels(result='2xx')._value.get(), result_count)
 
     def test_scrape_without_sync_after_registry_restart_rehydrates_persisted_state(self):
-        persisted = '2026-11-20T12:30:00+00:00'
+        persisted = '2026-11-20T12:30:00'
         sync_service.set_sync_meta('last_success_at', persisted)
         sync_service.set_sync_meta('sync_status', 'partial')
         sync_service.set_sync_meta('closure_dirty', '1')
-        # Reloading recreates a fresh process-local registry while the SQLite sync state remains durable.
-        importlib.reload(observability)
-        from testsupport import app
-        body = app.app.test_client().get('/metrics').get_data(as_text=True)
-        match = re.search(r'^opendevboard_last_successful_sync_timestamp_seconds ([^\s]+)$', body, re.MULTILINE)
-        self.assertIsNotNone(match)
-        self.assertAlmostEqual(float(match.group(1)), datetime.fromisoformat(persisted).timestamp())
-        self.assertIn('opendevboard_sync_partial 1.0', body)
-        self.assertIn('opendevboard_closure_dirty 1.0', body)
+        previous_tz = os.environ.get('TZ')
+        os.environ['TZ'] = 'Pacific/Honolulu'
+        time.tzset()
+        try:
+            # Reloading recreates a fresh process-local registry while the SQLite sync state remains durable.
+            importlib.reload(observability)
+            from testsupport import app
+            body = app.app.test_client().get('/metrics').get_data(as_text=True)
+            match = re.search(r'^opendevboard_last_successful_sync_timestamp_seconds ([^\s]+)$', body, re.MULTILINE)
+            self.assertIsNotNone(match)
+            expected = datetime.fromisoformat(persisted).replace(tzinfo=timezone.utc).timestamp()
+            self.assertAlmostEqual(float(match.group(1)), expected)
+            self.assertIn('opendevboard_sync_partial 1.0', body)
+            self.assertIn('opendevboard_closure_dirty 1.0', body)
+
+            # Explicit offsets remain authoritative rather than being replaced with local or UTC timezone.
+            aware = '2026-11-20T15:30:00+03:00'
+            observability.set_sync_state(last_success=aware)
+            aware_expected = datetime.fromisoformat(aware).timestamp()
+            self.assertAlmostEqual(observability.LAST_SUCCESS._value.get(), aware_expected)
+        finally:
+            if previous_tz is None:
+                os.environ.pop('TZ', None)
+            else:
+                os.environ['TZ'] = previous_tz
+            time.tzset()
 
     def test_sync_metrics_failures_do_not_change_sync_result(self):
         fake = FakeAzure([raw_item(201)])

@@ -81,8 +81,11 @@ def observe_wiql():
 def set_sync_state(last_success=None, partial=None, closure_dirty=None):
     if last_success:
         try:
-            from datetime import datetime
-            stamp = datetime.fromisoformat(last_success.replace('Z', '+00:00')).timestamp()
+            from datetime import datetime, timezone
+            parsed = datetime.fromisoformat(last_success.replace('Z', '+00:00'))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            stamp = parsed.timestamp()
             best_effort(LAST_SUCCESS.set, stamp)
         except Exception:
             pass
