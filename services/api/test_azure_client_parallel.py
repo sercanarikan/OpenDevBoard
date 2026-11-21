@@ -109,6 +109,20 @@ class ParallelDetailTests(unittest.TestCase):
         self.assertEqual(len(r.failed_batches), 3)
         self.assertEqual(r.items, {})
 
+    def test_context_request_budget_counts_retries_and_never_exceeds_attempt_limit(self):
+        for status in (429, 503):
+            with self.subTest(status=status):
+                def get(url, headers=None, timeout=None):
+                    return FakeResponse(status, headers={'Retry-After': '0'}, text='temporary')
+
+                client = _client(4)
+                with mock.patch.object(azure_client.requests, 'get', side_effect=get):
+                    with client.request_budget(1):
+                        result = client.get_items(range(1, 201))
+                self.assertEqual(client.stats['requests'], 1)
+                self.assertEqual(len(result.failed_batches), 1)
+                self.assertIn('http_attempt_budget_exhausted', result.errors[0])
+
     def test_default_is_sequential(self):
         with mock.patch.dict('os.environ', clear=False) as env:
             env.pop('SYNC_DETAIL_WORKERS', None)

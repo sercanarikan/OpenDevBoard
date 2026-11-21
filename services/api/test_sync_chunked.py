@@ -191,6 +191,34 @@ class Parity(unittest.TestCase):
         self.assertIn('context_cap_reached:20', out[True][2][0])
         self.assertNotIn('watermark', out[True][0]['meta'])  # a partial run never advances the watermark
 
+    def test_explicit_request_budget_is_partial_and_does_not_advance_closure_markers(self):
+        env = {'SYNC_CONTEXT_POLICY': 'budgeted', 'SYNC_CONTEXT_MAX_ITEMS': '10000',
+               'SYNC_CONTEXT_MAX_REQUESTS': '3'}
+        for chunked in (False, True):
+            with self.subTest(chunked=chunked):
+                reset_db()
+                with mock.patch.dict(os.environ, env):
+                    result = sync_once(FakeAzure(build_org(n_tasks=200)), chunked, '4', force_full=True)
+                self.assertEqual(result['status'], 'partial')
+                self.assertIn('context_request_budget_reached:3', result['warnings'])
+                self.assertIsNone(sync_service.get_sync_meta('watermark'))
+                self.assertIsNone(sync_service.get_sync_meta('last_full_sync'))
+                self.assertIsNone(sync_service.get_sync_meta('last_success_at'))
+                self.assertEqual(sync_service.get_sync_meta('closure_dirty'), '1')
+
+    def test_budgeted_sync_has_cache_relation_and_derived_parity_for_worker_counts(self):
+        env = {'SYNC_CONTEXT_POLICY': 'budgeted', 'SYNC_CONTEXT_MAX_ITEMS': '10000',
+               'SYNC_CONTEXT_MAX_REQUESTS': '1000'}
+        for workers in ('1', '4', '8'):
+            with self.subTest(workers=workers), mock.patch.dict(os.environ, env):
+                def scenario(chunked, worker_count):
+                    return [sync_once(FakeAzure(build_org(n_tasks=500)), chunked, worker_count,
+                                      force_full=True)]
+                out = self._compare(scenario, workers=workers)
+                self.assertEqual(out[True][1][0]['status'], 'success')
+                self.assertTrue(out[True][0]['meta']['watermark'])
+                self.assertEqual(out[True][0]['meta'].get('closure_dirty'), '0')
+
     def test_missing_detail_and_dangling_links_match(self):
         def scenario(chunked, workers):
             fake = FakeAzure(build_org())

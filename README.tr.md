@@ -62,6 +62,9 @@ Görüntülemek istediğiniz Azure DevOps verileri için gerekli salt okunur kap
 | `SYNC_INTERVAL_SEC` | Arka plan eşitleme aralığı (saniye) |
 | `SYNC_DETAIL_WORKERS` | Eşitleme sırasında eşzamanlı, salt okunur Work Item detay istekleri. Varsayılan `1` (sıralı); önerilen opt-in değeri `4`, üst sınır `8`. Geçersiz veya pozitif olmayan değerler `1`'e düşer |
 | `SYNC_CHUNKED` | Eşitleme için isteğe bağlı disk tabanlı staging: çalışma SQLite'ta hazırlanır ve tek transaction'da yayınlanır, bellek sabit kalır. `0` (varsayılan) bellek içi eşitlemeyi korur; `1` staging'i açar. Eşitleme sürerken cache boyutunun yaklaşık 3 katı boş disk ve POSIX dosya kilidi (Linux, macOS, Docker imajı) gerekir; yerel Windows `1` değerini hatayla reddeder, `0` etkilenmez |
+| `SYNC_CONTEXT_POLICY` | Daha büyük context closure için isteğe bağlı opt-in: `budgeted` yapın. Ayar yoksa sabit 25.000 kayıt sınırı korunur. Pozitif `SYNC_CONTEXT_MAX_ITEMS` ve `SYNC_CONTEXT_MAX_REQUESTS` gerekir. İstek bütçesi WIQL, detay, closure, reconciliation/probe ve retry'lar dahil tüm sync'teki gerçek HTTP denemelerini sınırlar. Ana detay okuması bitmeden bütçe dolarsa yayın yapılmadan hata verir; sonraki aşamalarda dolarsa partial kalır, completion marker'ları ilerlemez |
+| `SYNC_CONTEXT_MAX_ITEMS` | `SYNC_CONTEXT_POLICY=budgeted` için gereken pozitif context closure kayıt tavanı; ör. `350000`. Varsayılan 25.000 sınırını değiştirmez |
+| `SYNC_CONTEXT_MAX_REQUESTS` | `SYNC_CONTEXT_POLICY=budgeted` için gereken pozitif sync başına gerçek HTTP denemesi tavanı. Retry'lar ve tüm Azure DevOps okumaları sayılır |
 | `DISABLE_BACKGROUND_SYNC` | Otomatik eşitlemeyi kapatmak için `1` yapın |
 | `WEB_PORT` | Web servisi host portu; varsayılan `5174` |
 | `VITE_API_BASE_URL` | Yerel geliştirmede frontend API yolu; varsayılan `/api` |

@@ -62,6 +62,9 @@ Create a PAT with only the read scopes required for the Azure DevOps data you in
 | `SYNC_INTERVAL_SEC` | Background synchronization interval in seconds |
 | `SYNC_DETAIL_WORKERS` | Concurrent read-only work item detail requests during sync. Defaults to `1` (sequential); `4` is the recommended opt-in, capped at `8`. Invalid or non-positive values fall back to `1` |
 | `SYNC_CHUNKED` | Opt-in disk-backed staging for sync: memory stays flat while the run is staged in SQLite and published in one transaction. `0` (default) keeps the in-memory sync; `1` enables staging. Needs free disk of about 3× the cache size while a sync runs, and POSIX file locking (Linux, macOS, the Docker image); native Windows refuses `1` with an error and `0` is unaffected |
+| `SYNC_CONTEXT_POLICY` | Optional larger context closure: set to `budgeted` to opt in. Unset keeps the fixed 25,000-item limit. Requires positive `SYNC_CONTEXT_MAX_ITEMS` and `SYNC_CONTEXT_MAX_REQUESTS`; the latter caps actual HTTP attempts for the whole sync, including WIQL, detail, closure, reconciliation/probe requests and retries. Exhaustion before main details finish errors without publishing; later exhaustion stays partial and does not advance completion markers |
+| `SYNC_CONTEXT_MAX_ITEMS` | Positive context closure item ceiling required by `SYNC_CONTEXT_POLICY=budgeted`; for example `350000`. Does not change the 25,000 default |
+| `SYNC_CONTEXT_MAX_REQUESTS` | Positive maximum actual HTTP attempts per sync required by `SYNC_CONTEXT_POLICY=budgeted`; includes retry attempts and all Azure DevOps reads for that sync |
 | `DISABLE_BACKGROUND_SYNC` | Set to `1` to disable automatic background synchronization |
 | `WEB_PORT` | Host port for the web service; defaults to `5174` |
 | `VITE_API_BASE_URL` | Frontend API base path for local development; defaults to `/api` |
