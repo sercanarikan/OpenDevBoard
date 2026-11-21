@@ -61,6 +61,7 @@ Create a PAT with only the read scopes required for the Azure DevOps data you in
 | `DEVOPS_DATA_DIR` | Backend SQLite data directory; Compose uses `/data` |
 | `SYNC_INTERVAL_SEC` | Background synchronization interval in seconds |
 | `SYNC_DETAIL_WORKERS` | Concurrent read-only work item detail requests during sync. Defaults to `1` (sequential); `4` is the recommended opt-in, capped at `8`. Invalid or non-positive values fall back to `1` |
+| `SYNC_CHUNKED` | Opt-in disk-backed staging for sync: memory stays flat while the run is staged in SQLite and published in one transaction. `0` (default) keeps the in-memory sync; `1` enables staging. Needs free disk of about 3× the cache size while a sync runs |
 | `DISABLE_BACKGROUND_SYNC` | Set to `1` to disable automatic background synchronization |
 | `WEB_PORT` | Host port for the web service; defaults to `5174` |
 | `VITE_API_BASE_URL` | Frontend API base path for local development; defaults to `/api` |

@@ -8,6 +8,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -301,6 +302,76 @@ class AzureClient:
                 returned.add(item_id)
             result.missing.extend(i for i in batch if i not in returned)
         return result
+
+    def iter_batches(self, ids, expand_relations=True, fields=None, error_policy_omit=False):
+        """Streams the detail batches of ``ids`` one ``FetchResult`` per batch (<= BATCH_SIZE ids), in request order.
+
+        Same requests, retries, Retry-After handling and concurrency limiter as ``get_items``, but the caller never
+        holds more than a bounded window of responses: at most ``2 * workers`` batches are in flight or waiting to be
+        consumed, whatever the number of ids. A failed batch is reported in the result (``failed_batches`` /
+        ``errors``) exactly as ``get_items`` reports it; an unexpected error propagates and cancels queued batches.
+        Close the generator (or exhaust it) so that the worker pool and the fan-out lock are released.
+        """
+        requested = list(dict.fromkeys(int(i) for i in ids))
+        total = (len(requested) + BATCH_SIZE - 1) // BATCH_SIZE
+        stream = None
+        if self._workers > 1 and total > 1 and self._fanout_lock.acquire(blocking=False):
+            stream = self._stream_parallel(requested, total, expand_relations, fields, error_policy_omit)
+        else:
+            stream = self._stream_sequential(requested, total, expand_relations, fields, error_policy_omit)
+        try:
+            for number, (batch, (data, error)) in enumerate(stream, 1):
+                yield self._batch_result(batch, number, data, error)
+        finally:
+            stream.close()
+
+    @staticmethod
+    def _batch_result(batch, number, data, error):
+        result = FetchResult(batches=1)
+        if error is not None:
+            result.failed_batches.append(batch)
+            result.errors.append(f'batch {number}: {error}')
+            return result
+        returned = set()
+        for item in (data.get('value') or []):
+            if item is None:
+                continue
+            item_id = int(item['id'])
+            result.items[item_id] = item
+            returned.add(item_id)
+        result.missing.extend(i for i in batch if i not in returned)
+        return result
+
+    def _stream_sequential(self, requested, total, expand_relations, fields, error_policy_omit):
+        for k in range(total):
+            batch = requested[k * BATCH_SIZE:(k + 1) * BATCH_SIZE]
+            yield batch, self._fetch_one(batch, expand_relations, fields, error_policy_omit, False)
+
+    def _stream_parallel(self, requested, total, expand_relations, fields, error_policy_omit):
+        # the caller acquired _fanout_lock; it is released here
+        limiter = _Limiter(self._workers)
+        with self._stats_lock:
+            self._gate_until = 0.0
+        self._limiter = limiter
+        pool = ThreadPoolExecutor(max_workers=min(self._workers, total), thread_name_prefix='azure-detail')
+        window = 2 * self._workers
+        pending, nxt = deque(), 0
+        try:
+            while nxt < total or pending:
+                while nxt < total and len(pending) < window:
+                    batch = requested[nxt * BATCH_SIZE:(nxt + 1) * BATCH_SIZE]
+                    pending.append((batch, pool.submit(self._fetch_one, batch, expand_relations, fields,
+                                                       error_policy_omit, False)))
+                    nxt += 1
+                batch, future = pending.popleft()
+                yield batch, future.result()  # batch order, whatever order the workers finished in
+        except BaseException:
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
+        finally:
+            pool.shutdown(wait=True)
+            self._limiter = None
+            self._fanout_lock.release()
 
     def _fetch_one(self, batch, expand_relations, fields, error_policy_omit, raise_on_error):
         self._bump('batches')

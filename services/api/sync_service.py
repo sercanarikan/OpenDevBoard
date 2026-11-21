@@ -433,6 +433,13 @@ def _row_params(item, now_iso, is_context):
 # ----------------------------------------------------------------------------------------------
 
 def recompute_derived(conn):
+    """Dispatches to the chunked implementation when SYNC_CHUNKED=1 (identical result, bounded memory)."""
+    if sync_staging.chunked_enabled():
+        return sync_staging.recompute_derived_bounded(conn)
+    return recompute_derived_inmemory(conn)
+
+
+def recompute_derived_inmemory(conn):
     """Refreshes denormalised relation snapshots and the is_blocked / is_blocking flags from the cache itself.
 
     Runs inside the sync transaction, so a predecessor that became Done (or was deleted) is reflected on dependents
@@ -509,6 +516,12 @@ def recompute_derived(conn):
 
 
 def _find_orphan_context_ids(conn):
+    if sync_staging.chunked_enabled():
+        return sync_staging.find_orphan_context_ids_bounded(conn)
+    return find_orphan_context_ids_inmemory(conn)
+
+
+def find_orphan_context_ids_inmemory(conn):
     """Context rows that no in-scope row needs any more.
 
     Needed = in-scope rows, their ancestors, every descendant of those (completed children count for progress)
@@ -797,7 +810,9 @@ def _probe_unchanged(client, ids, run):
     return [i for i in ids if i not in skip], unchanged
 
 
-def _fetch_phase(org_url, pat, run, force_full, max_items, client):
+def _select_ids(run, force_full, max_items, client):
+    """Decides the mode and returns the ids to read: the WIQL result (truncated by ``max_items``), minus the ids an
+    incremental probe proved unchanged. Shared by the in-memory and the staged (bounded-memory) fetch."""
     last_watermark = get_sync_meta('watermark')
     is_incremental = bool(last_watermark) and not force_full
     run.mode = 'incremental' if is_incremental else 'full'
@@ -835,6 +850,14 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
         # re-read of the window heals, so the probe is skipped until a complete run clears the flag.
         read_ids, unchanged = _probe_unchanged(client, ids, run)
     run.unchanged_skipped = len(unchanged)
+    return {"is_incremental": is_incremental, "last_watermark": last_watermark, "ids": ids, "truncated": truncated,
+            "unchanged": unchanged, "read_ids": read_ids}
+
+
+def _fetch_phase(org_url, pat, run, force_full, max_items, client):
+    sel = _select_ids(run, force_full, max_items, client)
+    is_incremental, last_watermark = sel["is_incremental"], sel["last_watermark"]
+    ids, truncated, unchanged, read_ids = sel["ids"], sel["truncated"], sel["unchanged"], sel["read_ids"]
 
     main_rows = []
     returned_ids = set()
@@ -1002,17 +1025,24 @@ def sync_work_items(org_url, pat, force_full=False, max_items=None, client=None)
     run = _Run('incremental' if (get_sync_meta('watermark') and not force_full) else 'full')
     status = 'error'
     error = None
+    plan = None
     try:
         set_sync_meta('sync_status', 'syncing')
         client = client or azure_client.AzureClient(org_url, pat, sleep=lambda s: _sleep(s))
-        plan = _fetch_phase(org_url, pat, run, force_full, max_items, client)
-        _apply_phase(plan, run)
+        if sync_staging.chunked_enabled():
+            fetch, apply = sync_staging.fetch_phase, sync_staging.apply_phase
+        else:
+            fetch, apply = _fetch_phase, _apply_phase
+        plan = fetch(org_url, pat, run, force_full, max_items, client)
+        apply(plan, run)
         status = 'success' if run.complete else 'partial'
     except Exception as e:  # noqa: BLE001 - every failure must end in a persisted error state
         logger.error("Error in sync_work_items: %s", e, exc_info=True)
         error = str(e)[:300]
         status = 'error'
     finally:
+        if plan and plan.get('stage'):
+            plan['stage'].discard()  # the staging file belongs to this run only
         result = run.result(status, error)
         try:
             set_sync_meta('last_sync_result', json.dumps(result))
@@ -1483,3 +1513,11 @@ def get_single_item(item_id, org_url=None, pat=None):
             logger.warning(f"Error on-demand fetching item {item_id}: {ex}")
 
     return None
+
+
+import sync_staging  # noqa: E402  (bottom import: sync_staging needs the names above; used only at call time)
+
+try:
+    sync_staging.cleanup_stale_stage()  # boot: drop the staging files of an interrupted run (own files, lock-checked)
+except OSError:
+    pass
