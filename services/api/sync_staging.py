@@ -300,6 +300,10 @@ def _stream(client, ids, **kw):
 def _collect_context(stage, client, org_url, run, retry, retry_sources):
     """``sync_service._collect_context`` over the staged link table (same rounds, cap and warnings)."""
     conn = stage.conn
+    context_limit, request_limit = ss.context_budgets()
+    stats = getattr(client, 'stats', None)
+    request_start = run.request_start if run.request_start is not None else (
+        stats.get('requests', 0) if isinstance(stats, dict) else None)
     for round_no in range(ss.MAX_CLOSURE_ROUNDS):
         conn.execute('DELETE FROM want')
         conn.execute('BEGIN')
@@ -321,14 +325,23 @@ def _collect_context(stage, client, org_url, run, retry, retry_sources):
         if not wanted:
             break
         staged_ctx = stage.count(KIND_CTX_HIER, KIND_CTX_DEP)
-        if staged_ctx + wanted > ss.MAX_CONTEXT_ITEMS:
-            run.warn(f"context_cap_reached:{ss.MAX_CONTEXT_ITEMS}", partial=True)
+        if staged_ctx + wanted > context_limit:
+            run.warn(f"context_cap_reached:{context_limit}", partial=True)
             break
+
+        if request_limit is not None and request_start is not None:
+            attempted = stats.get('requests', 0) - request_start
+            projected = (wanted + ss.azure_client.BATCH_SIZE - 1) // ss.azure_client.BATCH_SIZE
+            if attempted + projected > request_limit:
+                run.warn(f"context_request_budget_reached:{request_limit}", partial=True)
+                break
 
         ids = [r[0] for r in conn.execute('SELECT id FROM want ORDER BY id')]
         failed, missing = 0, []
         for fr in _stream(client, ids, expand_relations=True, error_policy_omit=True):
             failed += sum(len(b) for b in fr.failed_batches)
+            if any('http_attempt_budget_exhausted' in e for e in fr.errors):
+                run.warn(f"context_request_budget_reached:{request_limit}", partial=True)
             missing.extend(fr.missing)
             kinds = {r[0]: r[1] for r in conn.execute(
                 f'SELECT id, kind FROM want WHERE id IN ({_marks(len(fr.items))})', list(fr.items))} if fr.items else {}
@@ -381,14 +394,17 @@ def _plan_reconciliation(stage, client, org_url, ids, run):
     if len(candidates) > limit:
         run.warn(f"mass_delete_blocked:{len(candidates)}>{limit}", partial=True)
         return []
-    failed, missing = 0, []
+    failed, missing, errors = 0, [], []
     for fr in _stream(client, candidates, expand_relations=True, error_policy_omit=True):
         failed += sum(len(b) for b in fr.failed_batches)
+        errors.extend(fr.errors)
         missing.extend(fr.missing)
         rows = [ss.parse_work_item(raw, org_url) for raw in fr.items.values()]
         run.out_of_scope += sum(1 for r in rows if r['is_active'] == 0)
         stage.add_rows(rows, KIND_RECONCILE, -1)
     if failed:
+        if any('http_attempt_budget_exhausted' in error for error in errors):
+            run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
         run.warn(f"reconcile_fetch_failed:{failed}", partial=True)
         return []  # absence is unknown for failed batches: nothing is deleted this run
     return missing
@@ -454,6 +470,10 @@ def _fetch_into_stage(stage, org_url, run, force_full, max_items, client):
             'ORDER BY id')]
         hollow_needed = _not_staged(stage, hollow_ids)
         for fr in _stream(client, hollow_needed, expand_relations=True, error_policy_omit=True):
+            if fr.failed_batches:
+                if any('http_attempt_budget_exhausted' in error for error in fr.errors):
+                    run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
+                run.warn(f"hollow_fetch_failed:{sum(len(batch) for batch in fr.failed_batches)}", partial=True)
             stage.add_rows([ss.parse_work_item(raw, org_url) for raw in fr.items.values()], KIND_HOLLOW, -1)
 
     delete_ids = []

@@ -4,6 +4,7 @@ Only HTTP GET and the WIQL query POST (``/_apis/wit/wiql``) are issued.
 """
 
 import base64
+from contextlib import contextmanager
 import logging
 import os
 import threading
@@ -152,6 +153,27 @@ class AzureClient:
         self._fanout_lock = threading.Lock()
         self._gate_until = 0.0     # monotonic time before which no worker issues a request (Retry-After honoured fleet-wide)
         self._limiter = None
+        self._request_budget_remaining = None
+
+    @contextmanager
+    def request_budget(self, attempts):
+        """Temporarily cap actual HTTP attempts, including retries, for a single context-closure read."""
+        with self._stats_lock:
+            previous = self._request_budget_remaining
+            self._request_budget_remaining = max(0, int(attempts))
+        try:
+            yield
+        finally:
+            with self._stats_lock:
+                self._request_budget_remaining = previous
+
+    def _claim_request(self):
+        with self._stats_lock:
+            if self._request_budget_remaining is not None:
+                if self._request_budget_remaining <= 0:
+                    raise AzureError('http_attempt_budget_exhausted')
+                self._request_budget_remaining -= 1
+            self.stats['requests'] += 1
 
     def _bump(self, key):
         with self._stats_lock:
@@ -193,7 +215,7 @@ class AzureClient:
         attempt = 0
         while True:
             self._wait_gate()
-            self._bump('requests')
+            self._claim_request()
             started = time.monotonic()
             retry_after = None
             try:

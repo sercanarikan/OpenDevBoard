@@ -14,7 +14,7 @@ import sqlite3
 import logging
 import time
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
 from threading import Lock, RLock
@@ -35,6 +35,22 @@ _sleep = time.sleep
 
 MAX_CLOSURE_ROUNDS = 12
 MAX_CONTEXT_ITEMS = 25000
+CONTEXT_POLICY_ENV = 'SYNC_CONTEXT_POLICY'
+
+
+def context_budgets():
+    """Return explicit opt-in closure item/request budgets; defaults preserve the historical fixed cap."""
+    if os.environ.get(CONTEXT_POLICY_ENV, '').strip().lower() != 'budgeted':
+        return MAX_CONTEXT_ITEMS, None
+    try:
+        items = int(os.environ['SYNC_CONTEXT_MAX_ITEMS'])
+        requests = int(os.environ['SYNC_CONTEXT_MAX_REQUESTS'])
+    except (KeyError, TypeError, ValueError):
+        raise SyncError('context_budget_config_invalid: set positive SYNC_CONTEXT_MAX_ITEMS and '
+                        'SYNC_CONTEXT_MAX_REQUESTS')
+    if items <= 0 or requests <= 0:
+        raise SyncError('context_budget_config_invalid: context budgets must be positive')
+    return items, requests
 MASS_DELETE_FLOOR = 50
 MASS_DELETE_RATIO = 0.10
 MAX_WARNINGS = 20
@@ -594,6 +610,8 @@ class _Run:
         self.partitions = 1
         self.derived = None
         self.total_scope = None
+        self.request_start = None
+        self.request_limit = None
 
     def warn(self, msg, partial=False):
         if len(self.warnings) < MAX_WARNINGS:
@@ -650,6 +668,10 @@ def _collect_context(client, org_url, main_rows, run, alive, retry=None, retry_s
     dep_only = {}
     retry = retry or {}
     retry_sources = retry_sources or {}
+    context_limit, request_limit = context_budgets()
+    stats = getattr(client, 'stats', None)
+    request_start = run.request_start if run.request_start is not None else (
+        stats.get('requests', 0) if isinstance(stats, dict) else None)
     refs = defaultdict(dict)  # target id -> {id of a row read in this run that links to it: 'hier' | 'dep'}
 
     for round_no in range(MAX_CLOSURE_ROUNDS):
@@ -674,12 +696,21 @@ def _collect_context(client, org_url, main_rows, run, alive, retry=None, retry_s
         if not want_hier and not want_dep:
             break
 
-        if len(context) + len(dep_only) + len(want_hier) + len(want_dep) > MAX_CONTEXT_ITEMS:
-            run.warn(f"context_cap_reached:{MAX_CONTEXT_ITEMS}", partial=True)
+        if len(context) + len(dep_only) + len(want_hier) + len(want_dep) > context_limit:
+            run.warn(f"context_cap_reached:{context_limit}", partial=True)
             break
+
+        if request_limit is not None and request_start is not None:
+            attempted = stats.get('requests', 0) - request_start
+            projected = (len(want_hier) + len(want_dep) + azure_client.BATCH_SIZE - 1) // azure_client.BATCH_SIZE
+            if attempted + projected > request_limit:
+                run.warn(f"context_request_budget_reached:{request_limit}", partial=True)
+                break
 
         ids = sorted(want_hier | want_dep)
         fr = client.get_items(ids, expand_relations=True, error_policy_omit=True)
+        if any('http_attempt_budget_exhausted' in e for e in fr.errors):
+            run.warn(f"context_request_budget_reached:{request_limit}", partial=True)
         if fr.failed_batches:
             run.warn(f"context_fetch_failed:{sum(len(b) for b in fr.failed_batches)}", partial=True)
         if fr.missing:
@@ -730,6 +761,8 @@ def _plan_reconciliation(client, org_url, scope_ids, run):
 
     fr = client.get_items(candidates, expand_relations=True, error_policy_omit=True)
     if fr.failed_batches:
+        if any('http_attempt_budget_exhausted' in e for e in fr.errors):
+            run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
         run.warn(f"reconcile_fetch_failed:{sum(len(b) for b in fr.failed_batches)}", partial=True)
         # Absence is unknown for failed batches: rows are untouched and nothing is deleted this run.
         rows = [parse_work_item(raw, org_url) for raw in fr.items.values()]
@@ -908,6 +941,10 @@ def _fetch_phase(org_url, pat, run, force_full, max_items, client):
         hollow_needed = [i for i in hollow_ids if i not in returned_ids and i not in {r['id'] for r in context_rows}]
         if hollow_needed:
             fr_hollow = client.get_items(hollow_needed, expand_relations=True, error_policy_omit=True)
+            if fr_hollow.failed_batches:
+                if any('http_attempt_budget_exhausted' in e for e in fr_hollow.errors):
+                    run.warn(f"request_budget_reached:{run.request_limit}", partial=True)
+                run.warn(f"hollow_fetch_failed:{sum(len(b) for b in fr_hollow.failed_batches)}", partial=True)
             for raw in fr_hollow.items.values():
                 context_rows.append(parse_work_item(raw, org_url))
 
@@ -1029,11 +1066,18 @@ def sync_work_items(org_url, pat, force_full=False, max_items=None, client=None)
     try:
         set_sync_meta('sync_status', 'syncing')
         client = client or azure_client.AzureClient(org_url, pat, sleep=lambda s: _sleep(s))
+        _, request_limit = context_budgets()
+        stats = getattr(client, 'stats', None)
+        run.request_start = stats.get('requests', 0) if isinstance(stats, dict) else None
+        run.request_limit = request_limit
         if sync_staging.chunked_enabled():
             fetch, apply = sync_staging.fetch_phase, sync_staging.apply_phase
         else:
             fetch, apply = _fetch_phase, _apply_phase
-        plan = fetch(org_url, pat, run, force_full, max_items, client)
+        request_scope = (client.request_budget(request_limit)
+                         if request_limit is not None and hasattr(client, 'request_budget') else nullcontext())
+        with request_scope:
+            plan = fetch(org_url, pat, run, force_full, max_items, client)
         apply(plan, run)
         status = 'success' if run.complete else 'partial'
     except Exception as e:  # noqa: BLE001 - every failure must end in a persisted error state

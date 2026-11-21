@@ -425,7 +425,9 @@ class ThrottledProbeAcrossBatches(ProbeBase):
 
     def run_recording(self):
         sleeps = []
-        with self.fake.patch_all(), mock.patch.object(sync_service, '_sleep', sleeps.append):
+        # These cases assert the ordered per-batch retry schedule; parallel fan-out timing is covered separately.
+        with mock.patch.dict('os.environ', {'SYNC_DETAIL_WORKERS': '1'}), self.fake.patch_all(), \
+                mock.patch.object(sync_service, '_sleep', sleeps.append):
             res = sync_service.sync_work_items(ORG, 'pat')
         return res, sleeps
 
