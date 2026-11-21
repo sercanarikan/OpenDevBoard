@@ -410,22 +410,33 @@ class Safety(unittest.TestCase):
         for chunked in (False, True):
             reset_db()
             sync_once(FakeAzure(build_org()), chunked, force_full=True)
+            sync_service.set_sync_meta('initial_full_partial_count', 2)
+            sync_service.set_sync_meta('initial_full_retry_at', '2026-11-22T01:00:00+00:00')
             before = snapshot()
             outage = FakeAzure(build_org())
             outage.fail_details_after = 2
             res = sync_once(outage, chunked, force_full=True)
             self.assertEqual(res['status'], 'error')
             self.assertEqual(snapshot(), before)
+            self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '2')
+            self.assertEqual(sync_service.get_sync_meta('initial_full_retry_at'), '2026-11-22T01:00:00+00:00')
             observed[chunked] = (res['error'], len(outage.detail_calls))
         self.assertEqual(observed[True], observed[False])
         self.assertFalse(os.path.exists(stage_path()))
 
     def test_failure_in_the_publish_transaction_rolls_back_everything(self):
         fake, before = self._seeded()
-        with mock.patch.object(sync_service, 'recompute_derived', side_effect=RuntimeError('derived failed')):
-            res = sync_once(FakeAzure(build_org(seed=9)), True, force_full=True)
-        self.assertEqual(res['status'], 'error')
-        self.assertEqual(snapshot(), before)
+        for key, value in (('initial_full_partial_count', '3'),
+                           ('initial_full_retry_at', '2026-11-22T01:00:00+00:00')):
+            sync_service.set_sync_meta(key, value)
+        for chunked in (False, True):
+            with self.subTest(chunked=chunked), \
+                    mock.patch.object(sync_service, 'recompute_derived', side_effect=RuntimeError('derived failed')):
+                res = sync_once(FakeAzure(build_org(seed=9)), chunked, force_full=True)
+            self.assertEqual(res['status'], 'error')
+            self.assertEqual(snapshot()['table'], before['table'])
+            self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '3')
+            self.assertEqual(sync_service.get_sync_meta('initial_full_retry_at'), '2026-11-22T01:00:00+00:00')
         self.assertFalse(os.path.exists(stage_path()))
 
     def test_restart_after_an_interrupted_run_discards_the_leftover_staging_file(self):
@@ -658,23 +669,42 @@ class PartialRunsAreNeverCompleteSyncs(unittest.TestCase):
         seen = {}
         for chunked in (False, True):
             reset_db()
+            sync_service.set_sync_meta('initial_full_partial_count', 3)
+            sync_service.set_sync_meta('initial_full_retry_at', '2026-11-22T01:00:00+00:00')
             with mock.patch.object(sync_service, 'MAX_CONTEXT_ITEMS', 20):
                 res = sync_once(FakeAzure(build_org()), chunked, force_full=True)
             self.assertEqual(res['status'], 'partial')
             keys = ('watermark', 'last_full_sync', 'last_success_at', 'last_incremental_sync', 'total_org_active')
             seen[chunked] = {k: sync_service.get_sync_meta(k) for k in keys}
             seen[chunked]['dirty'] = sync_service.get_sync_meta('closure_dirty')
+            self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '3')
+            self.assertEqual(sync_service.get_sync_meta('initial_full_retry_at'), '2026-11-22T01:00:00+00:00')
         self.assertEqual(seen[True], seen[False])
         self.assertEqual(seen[True], {'watermark': None, 'last_full_sync': None, 'last_success_at': None,
                                       'last_incremental_sync': None, 'total_org_active': None, 'dirty': '1'})
 
+    def test_successful_full_sync_clears_scheduler_metadata_in_both_sync_modes(self):
+        for chunked in (False, True):
+            with self.subTest(chunked=chunked):
+                reset_db()
+                sync_service.set_sync_meta('initial_full_partial_count', 3)
+                sync_service.set_sync_meta('initial_full_retry_at', '2026-11-22T01:00:00+00:00')
+                result = sync_once(FakeAzure(build_org(n_tasks=300)), chunked, force_full=True)
+                self.assertEqual(result['status'], 'success')
+                self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '0')
+                self.assertEqual(sync_service.get_sync_meta('initial_full_retry_at'), '')
+
     def test_partial_run_over_an_existing_cache_keeps_its_completion_markers(self):
         sync_once(FakeAzure(build_org()), True, force_full=True)
+        sync_service.set_sync_meta('initial_full_partial_count', 2)
+        sync_service.set_sync_meta('initial_full_retry_at', '2026-11-22T01:00:00+00:00')
         keys = ('watermark', 'last_full_sync', 'last_success_at', 'total_org_active')
         before = {k: sync_service.get_sync_meta(k) for k in keys}
         res = sync_once(FakeAzure(build_org(seed=8)), True, force_full=True, max_items=10)  # explicit cap -> partial
         self.assertEqual(res['status'], 'partial')
         self.assertEqual({k: sync_service.get_sync_meta(k) for k in keys}, before)
+        self.assertEqual(sync_service.get_sync_meta('initial_full_partial_count'), '2')
+        self.assertEqual(sync_service.get_sync_meta('initial_full_retry_at'), '2026-11-22T01:00:00+00:00')
 
 
 if __name__ == '__main__':

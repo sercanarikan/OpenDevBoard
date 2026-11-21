@@ -204,11 +204,27 @@ def set_sync_meta(key, val):
         conn.commit()
 
 
+def set_sync_meta_many(values):
+    """Atomically update related sync metadata values in one SQLite transaction."""
+    now_iso = _utcnow().isoformat()
+    with db_lock, get_db_connection() as conn:
+        for key, val in values.items():
+            _set_meta(conn, key, val, now_iso)
+        conn.commit()
+
+
 def _set_meta(conn, key, val, now_iso=None):
     conn.execute('''
         INSERT INTO sync_state (key, val, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET val = excluded.val, updated_at = excluded.updated_at
     ''', (key, str(val), now_iso or _utcnow().isoformat()))
+
+
+def _clear_initial_full_sync_backoff(conn, now_iso=None):
+    """Clear scheduler-only retry state on the same transaction as a successful full sync."""
+    now_iso = now_iso or _utcnow().isoformat()
+    _set_meta(conn, 'initial_full_partial_count', 0, now_iso)
+    _set_meta(conn, 'initial_full_retry_at', '', now_iso)
 
 
 # Terminal states where item is deemed completed (Resolved is NOT completed).
@@ -1032,6 +1048,7 @@ def _apply_phase(plan, run):
                     if not plan["is_incremental"]:
                         _set_meta(conn, 'last_full_sync', now_iso, now_iso)
                         _set_meta(conn, 'total_org_active', run.total_scope or 0, now_iso)
+                        _clear_initial_full_sync_backoff(conn, now_iso)
                     _set_meta(conn, 'last_incremental_sync', now_iso, now_iso)
                     _set_meta(conn, 'last_success_at', now_iso, now_iso)
                 conn.execute('COMMIT')

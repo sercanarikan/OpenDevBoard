@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Thread
 from dotenv import load_dotenv
@@ -27,6 +27,15 @@ logger = logging.getLogger("run_backend")
 
 SYNC_INTERVAL_SEC = int(os.environ.get('SYNC_INTERVAL_SEC', 300))
 RECONCILE_INTERVAL_SEC = int(os.environ.get('RECONCILE_INTERVAL_SEC', 21600))
+INITIAL_FULL_PARTIAL_COUNT_META = 'initial_full_partial_count'
+INITIAL_FULL_RETRY_AT_META = 'initial_full_retry_at'
+INITIAL_FULL_BACKOFF_BASE_SEC = 600
+INITIAL_FULL_BACKOFF_MAX_SEC = 3600
+INITIAL_FULL_RETRY_CHECK_SEC = 30
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 def _full_sync_due(last_full):
@@ -45,6 +54,55 @@ def _full_sync_due(last_full):
     return age >= RECONCILE_INTERVAL_SEC
 
 
+def _record_scheduler_result(result):
+    """Persist backoff for repeated partial results from the initial full sync only."""
+    status, mode = result.get('status'), result.get('mode')
+    last_full = sync_service.get_sync_meta('last_full_sync')
+    if status == 'success' and mode == 'full':
+        sync_service.set_sync_meta_many({INITIAL_FULL_PARTIAL_COUNT_META: 0,
+                                         INITIAL_FULL_RETRY_AT_META: ''})
+        return None
+    if status != 'partial' or mode != 'full' or last_full:
+        return None
+
+    try:
+        partial_count = max(0, int(sync_service.get_sync_meta(INITIAL_FULL_PARTIAL_COUNT_META, '0')))
+    except (TypeError, ValueError):
+        partial_count = 0
+    partial_count += 1
+    exponent = min(partial_count - 1, 3)
+    delay = min(INITIAL_FULL_BACKOFF_BASE_SEC * (2 ** exponent), INITIAL_FULL_BACKOFF_MAX_SEC)
+    retry_at = (_utcnow() + timedelta(seconds=delay)).isoformat()
+    sync_service.set_sync_meta_many({INITIAL_FULL_PARTIAL_COUNT_META: partial_count,
+                                     INITIAL_FULL_RETRY_AT_META: retry_at})
+    return delay
+
+
+def _wait_for_initial_full_retry():
+    """Honor the retry deadline, but wake periodically if a manual full sync completes first.
+
+    Returns True when a full sync completed during this wait; callers can then resume the normal sync interval.
+    """
+    waited = False
+    while True:
+        if sync_service.get_sync_meta('last_full_sync'):
+            return waited
+        retry_at = sync_service.get_sync_meta(INITIAL_FULL_RETRY_AT_META)
+        if not retry_at:
+            return False
+        try:
+            retry = datetime.fromisoformat(retry_at)
+            if retry.tzinfo is None:
+                retry = retry.replace(tzinfo=timezone.utc)
+            remaining = (retry - _utcnow()).total_seconds()
+        except (TypeError, ValueError):
+            return False
+        if remaining <= 0:
+            return False
+        time.sleep(min(remaining, INITIAL_FULL_RETRY_CHECK_SEC))
+        waited = True
+
+
 def background_sync_loop():
     """First start: full sync. Afterwards: incremental sync every SYNC_INTERVAL_SEC, with a periodic full
     reconcile every RECONCILE_INTERVAL_SEC (read-only against Azure DevOps)."""
@@ -55,7 +113,10 @@ def background_sync_loop():
         return
 
     backoff = 5
+    if _wait_for_initial_full_retry():
+        time.sleep(SYNC_INTERVAL_SEC)
     while True:
+        delay = SYNC_INTERVAL_SEC
         try:
             force_full = _full_sync_due(sync_service.get_sync_meta('last_full_sync'))
             result = sync_service.sync_work_items(org_url, pat, force_full=force_full)
@@ -67,10 +128,16 @@ def background_sync_loop():
                 continue
             if status == 'partial':
                 logger.warning("Sync finished partially: %s", result.get('message', ''))
+            partial_delay = _record_scheduler_result(result)
+            if partial_delay is not None:
+                logger.warning("Initial full sync remains partial; next attempt in %ss", partial_delay)
+                if _wait_for_initial_full_retry():
+                    time.sleep(SYNC_INTERVAL_SEC)
+                continue
             backoff = 5
         except Exception as ex:  # keep loop alive
             logger.error("Background sync crashed: %s", ex)
-        time.sleep(SYNC_INTERVAL_SEC)
+        time.sleep(delay)
 
 
 if __name__ == '__main__':
