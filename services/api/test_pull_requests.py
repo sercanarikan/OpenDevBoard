@@ -9,6 +9,8 @@ from unittest.mock import patch
 import testsupport  # noqa: F401  (must precede the project imports)
 import pr_service
 import sync_service
+import persistence
+import feature_context
 
 testsupport.isolate_database(globals())
 
@@ -37,9 +39,9 @@ class TestPullRequestsService(unittest.TestCase):
     def test_partial_project_fetch_does_not_delete_unrefreshed_project_cache(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, 'pr-cache.db')
-            with patch.object(sync_service, 'DB_PATH', db_path):
+            with patch.object(persistence, 'DB_PATH', db_path):
                 pr_service.init_pr_db()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.executemany('INSERT INTO work_items (project, deleted_at) VALUES (?, NULL)', [('Alpha',), ('Beta',)])
@@ -48,7 +50,7 @@ class TestPullRequestsService(unittest.TestCase):
                     conn.close()
                 seed = dict(self.fixture_prs[0])
                 seed['project'] = 'Beta'
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('''INSERT INTO pull_requests (
                         id, project, repository, title, status, creation_date,
@@ -70,12 +72,12 @@ class TestPullRequestsService(unittest.TestCase):
                     status = 200 if '/Alpha/' in url else 500
                     value = {'value': [alpha_raw]} if status == 200 else {}
                     return type('Response', (), {'status_code': status, 'json': lambda self: value})()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', side_effect=get):
                     result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
 
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     rows = conn.execute('SELECT id, project FROM pull_requests').fetchall()
                 finally:
@@ -90,7 +92,7 @@ class TestPullRequestsService(unittest.TestCase):
                 self.assertTrue(result['cacheStatus']['stale'])
                 self.assertEqual(result['cacheStatus']['errors'], [{'kind': 'upstream_http', 'status': 500}])
                 self.assertIn((seed['id'], seed['project']), [tuple(row) for row in rows])
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     state = conn.execute('SELECT outcome, completed_at FROM pr_cache_state WHERE id=1').fetchone()
                 finally:
@@ -101,33 +103,33 @@ class TestPullRequestsService(unittest.TestCase):
 
     def test_successful_empty_pr_fetch_is_reported_as_empty_not_failed(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-pr.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'empty-pr.db')):
                 pr_service.init_pr_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute("INSERT INTO pull_requests (id, project, repository, title, status, creation_date, reviewers_json, work_items_json, last_synced_at) VALUES (7, 'Alpha', 'repo', 'cached', 'active', '2026-11-01', '[]', '[]', '2026-11-01')")
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', return_value=type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})()):
                     result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['items'], [])
                 self.assertEqual(result['cacheStatus']['outcome'], 'complete')
                 self.assertTrue(result['cacheStatus']['complete'])
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     self.assertEqual(conn.execute('SELECT COUNT(*) FROM pull_requests').fetchone()[0], 0)
                 gc.collect()
 
     def test_failed_refresh_preserves_last_successful_empty_pr_timestamp(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-pr-recovery.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'empty-pr-recovery.db')):
                 pr_service.init_pr_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                 responses = [
                     type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})(),
                     type('Response', (), {'status_code': 403, 'json': lambda self: {}})(),
                 ]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', side_effect=responses):
                     first = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                     failed = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
@@ -137,7 +139,7 @@ class TestPullRequestsService(unittest.TestCase):
 
     def test_pr_fetch_includes_old_active_prs_and_paginates_without_date_window(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'paged-pr.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'paged-pr.db')):
                 pr_service.init_pr_db()
                 page1 = {'pullRequestId': 1, 'title': 'one', 'status': 'active', 'repository': {'name': 'repo', 'project': {'name': 'Alpha'}}, 'creationDate': '2026-11-01T00:00:00Z'}
                 page2 = {'pullRequestId': 2, 'title': 'two', 'status': 'completed', 'repository': {'name': 'repo', 'project': {'name': 'Alpha'}}, 'creationDate': '2026-11-02T00:00:00Z'}
@@ -147,8 +149,8 @@ class TestPullRequestsService(unittest.TestCase):
                     type('Response', (), {'status_code': 200, 'json': lambda self: {'value': [page2] + [dict(page2, pullRequestId=1000 + index) for index in range(199)]}})(),
                     type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})(),
                 ]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', side_effect=responses) as get:
                     result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(len(result['items']), 400)
@@ -163,14 +165,14 @@ class TestPullRequestsService(unittest.TestCase):
 
     def test_partial_pr_cache_expires_after_ttl(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pr-ttl.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pr-ttl.db')):
                 pr_service.init_pr_db()
                 now = pr_service._utcnow()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute("INSERT INTO pr_cache_state (id, attempted_at, completed_at, outcome, successful_projects) VALUES (1, ?, ?, 'partial', '[]')", ((now - timedelta(seconds=301)).isoformat(), (now - timedelta(seconds=301)).isoformat()))
                 with patch.object(pr_service, '_utcnow', return_value=now), \
-                        patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', return_value=type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})()) as get:
                     pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', include_cache_status=True)
                 self.assertGreaterEqual(get.call_count, 1)
@@ -178,31 +180,31 @@ class TestPullRequestsService(unittest.TestCase):
 
     def test_pr_total_failure_keeps_previous_complete_rows(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pr-failure.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pr-failure.db')):
                 pr_service.init_pr_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
                     conn.execute("INSERT INTO pull_requests (id, project, repository, title, status, creation_date, reviewers_json, work_items_json, last_synced_at) VALUES (1, 'Alpha', 'repo', 'old', 'active', '2026-11-01', '[]', '[]', '2026-11-01')")
                     conn.commit()
                 response = type('Response', (), {'status_code': 500, 'json': lambda self: {}})()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', return_value=response):
                     result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['cacheStatus']['outcome'], 'failed')
                 self.assertTrue(result['cacheStatus']['stale'])
                 self.assertEqual([item['id'] for item in result['items']], [1])
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     rows = conn.execute('SELECT id FROM pull_requests').fetchall()
                 self.assertEqual([row['id'] for row in rows], [1])
                 gc.collect()
 
     def test_project_fallback_empty_result_does_not_clear_organization_cache(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pr-fallback-empty.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pr-fallback-empty.db')):
                 pr_service.init_pr_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
                     conn.execute("INSERT INTO pull_requests (id, project, repository, title, status, creation_date, reviewers_json, work_items_json, last_synced_at) VALUES (1, 'Alpha', 'repo', 'cached', 'active', '2026-11-01', '[]', '[]', '2026-11-01')")
@@ -210,8 +212,8 @@ class TestPullRequestsService(unittest.TestCase):
                     type('Response', (), {'status_code': 500, 'json': lambda self: {}})(),
                     type('Response', (), {'status_code': 200, 'json': lambda self: {'value': []}})(),
                 ]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', side_effect=responses):
                     result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual([item['id'] for item in result['items']], [1])
@@ -220,9 +222,9 @@ class TestPullRequestsService(unittest.TestCase):
 
     def test_partial_pr_cache_keeps_failure_reason_until_refresh(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'partial-pr-reason.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'partial-pr-reason.db')):
                 pr_service.init_pr_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.executemany('INSERT INTO work_items (project, deleted_at) VALUES (?, NULL)', [('Alpha',), ('Beta',)])
                 alpha = {'pullRequestId': 1, 'title': 'fixture', 'status': 'active', 'repository': {'name': 'repo', 'project': {'name': 'Alpha'}}}
@@ -231,8 +233,8 @@ class TestPullRequestsService(unittest.TestCase):
                     type('Response', (), {'status_code': 200, 'json': lambda self: {'value': [alpha]}})(),
                     type('Response', (), {'status_code': 403, 'json': lambda self: {}})(),
                 ]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', side_effect=responses) as get:
                     first = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                     cached = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', include_cache_status=True)
@@ -244,9 +246,9 @@ class TestPullRequestsService(unittest.TestCase):
     def test_pr_refresh_clears_failure_status_after_connection_recovers(self):
         import requests
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pr-recovery.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pr-recovery.db')):
                 pr_service.init_pr_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
                 recovered_pr = {'pullRequestId': 12, 'title': 'fixture', 'status': 'active', 'repository': {'name': 'repo', 'project': {'name': 'Alpha'}}}
@@ -255,8 +257,8 @@ class TestPullRequestsService(unittest.TestCase):
                     requests.ConnectionError('synthetic refusal'),
                     type('Response', (), {'status_code': 200, 'json': lambda self: {'value': [recovered_pr]}})(),
                 ]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pr_service.requests, 'get', side_effect=responses):
                     failed = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                     recovered = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
@@ -381,13 +383,13 @@ class TestPullRequestsService(unittest.TestCase):
         cases.append((requests.ConnectionError('synthetic refusal'), 'connection_refused'))
         for index, (failure, expected_kind) in enumerate(cases):
             with self.subTest(kind=expected_kind), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-                with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, f'pr-error-{index}.db')):
+                with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, f'pr-error-{index}.db')):
                     pr_service.init_pr_db()
-                    with sync_service.get_db_connection() as conn:
+                    with persistence.get_db_connection() as conn:
                         conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                         conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
-                    with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                            patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                    with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                            patch.object(feature_context, 'get_devops_headers', return_value={}), \
                             patch.object(pr_service.requests, 'get', side_effect=[failure, failure]):
                         result = pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True)
                     self.assertEqual(result['items'], [])
@@ -563,7 +565,7 @@ class PullRequestProjectScopeTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self.db = patch.object(sync_service, 'DB_PATH', os.path.join(self.temp.name, 'pr-scope.db'))
+        self.db = patch.object(persistence, 'DB_PATH', os.path.join(self.temp.name, 'pr-scope.db'))
         self.db.start()
         pr_service.init_pr_db()
         self.addCleanup(self.temp.cleanup)
@@ -595,7 +597,7 @@ class PullRequestProjectScopeTests(unittest.TestCase):
         return calls, get
 
     def _sync(self, get, patch_projects=True, **kwargs):
-        with patch.object(sync_service, 'is_fixture_mode', return_value=False), patch.object(sync_service, 'get_devops_headers', return_value={}), \
+        with patch.object(feature_context, 'is_fixture_mode', return_value=False), patch.object(feature_context, 'get_devops_headers', return_value={}), \
                 patch.object(pr_service.requests, 'get', side_effect=get), patch.object(pr_service.project_inventory.azure_http, 'get', side_effect=get):
             return pr_service.sync_live_pull_requests('https://dev.azure.com/org', 'synthetic', include_cache_status=True, **kwargs)
 

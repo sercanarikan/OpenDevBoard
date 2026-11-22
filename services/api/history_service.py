@@ -13,7 +13,8 @@ from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import requests
 
-import sync_service
+import feature_context
+import persistence
 
 logger = logging.getLogger("history_service")
 
@@ -26,7 +27,7 @@ def _utcnow():
 
 def init_history_db():
     """Initializes the history_events cache table in SQLite."""
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS history_events (
@@ -326,14 +327,14 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
     user_id = (user_info.get("id") or "").lower()
     user_email = (user_info.get("uniqueName") or "").lower()
 
-    if sync_service.is_fixture_mode():
+    if feature_context.is_fixture_mode():
         return build_fixture_history(user_name)
 
     now = _utcnow()
     now_iso = now.isoformat()
 
     if not force_refresh:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT MAX(last_synced_at) as last_sync, COUNT(*) as count FROM history_events WHERE actor_name = ?", (user_name,))
             row = cursor.fetchone()
@@ -347,7 +348,7 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
                 except Exception:
                     pass
 
-    headers = sync_service.get_devops_headers(pat)
+    headers = feature_context.get_devops_headers(pat)
     start_utc = now - timedelta(days=days)
 
     events = []
@@ -459,7 +460,7 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
 
     # Cache in SQLite
     if final_events:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM history_events WHERE actor_name = ?", (user_name,))
             cursor.executemany('''

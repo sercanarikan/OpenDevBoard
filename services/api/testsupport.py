@@ -47,6 +47,7 @@ def import_sync_service():
 
 
 sync_service = import_sync_service()
+import persistence
 
 # Each service creates its own tables while it is imported (``init_*_db()`` at module level) against whatever
 # ``sync_service.DB_PATH`` is at that moment. Import them here with the path pointed at a throwaway database, so
@@ -59,12 +60,15 @@ SERVICE_MODULES = ('pr_service', 'pipeline_service', 'deployment_service', 'team
 def import_service_modules():
     scratch = tempfile.mkdtemp(prefix='devopsflow-test-import-')
     previous = sync_service.DB_PATH
+    previous_persistence = persistence.DB_PATH
     sync_service.DB_PATH = os.path.join(scratch, 'devops_cache.db')
+    persistence.DB_PATH = sync_service.DB_PATH
     try:
         for name in SERVICE_MODULES:
             importlib.import_module(name)
     finally:
         sync_service.DB_PATH = previous
+        persistence.DB_PATH = previous_persistence
         shutil.rmtree(scratch, ignore_errors=True)
 
 
@@ -101,8 +105,10 @@ def isolate_database(module_globals):
 
     def setUpModule():
         state['previous_db_path'] = sync_service.DB_PATH
+        state['previous_persistence_db_path'] = persistence.DB_PATH
         state['dir'] = tempfile.mkdtemp(prefix='devopsflow-test-db-')
         sync_service.DB_PATH = os.path.join(state['dir'], 'devops_cache.db')
+        persistence.DB_PATH = sync_service.DB_PATH
         sync_service.init_db()
         state['previous_app_db_path'] = app.DB_PATH
         app.DB_PATH = os.path.join(state['dir'], 'app_cache.db')
@@ -116,6 +122,7 @@ def isolate_database(module_globals):
                 previous_teardown()
         finally:
             sync_service.DB_PATH = state.pop('previous_db_path')
+            persistence.DB_PATH = state.pop('previous_persistence_db_path')
             app.DB_PATH = state.pop('previous_app_db_path')
             shutil.rmtree(state.pop('dir'), ignore_errors=True)
 

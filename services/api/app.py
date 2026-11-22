@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import request_coalescing
 import observability
 import ipaddress
+import projects_cache
 
 # Azure DevOps SDK imports
 from msrest.authentication import BasicAuthentication
@@ -48,33 +49,15 @@ DB_PATH = 'devops_cache.db'
 db_lock = Lock()
 
 def init_db():
-    with db_lock, sqlite3.connect(DB_PATH) as conn:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS projects_cache (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cache_key TEXT UNIQUE,
-            data TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-        conn.commit()
+    projects_cache.initialize(DB_PATH, db_lock)
 
 init_db()
 
 def get_cache(cache_key):
-    with db_lock, sqlite3.connect(DB_PATH) as conn:
-        c = conn.cursor()
-        c.execute('SELECT data, updated_at FROM projects_cache WHERE cache_key=?', (cache_key,))
-        row = c.fetchone()
-        if row:
-            return row[0], row[1]
-        return None, None
+    return projects_cache.get(DB_PATH, db_lock, cache_key)
 
 def set_cache(cache_key, data):
-    with db_lock, sqlite3.connect(DB_PATH) as conn:
-        c = conn.cursor()
-        c.execute('''INSERT INTO projects_cache (cache_key, data, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-                     ON CONFLICT(cache_key) DO UPDATE SET data=excluded.data, updated_at=CURRENT_TIMESTAMP''', (cache_key, data))
-        conn.commit()
+    projects_cache.set_value(DB_PATH, db_lock, cache_key, data)
 
 def get_devops_pat():
     pat = os.environ.get('AZURE_DEVOPS_PAT')

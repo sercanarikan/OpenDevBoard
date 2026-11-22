@@ -37,7 +37,7 @@ class ConfigurationDefaults(unittest.TestCase):
     def test_opt_in_and_metrics_defaults(self):
         self.assertRegex(source('services/api/sync_staging.py'), r"os\.environ\.get\('SYNC_CHUNKED',\s*''\)\.strip\(\)\s*==\s*'1'")
         self.assertRegex(source('services/api/observability.py'), r"os\.environ\.get\('OBSERVABILITY_METRICS_ENABLED',\s*'1'\)")
-        self.assertRegex(source('services/api/sync_service.py'), r"os\.environ\.get\('DEVOPS_FIXTURE_MODE'\)\s*==\s*'1'")
+        self.assertRegex(source('services/api/feature_context.py'), r"os\.environ\.get\('DEVOPS_FIXTURE_MODE'\)\s*==\s*'1'")
 
     def test_compose_defaults(self):
         compose = source('docker-compose.yml')
