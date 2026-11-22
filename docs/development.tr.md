@@ -67,6 +67,8 @@ Yerel API geliştirme için repository kökünden `python services/api/run_backe
 
 Ortamda veya yüklenen kök `.env` dosyasında `DEVOPS_FIXTURE_MODE=1` yoksa yerel Python fixture modunu açmaz; Compose varsayılan olarak `1` kullanır.
 
+Work Item cache'inin SQLite bağlantı yapılandırması ve paylaşılan yazıcı kilidi `services/api/persistence.py` içindedir. `sync_service`, özellik servisleri ve testlerin kullandığı cache yolu, bağlantı ve snapshot giriş noktalarını korur; bağlantı açılırken güncel yolu iletir. Transaction ve bağlantı ömrü çağıranın sorumluluğunda kalır. Özellik servisleri, bu giriş noktalarına uygulanan patch'lerin çalışmaya devam etmesi için hâlâ `sync_service` kullanır. `app.py`, `projects_cache` için ayrı bir göreli veritabanı yolu ve kilit kullanır; bu paylaşılan cache arayüzünün dışındadır. Çalışma dizinine ve `DEVOPS_DATA_DIR` değerine bağlı olarak iki yol, ayrı kilitlere rağmen aynı dosyayı gösterebilir.
+
 ## Docker Compose
 
 Repository kökünden çalıştırın:
