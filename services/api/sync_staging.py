@@ -17,6 +17,7 @@ HTTP error or a partial run before that point leaves the cache, its watermark an
 before a run starts and after it ends, and it is never read by any query.
 """
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -721,3 +722,10 @@ def apply_phase(plan, run):
                 raise
     finally:
         conn.close()
+
+
+# Run after this module is fully initialized, regardless of which side of the import cycle loaded first.
+try:
+    cleanup_stale_stage()
+except Exception as _cleanup_error:  # noqa: BLE001 - housekeeping must never stop startup
+    logging.getLogger("sync_service").warning("Stale staging cleanup skipped: %s", _cleanup_error)
