@@ -1,0 +1,109 @@
+# Synthetic rule tests. Each case covers both firing and resolution without a live service.
+rule_files:
+  - alert-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: metrics target unavailable fires and resolves
+    input_series:
+      - series: 'up{job="opendevboard-api"}'
+        values: '0x10 1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MetricsTargetUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, job: opendevboard-api}
+            exp_annotations:
+              summary: OpenDevBoard metrics target is unavailable
+              description: Prometheus has been unable to scrape the internal OpenDevBoard API metrics endpoint for 2 minutes.
+      - eval_time: 15m
+        alertname: MetricsTargetUnavailable
+        exp_alerts: []
+
+  - name: no recent successful sync fires and resolves
+    start_timestamp: 90000
+    input_series:
+      - series: opendevboard_last_successful_sync_timestamp_seconds
+        values: '1x1500 _x10'
+    alert_rule_test:
+      - eval_time: 24h6m
+        alertname: NoRecentSuccessfulSync
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: No successful OpenDevBoard sync in 24 hours
+              description: The persisted timestamp of the last successful sync is more than 24 hours old.
+      - eval_time: 25h6m
+        alertname: NoRecentSuccessfulSync
+        exp_alerts: []
+
+  - name: sync errors fire and resolve
+    input_series:
+      - series: 'opendevboard_sync_runs_total{status="error"}'
+        values: '0 1x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SyncErrorsIncreasing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: OpenDevBoard sync errors are increasing
+              description: At least one sync error occurred in the last 15 minutes.
+      - eval_time: 25m
+        alertname: SyncErrorsIncreasing
+        exp_alerts: []
+
+  - name: continuously partial sync fires and resolves
+    input_series:
+      - series: opendevboard_sync_partial
+        values: '1x65 0x10'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: SyncContinuouslyPartial
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: OpenDevBoard sync has remained partial
+              description: The most recent sync has remained partial for 30 minutes.
+      - eval_time: 75m
+        alertname: SyncContinuouslyPartial
+        exp_alerts: []
+
+  - name: repeated 429 fires and resolves
+    input_series:
+      - series: 'opendevboard_http_results_total{result="429"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 10x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AzureHttp429Increasing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: OpenDevBoard is receiving repeated HTTP 429 responses
+              description: At least three HTTP 429 responses occurred within a five-minute window.
+      - eval_time: 16m
+        alertname: AzureHttp429Increasing
+        exp_alerts: []
+
+  - name: high process memory fires and resolves
+    input_series:
+      - series: opendevboard_process_rss_bytes
+        values: '2000000000x10 1000000000x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighProcessMemory
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: OpenDevBoard API process memory is high
+              description: API process RSS has exceeded 1.5 GiB for 10 minutes.
+      - eval_time: 15m
+        alertname: HighProcessMemory
+        exp_alerts: []
+
+  - name: no sync history does not fire
+    alert_rule_test:
+      - eval_time: 48h
+        alertname: NoRecentSuccessfulSync
+        exp_alerts: []

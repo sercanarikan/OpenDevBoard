@@ -1,0 +1,57 @@
+groups:
+  - name: opendevboard
+    rules:
+      - alert: MetricsTargetUnavailable
+        expr: up{job="opendevboard-api"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenDevBoard metrics target is unavailable
+          description: Prometheus has been unable to scrape the internal OpenDevBoard API metrics endpoint for 2 minutes.
+
+      # The > 0 guard means an installation with no successful sync history does not fire this alert.
+      - alert: NoRecentSuccessfulSync
+        expr: (opendevboard_last_successful_sync_timestamp_seconds > 0) and ((time() - opendevboard_last_successful_sync_timestamp_seconds) > 86400)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful OpenDevBoard sync in 24 hours
+          description: The persisted timestamp of the last successful sync is more than 24 hours old.
+
+      - alert: SyncErrorsIncreasing
+        expr: sum(increase(opendevboard_sync_runs_total{status="error"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenDevBoard sync errors are increasing
+          description: At least one sync error occurred in the last 15 minutes.
+
+      - alert: SyncContinuouslyPartial
+        expr: opendevboard_sync_partial == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenDevBoard sync has remained partial
+          description: The most recent sync has remained partial for 30 minutes.
+
+      - alert: AzureHttp429Increasing
+        expr: sum(increase(opendevboard_http_results_total{result="429"}[5m])) >= 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenDevBoard is receiving repeated HTTP 429 responses
+          description: At least three HTTP 429 responses occurred within a five-minute window.
+
+      - alert: HighProcessMemory
+        expr: opendevboard_process_rss_bytes > 1610612736
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenDevBoard API process memory is high
+          description: API process RSS has exceeded 1.5 GiB for 10 minutes.
