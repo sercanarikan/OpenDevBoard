@@ -17,19 +17,20 @@ from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
-from threading import Lock, RLock
+from threading import Lock
 import requests
 from base64 import b64encode
 
 import azure_client
 import observability
+import persistence
 
 logger = logging.getLogger("sync_service")
 
 DATA_DIR = os.environ.get('DEVOPS_DATA_DIR') or os.path.dirname(__file__)
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, 'devops_cache.db')
-db_lock = RLock()
+db_lock = persistence.db_lock
 sync_lock = Lock()
 
 _sleep = time.sleep
@@ -78,11 +79,7 @@ def _utcnow():
 
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=15.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL;')
-    conn.execute('PRAGMA busy_timeout=5000;')
-    return conn
+    return persistence.get_db_connection(DB_PATH)
 
 
 def init_db():
