@@ -36,6 +36,10 @@ docker compose up --build -d
 
 Servis ve ortam ayrıntıları için [Docker kurulum kılavuzuna](docs/docker-setup.tr.md) bakın.
 
+## İsteğe bağlı gözlemlenebilirlik
+
+Prometheus ve Grafana, isteğe bağlı `observability` Compose profiliyle kullanılabilir. Compose işleminin ortamında güçlü bir Grafana yönetici parolası ayarlayıp `docker compose --profile observability up -d prometheus grafana` çalıştırın. Grafana varsayılan olarak `http://127.0.0.1:3000` adresindedir; parolanın varsayılanı yoktur. Secret yönetimi, dashboard'lar, saklama ve işletim için [gözlemlenebilirlik kılavuzuna](services/api/OBSERVABILITY.md) bakın.
+
 ## Mimari
 
 Public Edition; React 19, TypeScript, Vite ve Tailwind kullanan bir frontend ile Python 3.12 Flask backend'inden oluşur. Frontend nginx üzerinden sunulur ve `/api` isteklerini ters vekil aracılığıyla backend'e iletir. Azure DevOps ile bağlantı kuran ve SQLite önbelleğini tutan tek bileşen backend'dir. Docker Compose `web` ve `api` servislerini çalıştırır; API portu host'a açılmaz.
@@ -57,7 +61,7 @@ Görüntülemek istediğiniz Azure DevOps verileri için gerekli salt okunur kap
 | --- | --- |
 | `AZURE_DEVOPS_ORG_URL` | Azure DevOps organizasyon URL'si; ör. `https://dev.azure.com/<organization>` |
 | `AZURE_DEVOPS_PAT` | Yalnız backend'de kullanılan, en az yetkili salt okunur PAT |
-| `DEVOPS_FIXTURE_MODE` | Deterministik çevrimdışı demo verisi için varsayılan `1`; yalnız canlı Azure DevOps için `0` yapın |
+| `DEVOPS_FIXTURE_MODE` | Compose çevrimdışı fixture verisi için varsayılan `1` kullanır; yerel Python çalıştırmasında fixture modu yalnız `1` olarak ayarlandığında açılır |
 | `DEVOPS_DATA_DIR` | Backend SQLite veri dizini; Compose değeri `/data` |
 | `SYNC_INTERVAL_SEC` | Arka plan eşitleme aralığı (saniye) |
 | `SYNC_DETAIL_WORKERS` | Eşitleme sırasında eşzamanlı, salt okunur Work Item detay istekleri. Varsayılan `1` (sıralı); önerilen opt-in değeri `4`, üst sınır `8`. Geçersiz veya pozitif olmayan değerler `1`'e düşer |

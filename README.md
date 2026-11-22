@@ -36,6 +36,10 @@ Open <http://localhost:5174>. Check service health with `docker compose ps` and 
 
 See [Docker setup](docs/docker-setup.md) for service and environment details.
 
+## Optional observability
+
+Prometheus and Grafana are available through the optional `observability` Compose profile. Set a strong Grafana admin password in the Compose process environment, then run `docker compose --profile observability up -d prometheus grafana`. Grafana defaults to `http://127.0.0.1:3000`; the password has no default. See the [observability guide](services/api/OBSERVABILITY.md) for secret handling, dashboards, retention, and operations.
+
 ## Architecture
 
 The Public Edition consists of a React 19, TypeScript, Vite, and Tailwind frontend and a Python 3.12 Flask backend. The frontend is served by nginx and sends `/api` requests through its reverse proxy to the backend. The backend is the only component that contacts Azure DevOps and stores its cache in SQLite. Docker Compose runs the `web` and `api` services; the API port is not published to the host.
@@ -57,7 +61,7 @@ Create a PAT with only the read scopes required for the Azure DevOps data you in
 | --- | --- |
 | `AZURE_DEVOPS_ORG_URL` | Azure DevOps organization URL, e.g. `https://dev.azure.com/<organization>` |
 | `AZURE_DEVOPS_PAT` | Backend-only, minimally scoped read-only PAT |
-| `DEVOPS_FIXTURE_MODE` | Defaults to `1` for deterministic offline demo data; set `0` only for live Azure DevOps |
+| `DEVOPS_FIXTURE_MODE` | Compose defaults to `1` for offline fixture data; native Python enables fixture mode only when set to `1` |
 | `DEVOPS_DATA_DIR` | Backend SQLite data directory; Compose uses `/data` |
 | `SYNC_INTERVAL_SEC` | Background synchronization interval in seconds |
 | `SYNC_DETAIL_WORKERS` | Concurrent read-only work item detail requests during sync. Defaults to `1` (sequential); `4` is the recommended opt-in, capped at `8`. Invalid or non-positive values fall back to `1` |

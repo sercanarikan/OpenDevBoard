@@ -66,7 +66,7 @@ Bu kural sayesinde doğrudan açılan `/pull-requests`, `/pipelines` gibi yollar
 
 ## 5. Screenshot Optimizasyonu
 
-Fixture E2E screenshot'ları `E2E_CAPTURE_SCREENSHOTS=1` ile opt-in'dir. `npm --prefix scripts run visual` ana route'ları responsive viewport, theme ve dil kombinasyonlarında doğrular. Görsel kanıt `captureVerifiedScreenshot` ile beklenen URL ve sayfa selector'ı doğrulandıktan sonra alınır. Screenshot kayıtları tarih/sürüm/topic klasörlerinde tutulur; manifest denetimi duplicate kayıtları, diskte olmayan referansları ve manifest dışı PNG'leri yakalar.
+Fixture E2E screenshot'ları `E2E_CAPTURE_SCREENSHOTS=1` ile opt-in'dir. `SHOTS_ROOT=.local/routing-visual/screenshots npm --prefix scripts run visual` ana route'ları responsive viewport, theme ve dil kombinasyonlarında doğrular. Görsel kanıt `captureVerifiedScreenshot` ile beklenen URL ve sayfa selector'ı doğrulandıktan sonra alınır. Screenshot kayıtları tarih/sürüm/topic klasörlerinde tutulur; manifest denetimi duplicate kayıtları, diskte olmayan referansları ve manifest dışı PNG'leri yakalar.
 
 ## 6. Test ve Doğrulama Komutları
 
@@ -82,7 +82,7 @@ npm --prefix apps/web run build
 npm ci --prefix scripts
 npm --prefix scripts run e2e:test
 npm --prefix scripts run e2e
-npm --prefix scripts run visual
+SHOTS_ROOT=.local/routing-visual/screenshots npm --prefix scripts run visual
 
 docker compose config --quiet
 ```
@@ -99,7 +99,9 @@ npm.cmd --prefix apps/web run build
 npm.cmd ci --prefix scripts
 npm.cmd --prefix scripts run e2e:test
 npm.cmd --prefix scripts run e2e
+$env:SHOTS_ROOT = '.local/routing-visual/screenshots'
 npm.cmd --prefix scripts run visual
+Remove-Item Env:SHOTS_ROOT
 
 docker compose config --quiet
 ```

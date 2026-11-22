@@ -65,6 +65,8 @@ py -3.12 -m venv .venv
 
 Yerel API geliştirme için repository kökünden `python services/api/run_backend.py` çalıştırın. API varsayılan olarak `127.0.0.1:5000` üzerinde dinler.
 
+Ortamda veya yüklenen kök `.env` dosyasında `DEVOPS_FIXTURE_MODE=1` yoksa yerel Python fixture modunu açmaz; Compose varsayılan olarak `1` kullanır.
+
 ## Docker Compose
 
 Repository kökünden çalıştırın:
@@ -77,7 +79,7 @@ docker compose logs -f api
 
 Windows PowerShell'de de aynı Docker Compose komutlarını kullanabilirsiniz.
 
-Frontend <http://localhost:5174> adresindedir. Yığını durdurmak için `docker compose down` çalıştırın; cache volume'ünü korumak için `-v` eklemeyin. Ayrıntılar için [Docker kurulumuna](docker-setup.md) bakın.
+Frontend <http://localhost:5174> adresindedir. Yığını durdurmak için `docker compose down` çalıştırın; cache volume'ünü korumak için `-v` eklemeyin. Ayrıntılar için [Docker kurulumuna](docker-setup.tr.md) bakın.
 
 ## Testler
 

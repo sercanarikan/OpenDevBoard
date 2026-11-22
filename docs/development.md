@@ -65,6 +65,8 @@ py -3.12 -m venv .venv
 
 For local API development, run `python services/api/run_backend.py` from the repository root. The API listens on `127.0.0.1:5000` by default.
 
+Without `DEVOPS_FIXTURE_MODE=1` in the environment or a loaded root `.env`, native Python does not enable fixture mode; Compose defaults it to `1`.
+
 ## Docker Compose
 
 From the repository root:
