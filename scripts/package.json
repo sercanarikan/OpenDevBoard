@@ -7,7 +7,7 @@
     "e2e": "node e2e.mjs",
     "e2e:test": "node test-e2e-orchestrator.mjs",
     "visual": "node visual-matrix.mjs",
-    "docs:lint": "markdownlint-cli2 --config ../.markdownlint-cli2.jsonc \"../**/*.md\"",
+    "docs:lint": "node docs/lint.mjs",
     "docs:links": "node docs/links.mjs",
     "docs:test": "node --test docs/*.test.mjs"
   },
