@@ -67,6 +67,8 @@ For local API development, run `python services/api/run_backend.py` from the rep
 
 Without `DEVOPS_FIXTURE_MODE=1` in the environment or a loaded root `.env`, native Python does not enable fixture mode; Compose defaults it to `1`.
 
+The work-item cache's SQLite connection configuration and shared writer lock live in `services/api/persistence.py`. `sync_service` retains the cache path, connection and snapshot entry points used by feature services and tests; it passes the current path when opening a connection. Transactions and connection lifetime remain the caller's responsibility. Feature services still depend on the `sync_service` entry points so patches to those entry points keep working. `app.py` has a separate relative database path and lock for `projects_cache`; it is not part of this shared cache interface. Depending on the working directory and `DEVOPS_DATA_DIR`, the two paths may resolve to the same file despite the separate locks.
+
 ## Docker Compose
 
 From the repository root:
