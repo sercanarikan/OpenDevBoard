@@ -8,6 +8,8 @@ from unittest.mock import patch
 import testsupport  # noqa: F401  (must precede the project imports)
 import deployment_service
 import sync_service
+import persistence
+import feature_context
 
 testsupport.isolate_database(globals())
 
@@ -20,7 +22,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
         # inventory behavior itself is covered by DeploymentProjectInventoryTests.
         def legacy_inventory(org_url, headers):
             try:
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     rows = conn.execute("SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL").fetchall()
                 return [r["project"] for r in rows], True
             except Exception:
@@ -31,9 +33,9 @@ class TestDeploymentMetricsService(unittest.TestCase):
 
     def test_deployment_cache_does_not_serve_a_different_days_window(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'deployment.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'deployment.db')):
                 deployment_service.init_deployment_db()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
@@ -47,7 +49,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     conn.commit()
                 finally:
                     conn.close()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('''INSERT INTO deployment_cache_state
                         (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
@@ -57,8 +59,8 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     conn.commit()
                 finally:
                     conn.close()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', return_value=self._ok([])) as get:
                         first = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', days=7, include_cache_status=True)
                         second = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', days=30)
@@ -68,7 +70,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 self.assertTrue(first['cacheStatus']['stale'])
                 self.assertEqual(second, [])
                 self.assertEqual(get.call_count, 1)
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     persisted = conn.execute('SELECT id FROM deployment_records').fetchall()
                 finally:
@@ -83,25 +85,25 @@ class TestDeploymentMetricsService(unittest.TestCase):
         import threading
         barrier = threading.Barrier(2, timeout=2)
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'parallel.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'parallel.db')):
                 deployment_service.init_deployment_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.executemany('INSERT INTO work_items (project, deleted_at) VALUES (?, NULL)', [('Alpha',), ('Beta',)])
                 def fetch(*args, **kwargs):
                     barrier.wait()
                     return self._ok([])
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', side_effect=fetch):
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'synthetic', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['cacheStatus']['outcome'], 'complete')
 
     def test_deployment_successful_empty_response_is_reported_complete(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-deployment.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'empty-deployment.db')):
                 deployment_service.init_deployment_db()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
@@ -109,8 +111,8 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     conn.commit()
                 finally:
                     conn.close()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', return_value=self._ok([])) as get:
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                     cached = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', include_cache_status=True)
@@ -118,7 +120,7 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 self.assertEqual(result['cacheStatus']['outcome'], 'complete')
                 self.assertTrue(result['cacheStatus']['complete'])
                 self.assertEqual(cached['items'], [])
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     self.assertEqual(conn.execute('SELECT COUNT(*) FROM deployment_records WHERE project = ?', ('Alpha',)).fetchone()[0], 0)
                 self.assertEqual(cached['cacheStatus']['outcome'], 'complete')
                 self.assertIsNotNone(cached['cacheStatus']['lastSyncedAt'])
@@ -126,14 +128,14 @@ class TestDeploymentMetricsService(unittest.TestCase):
 
     def test_failed_refresh_preserves_last_successful_empty_deployment_timestamp(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-deployment-recovery.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'empty-deployment-recovery.db')):
                 deployment_service.init_deployment_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
                 responses = [self._ok([]), type('Response', (), {'status_code': 403, 'json': lambda self: {}})()]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', side_effect=responses):
                     first = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                     failed = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
@@ -143,9 +145,9 @@ class TestDeploymentMetricsService(unittest.TestCase):
 
     def test_deployment_reads_all_continuation_pages_for_each_project(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'paged-deployment.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'paged-deployment.db')):
                 deployment_service.init_deployment_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
                 raw1 = {'id': 1, 'release': {'id': 1, 'name': 'R1'}, 'releaseDefinition': {'id': 1, 'name': 'D'}, 'releaseEnvironment': {'id': 1, 'name': 'Prod'}, 'deploymentStatus': 'succeeded', 'startedOn': '2026-11-08T00:00:00Z'}
@@ -154,8 +156,8 @@ class TestDeploymentMetricsService(unittest.TestCase):
                     type('Response', (), {'status_code': 200, 'headers': {'x-ms-continuationtoken': 'next'}, 'json': lambda self: {'value': [raw1]}})(),
                     type('Response', (), {'status_code': 200, 'headers': {}, 'json': lambda self: {'value': [raw2]}})(),
                 ]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', side_effect=responses) as get:
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual({item['id'] for item in result['items']}, {1, 2})
@@ -171,9 +173,9 @@ class TestDeploymentMetricsService(unittest.TestCase):
 
     def test_deployment_partial_cache_ttl_expiration_forces_refresh(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'ttl-deployment.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'ttl-deployment.db')):
                 deployment_service.init_deployment_db()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
@@ -181,20 +183,20 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 finally:
                     conn.close()
                 now = deployment_service._utcnow()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute("INSERT INTO deployment_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects) VALUES (1, 30, ?, ?, 'partial', '[]')", ((now - timedelta(seconds=301)).isoformat(), (now - timedelta(seconds=301)).isoformat()))
                 with patch.object(deployment_service, '_utcnow', return_value=now), \
-                        patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', return_value=self._ok([])) as get:
                     deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', days=30, include_cache_status=True)
                 self.assertEqual(get.call_count, 1)
 
     def test_deployment_total_failure_keeps_previous_rows_and_reports_stale(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'deployment-failure.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'deployment-failure.db')):
                 deployment_service.init_deployment_db()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
@@ -203,15 +205,15 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 finally:
                     conn.close()
                 bad = type('Response', (), {'status_code': 500, 'json': lambda self: {}})()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', return_value=bad):
                     result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['cacheStatus']['outcome'], 'failed')
                 self.assertTrue(result['cacheStatus']['stale'])
                 self.assertEqual([item['id'] for item in result['items']], [1])
                 self.assertEqual(result['cacheStatus']['errors'], [{'kind': 'upstream_http', 'status': 500}])
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     rows = conn.execute('SELECT id FROM deployment_records').fetchall()
                 self.assertEqual([row['id'] for row in rows], [1])
 
@@ -227,14 +229,14 @@ class TestDeploymentMetricsService(unittest.TestCase):
         ]
         for index, (failure, expected) in enumerate(cases):
             with self.subTest(error=expected['kind']), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-                with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, f'deployment-error-{index}.db')):
+                with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, f'deployment-error-{index}.db')):
                     deployment_service.init_deployment_db()
-                    with sync_service.get_db_connection() as conn:
+                    with persistence.get_db_connection() as conn:
                         conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                         conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
                     request_patch = patch.object(deployment_service.azure_http, 'get', side_effect=failure) if isinstance(failure, BaseException) else patch.object(deployment_service.azure_http, 'get', return_value=failure)
-                    with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                            patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                    with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                            patch.object(feature_context, 'get_devops_headers', return_value={}), \
                             request_patch:
                         result = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(result['items'], [])
@@ -242,17 +244,17 @@ class TestDeploymentMetricsService(unittest.TestCase):
 
     def test_partial_deployment_failure_returns_stale_cache_and_recovers_on_next_success(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'deployment-recovery.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'deployment-recovery.db')):
                 deployment_service.init_deployment_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.executemany('INSERT INTO work_items (project, deleted_at) VALUES (?, NULL)', [('Alpha',), ('Beta',)])
                     conn.execute("INSERT INTO deployment_records (id, project, release_name, definition_name, environment_name, status, started_on, last_synced_at) VALUES (1, 'Beta', 'cached', 'cached', 'Production', 'succeeded', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')")
                 alpha = {'id': 2, 'release': {'id': 2, 'name': 'fresh'}, 'releaseDefinition': {'id': 2, 'name': 'fresh'}, 'releaseEnvironment': {'id': 2, 'name': 'Production'}, 'deploymentStatus': 'succeeded', 'startedOn': '2026-11-10T00:00:00Z'}
                 good = self._ok([alpha])
                 forbidden = type('Response', (), {'status_code': 403, 'json': lambda self: {}})()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', side_effect=[good, forbidden]) as get:
                     partial = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                     cached_partial = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', include_cache_status=True)
@@ -264,8 +266,8 @@ class TestDeploymentMetricsService(unittest.TestCase):
                 self.assertEqual(get.call_count, 2)
 
                 with patch.object(deployment_service, '_utcnow', return_value=deployment_service._utcnow() + timedelta(minutes=6)), \
-                        patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(deployment_service.azure_http, 'get', side_effect=[good, good]):
                     recovered = deployment_service.sync_live_deployments('https://dev.azure.com/org', 'org', 'pat', force_refresh=True, include_cache_status=True)
                 self.assertEqual(recovered['cacheStatus']['outcome'], 'complete')
@@ -386,10 +388,10 @@ class DeploymentProjectInventoryTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self.db = patch.object(sync_service, 'DB_PATH', os.path.join(self.temp.name, 'inventory-deployment.db'))
+        self.db = patch.object(persistence, 'DB_PATH', os.path.join(self.temp.name, 'inventory-deployment.db'))
         self.db.start()
         deployment_service.init_deployment_db()
-        with sync_service.get_db_connection() as conn:
+        with persistence.get_db_connection() as conn:
             conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
             conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
         self.addCleanup(self.temp.cleanup)

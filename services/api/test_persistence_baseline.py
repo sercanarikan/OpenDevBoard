@@ -33,6 +33,7 @@ class PersistenceProcessTests(unittest.TestCase):
             import os, sqlite3, persistence, sync_service as s
             assert s.db_lock is persistence.db_lock
             s.DB_PATH = os.path.join(os.environ['DEVOPS_DATA_DIR'], 'other.db')
+            persistence.DB_PATH = s.DB_PATH
             conn = s.get_db_connection()
             assert conn.row_factory is sqlite3.Row
             assert conn.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
@@ -45,9 +46,10 @@ class PersistenceProcessTests(unittest.TestCase):
         self.run_isolated('''
             import os
             from unittest.mock import patch
-            import sync_service as s
+            import persistence, sync_service as s
             import pipeline_service, deployment_service, pr_service, team_service, history_service
             s.DB_PATH = os.path.join(os.environ['DEVOPS_DATA_DIR'], 'features.db')
+            persistence.DB_PATH = s.DB_PATH
             s.init_db()
             class RecordingLock:
                 def __init__(self): self.entries = 0
@@ -56,7 +58,7 @@ class PersistenceProcessTests(unittest.TestCase):
             lock = RecordingLock()
             initializers = (pipeline_service.init_pipeline_db, deployment_service.init_deployment_db,
                             pr_service.init_pr_db, team_service.init_team_db, history_service.init_history_db)
-            with patch.object(s, 'db_lock', lock), patch.object(s, 'get_db_connection', wraps=s.get_db_connection) as connect:
+            with patch.object(persistence, 'db_lock', lock), patch.object(persistence, 'get_db_connection', wraps=persistence.get_db_connection) as connect:
                 for initialize in initializers: initialize()
                 assert connect.call_count == len(initializers)
                 assert lock.entries == len(initializers)

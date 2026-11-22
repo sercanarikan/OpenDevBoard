@@ -15,7 +15,8 @@ from urllib.parse import quote
 import requests
 
 import project_inventory
-import sync_service
+import feature_context
+import persistence
 
 logger = logging.getLogger("pr_service")
 _user_group_cache = {}
@@ -57,7 +58,7 @@ def _utcnow():
 
 def init_pr_db():
     """Initializes the pull_requests cache table in SQLite."""
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS pull_requests (
@@ -533,7 +534,7 @@ def build_fixture_prs() -> List[Dict[str, Any]]:
 
 def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False, include_cache_status: bool = False):
     """Fetches PRs from Azure DevOps, stores in SQLite, and returns normalized records."""
-    if sync_service.is_fixture_mode():
+    if feature_context.is_fixture_mode():
         return build_fixture_prs()
 
     # Check cache TTL
@@ -541,7 +542,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
     now_iso = now.isoformat()
 
     if not force_refresh:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             state = cursor.execute("SELECT * FROM pr_cache_state WHERE id=1").fetchone()
             if state and state["outcome"] in {"complete", "partial"} and state["completed_at"]:
@@ -564,7 +565,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                     pass
 
     # Fetch from Azure DevOps
-    headers = sync_service.get_devops_headers(pat)
+    headers = feature_context.get_devops_headers(pat)
     all_raw_prs = []
     org_fetch_succeeded = False
     org_fetch_complete = False
@@ -663,7 +664,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
     if not org_fetch_succeeded and not scoped:
         try:
             # Query projects from local DB to avoid extra Azure round-trip
-            with sync_service.db_lock, sync_service.get_db_connection() as conn:
+            with persistence.db_lock, persistence.get_db_connection() as conn:
                 projects = [r["project"] for r in conn.execute(
                     "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
                 ).fetchall()]
@@ -718,7 +719,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
     # a complete organization snapshot or delete older cached rows.
     fetch_complete = scoped_all_complete if scoped else (org_fetch_complete and not fetch_incomplete)
     if fetch_succeeded:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             if fetch_complete:
                 # This query is the full organization snapshot; remove rows that
                 # disappeared (including on a valid empty result) atomically.
@@ -737,7 +738,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                 ) for p in final_prs])
             conn.commit()
 
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         outcome = 'complete' if fetch_complete else ('partial' if fetch_succeeded else 'failed')
         completed_at = now_iso if fetch_succeeded else None
         conn.execute('''INSERT INTO pr_cache_state (id, attempted_at, completed_at, outcome, successful_projects, errors_json, last_complete_at, scope)
@@ -748,18 +749,18 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
         conn.commit()
 
     if not fetch_succeeded:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cached = [_row_to_pr_dict(r) for r in conn.execute("SELECT * FROM pull_requests ORDER BY creation_date DESC").fetchall()]
         final_prs = cached
     elif not fetch_complete:
         # Keep rows from projects/pages that were not refreshed in a partial response.
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cached = [_row_to_pr_dict(r) for r in conn.execute("SELECT * FROM pull_requests ORDER BY creation_date DESC").fetchall()]
         merged = {(p["id"], p["project"], p["repository"]): p for p in cached}
         merged.update({(p["id"], p["project"], p["repository"]): p for p in final_prs})
         final_prs = list(merged.values())
 
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         last_row_sync = conn.execute("SELECT MAX(last_synced_at) FROM pull_requests").fetchone()[0]
         state = conn.execute("SELECT completed_at, last_complete_at FROM pr_cache_state WHERE id=1").fetchone()
         last_successful_sync = max((stamp for stamp in (last_row_sync, state["last_complete_at"] if state else None) if stamp), default=None)
@@ -945,7 +946,7 @@ def query_pull_requests(
         "offset": offset,
         "hasMore": (offset + len(page_items) < total_matching),
         "summary": summary,
-        "dataScope": "fixture" if sync_service.is_fixture_mode() else "live_cached",
+        "dataScope": "fixture" if feature_context.is_fixture_mode() else "live_cached",
         "lastSyncedAt": _utcnow().isoformat()
     }
 
@@ -985,7 +986,7 @@ def with_full_description(pr: Dict[str, Any], org_url: Optional[str] = None, pat
         try:
             url = (f"{org_url.rstrip('/')}/{quote(str(pr.get('project') or ''), safe='')}/_apis/git/repositories/"
                    f"{quote(str(pr.get('repository') or ''), safe='')}/pullrequests/{int(pr['id'])}")
-            res = requests.get(url, headers=sync_service.get_devops_headers(pat), params={"api-version": "7.1"}, timeout=10)
+            res = requests.get(url, headers=feature_context.get_devops_headers(pat), params={"api-version": "7.1"}, timeout=10)
             if res.status_code == 200:
                 full = (res.json() or {}).get("description")
                 full = full if isinstance(full, str) else ""

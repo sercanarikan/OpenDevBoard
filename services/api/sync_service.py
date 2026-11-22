@@ -19,17 +19,15 @@ from datetime import datetime, timedelta, timezone
 from dateutil import parser as dtparser
 from threading import Lock
 import requests
-from base64 import b64encode
 
 import azure_client
 import observability
 import persistence
+import feature_context
 
 logger = logging.getLogger("sync_service")
 
-DATA_DIR = os.environ.get('DEVOPS_DATA_DIR') or os.path.dirname(__file__)
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_PATH = os.path.join(DATA_DIR, 'devops_cache.db')
+DB_PATH = persistence.DB_PATH
 db_lock = persistence.db_lock
 sync_lock = Lock()
 
@@ -79,6 +77,7 @@ def _utcnow():
 
 
 def get_db_connection():
+    # Compatibility facade; DB_PATH remains patchable for existing orchestration callers.
     return persistence.get_db_connection(DB_PATH)
 
 
@@ -241,15 +240,11 @@ def is_state_out_of_active_scope(state):
 
 
 def is_fixture_mode():
-    return os.environ.get('DEVOPS_FIXTURE_MODE') == '1'
+    return feature_context.is_fixture_mode()
 
 
 def get_devops_headers(pat):
-    token = b64encode(f':{pat}'.encode()).decode()
-    return {
-        'Authorization': f'Basic {token}',
-        'Content-Type': 'application/json'
-    }
+    return feature_context.get_devops_headers(pat)
 
 
 # ----------------------------------------------------------------------------------------------

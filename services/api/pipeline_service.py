@@ -15,7 +15,8 @@ import requests
 
 import azure_http
 import project_inventory
-import sync_service
+import feature_context
+import persistence
 
 logger = logging.getLogger("pipeline_service")
 
@@ -30,7 +31,7 @@ def _utcnow():
 
 def init_pipeline_db():
     """Initializes the pipeline_runs cache table in SQLite."""
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS pipeline_runs (
@@ -196,14 +197,14 @@ def build_fixture_pipelines() -> List[Dict[str, Any]]:
 
 def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False, project_scoped: bool = True):
     """Synchronizes pipeline runs from Azure DevOps and caches in SQLite."""
-    if sync_service.is_fixture_mode():
+    if feature_context.is_fixture_mode():
         return build_fixture_pipelines()
 
     now = _utcnow()
     now_iso = now.isoformat()
 
     if not force_refresh:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             state = cursor.execute("SELECT * FROM pipeline_cache_state WHERE id=1").fetchone()
             # completed_at is only recorded for reads whose project inventory and every project query finished
@@ -218,7 +219,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
                 except Exception:
                     pass
 
-    headers = sync_service.get_devops_headers(pat)
+    headers = feature_context.get_devops_headers(pat)
     start_utc = now - timedelta(days=days)
     start_date_iso = start_utc.isoformat() + "Z"
 
@@ -236,7 +237,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
         if not project_discovery_complete:
             # Retain a useful but explicitly incomplete fallback if discovery fails.
             try:
-                with sync_service.db_lock, sync_service.get_db_connection() as conn:
+                with persistence.db_lock, persistence.get_db_connection() as conn:
                     projects.extend(r["project"] for r in conn.execute(
                         "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
                     ).fetchall())
@@ -311,7 +312,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
         # Project fallback if org query returns empty
         if not org_fetch_succeeded:
             try:
-                with sync_service.db_lock, sync_service.get_db_connection() as conn:
+                with persistence.db_lock, persistence.get_db_connection() as conn:
                     projects = [r["project"] for r in conn.execute(
                         "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
                     ).fetchall()]
@@ -365,7 +366,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     fetch_complete = org_fetch_complete and bool(all_raw) and not fetch_failed
     fetch_succeeded = org_fetch_succeeded or any(project_outcomes.values()) or (project_scoped and project_discovery_complete and not projects)
     if final_runs and fetch_succeeded:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             # Append fetched rows; bounded/partial reads must not erase prior cached data.
             cursor.executemany('''
@@ -393,7 +394,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     # True only when the accessible-project inventory and every required query finished all their pages. It is
     # independent of `outcome`/`organizationSnapshotComplete`, which keep their organization-wide meaning.
     accessible_scope_complete = fetch_complete or (project_scoped and project_discovery_complete and fetch_succeeded and not fetch_failed)
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         conn.execute('''INSERT INTO pipeline_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
             VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET requested_days=excluded.requested_days,
             attempted_at=excluded.attempted_at, completed_at=excluded.completed_at, outcome=excluded.outcome,
@@ -512,7 +513,7 @@ def query_pipeline_runs(all_runs: List[Dict[str, Any]], params: Dict[str, Any]) 
         "offset": offset,
         "hasMore": (offset + len(page_items) < total_matching),
         "summary": summary,
-        "dataScope": "fixture" if sync_service.is_fixture_mode() else "live_cached",
+        "dataScope": "fixture" if feature_context.is_fixture_mode() else "live_cached",
         "lastSyncedAt": _utcnow().isoformat()
     }
 

@@ -12,7 +12,8 @@ from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 import azure_http
-import sync_service
+import feature_context
+import persistence
 
 logger = logging.getLogger("team_service")
 
@@ -25,7 +26,7 @@ def _utcnow():
 
 def init_team_db():
     """Initializes the team_commits cache table in SQLite."""
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS team_commits (
@@ -155,7 +156,7 @@ def build_fixture_team_activity() -> Dict[str, Any]:
 
 def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refresh: bool = False) -> Dict[str, Any]:
     """Synchronizes Git commits and PR activities across all repositories."""
-    if sync_service.is_fixture_mode():
+    if feature_context.is_fixture_mode():
         return {**build_fixture_team_activity(), "cacheStatus": {
             "outcome": "complete", "complete": True, "stale": False,
             "requestedDays": days, "successfulProjects": []
@@ -163,7 +164,7 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
 
     now = _utcnow()
     now_iso = now.isoformat()
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         metadata_row = conn.execute("SELECT * FROM team_activity_cache_state WHERE id = 1").fetchone()
         cached_commits = [_row_to_commit_dict(row) for row in conn.execute(
             "SELECT * FROM team_commits ORDER BY date DESC"
@@ -194,7 +195,7 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
     repo_fetch_ok = False
     repos = []
     try:
-        headers = sync_service.get_devops_headers(pat)
+        headers = feature_context.get_devops_headers(pat)
         r_url = f"{org_url.rstrip('/')}/_apis/git/repositories?api-version=7.1"
         res = azure_http.get(r_url, headers=headers, timeout=15)
         if res.status_code == 200:
@@ -283,7 +284,7 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
     fresh_commits = [row for project in successful_projects for row in project_results.get(project, [])]
     success_keys = {(c["commitId"], c["repository"]): c for c in fresh_commits}
     if complete:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             # A completed range is authoritative only for that range. Preserve all cached history outside it,
             # and the cached commits of disabled repositories, which Azure DevOps no longer serves.
             kept_disabled = [tuple(row) for row in conn.execute(
@@ -317,7 +318,7 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
             ''', (days, attempted_at, now_iso, json.dumps(successful_projects)))
     else:
         # Partial successful projects are useful, but must not overwrite completeness/freshness metadata.
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             for project in successful_projects:
                 conn.execute("DELETE FROM team_commits WHERE project = ? AND date >= ?", (project, start_date_iso))
             conn.executemany('''
@@ -337,7 +338,7 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
                     outcome=excluded.outcome
             ''', (days, attempted_at, outcome, json.dumps(successful_projects)))
 
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         commits = [_row_to_commit_dict(row) for row in conn.execute(
                 "SELECT * FROM team_commits ORDER BY date DESC"
         ).fetchall()]
@@ -373,7 +374,7 @@ def _filter_commits_to_window(commits: List[Dict[str, Any]], now: datetime, days
 
 def _load_live_prs_summary_only(org_url: str, pat: str, days: int) -> List[Dict[str, Any]]:
     """Fetches PRs across projects for team activity aggregation."""
-    headers = sync_service.get_devops_headers(pat)
+    headers = feature_context.get_devops_headers(pat)
     now_utc = _utcnow()
     start_utc = now_utc - timedelta(days=days)
 

@@ -12,6 +12,8 @@ import requests
 import testsupport  # noqa: F401  (must precede the project imports)
 import team_service
 import sync_service
+import persistence
+import feature_context
 
 testsupport.isolate_database(globals())
 
@@ -73,21 +75,23 @@ class TestTeamActivityService(unittest.TestCase):
     def _isolated_cache(self):
         temp_dir = tempfile.TemporaryDirectory()
         db_path = os.path.join(temp_dir.name, 'team.db')
-        old_db_path = sync_service.DB_PATH
-        sync_service.DB_PATH = db_path
+        old_db_path = persistence.DB_PATH
+        persistence.DB_PATH = db_path
+        persistence.DB_PATH = db_path
         team_service.init_team_db()
         self.addCleanup(self._restore_db_path, old_db_path, temp_dir)
         return db_path
 
     @staticmethod
     def _restore_db_path(old_db_path, temp_dir):
-        sync_service.DB_PATH = old_db_path
+        persistence.DB_PATH = old_db_path
+        persistence.DB_PATH = old_db_path
         gc.collect()
         temp_dir.cleanup()
 
     def test_cache_metadata_migration_preserves_existing_commits(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            old_db_path = sync_service.DB_PATH
+            old_db_path = persistence.DB_PATH
             db_path = os.path.join(temp_dir, 'existing.db')
             try:
                 with sqlite3.connect(db_path) as conn:
@@ -100,9 +104,9 @@ class TestTeamActivityService(unittest.TestCase):
                         'preserve-me', 'Alpha', 'Alpha.Web', 'Ada', 'ada@example.test',
                         '2026-11-07T12:00:00Z', 'existing', '', 'https://example.test/c/1',
                         '2026-11-08T12:00:00')''')
-                with patch.object(sync_service, 'DB_PATH', db_path):
+                with patch.object(persistence, 'DB_PATH', db_path):
                     team_service.init_team_db()
-                    conn = sync_service.get_db_connection()
+                    conn = persistence.get_db_connection()
                     try:
                         row = conn.execute("SELECT commit_id, project FROM team_commits").fetchone()
                         metadata = conn.execute(
@@ -113,7 +117,7 @@ class TestTeamActivityService(unittest.TestCase):
                 self.assertEqual(tuple(row), ('preserve-me', 'Alpha'))
                 self.assertIsNotNone(metadata)
             finally:
-                sync_service.DB_PATH = old_db_path
+                persistence.DB_PATH = old_db_path
                 gc.collect()
 
     @staticmethod
@@ -145,14 +149,14 @@ class TestTeamActivityService(unittest.TestCase):
             return type('Response', (), {"status_code": 200, "json": lambda self: {"value": action}})()
 
         pr_response = type('Response', (), {"status_code": 200, "json": lambda self: {"value": []}})()
-        return patch.object(team_service.sync_service, 'get_devops_headers', return_value={}), \
+        return patch.object(team_service.feature_context, 'get_devops_headers', return_value={}), \
             patch.object(team_service.azure_http, 'get', side_effect=get), \
             patch.object(team_service, '_load_live_prs_summary_only', return_value=[]), \
             patch.object(team_service, '_utcnow', return_value=now), pr_response
 
     @staticmethod
     def _cached_ids():
-        with sync_service.get_db_connection() as conn:
+        with persistence.get_db_connection() as conn:
             return {row['commit_id'] for row in conn.execute('SELECT commit_id FROM team_commits')}
 
     def test_disabled_repository_is_not_queried_and_does_not_make_the_snapshot_partial(self):
@@ -177,7 +181,7 @@ class TestTeamActivityService(unittest.TestCase):
         self._isolated_cache()
         now = datetime(2026, 11, 8, 12)
         recent_date = (now - timedelta(days=2)).isoformat() + 'Z'
-        with sync_service.get_db_connection() as conn:
+        with persistence.get_db_connection() as conn:
             conn.execute('''INSERT INTO team_commits (commit_id, project, repository, author_name, author_email, date, comment, change_counts, url, last_synced_at)
                 VALUES ('kept', 'Alpha', 'Alpha.Legacy', 'Ada', '', ?, 'old work', '', 'https://example.test/c/kept', '2026-11-01T00:00:00')''', (recent_date,))
         disabled = dict(self._azure_repo('Alpha.Legacy', 'Alpha', 2), isDisabled=True)
@@ -309,14 +313,14 @@ class TestTeamActivityService(unittest.TestCase):
         with context[0], context[1], context[2], context[3]:
             team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7, force_refresh=True)
         failed_get = patch.object(team_service.azure_http, 'get', side_effect=requests.Timeout('repository timeout'))
-        with patch.object(team_service.sync_service, 'get_devops_headers', return_value={}), failed_get, \
+        with patch.object(team_service.feature_context, 'get_devops_headers', return_value={}), failed_get, \
                 patch.object(team_service, '_load_live_prs_summary_only', return_value=[]), \
                 patch.object(team_service, '_utcnow', return_value=now + timedelta(minutes=6)):
             result = team_service.sync_live_team_activity('https://dev.azure.com/org', 'unused', days=7, force_refresh=True)
         self.assertEqual({c['commitId'] for c in result['commits']}, {'cached'})
         self.assertEqual(result['cacheStatus']['outcome'], 'failed')
         self.assertTrue(result['cacheStatus']['stale'])
-        with sync_service.get_db_connection() as conn:
+        with persistence.get_db_connection() as conn:
             state = conn.execute('SELECT outcome, completed_at FROM team_activity_cache_state WHERE id=1').fetchone()
         self.assertEqual(state['outcome'], 'failed')
         self.assertEqual(state['completed_at'], now.isoformat())

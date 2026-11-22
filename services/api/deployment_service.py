@@ -14,7 +14,8 @@ import requests
 
 import azure_http
 import project_inventory
-import sync_service
+import feature_context
+import persistence
 from urllib.parse import quote
 
 logger = logging.getLogger("deployment_service")
@@ -30,7 +31,7 @@ def _utcnow():
 
 def init_deployment_db():
     """Initializes the deployment_records cache table in SQLite."""
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS deployment_records (
@@ -191,14 +192,14 @@ def build_fixture_deployments() -> List[Dict[str, Any]]:
 
 def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False):
     """Synchronizes deployment records from Azure DevOps VSRM API and caches in SQLite."""
-    if sync_service.is_fixture_mode():
+    if feature_context.is_fixture_mode():
         return build_fixture_deployments()
 
     now = _utcnow()
     now_iso = now.isoformat()
 
     if not force_refresh:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             state = cursor.execute("SELECT * FROM deployment_cache_state WHERE id=1").fetchone()
             if state and state["outcome"] in {"complete", "partial"} and state["completed_at"]:
@@ -215,7 +216,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
                 except Exception:
                     pass
 
-    headers = sync_service.get_devops_headers(pat)
+    headers = feature_context.get_devops_headers(pat)
     start_utc = now - timedelta(days=days)
     start_date_iso = start_utc.isoformat() + "Z"
 
@@ -226,7 +227,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
     project_scope_bounded = False
     if not project_discovery_complete:
         try:
-            with sync_service.db_lock, sync_service.get_db_connection() as conn:
+            with persistence.db_lock, persistence.get_db_connection() as conn:
                 projects.extend(r["project"] for r in conn.execute(
                     "SELECT DISTINCT project FROM work_items WHERE deleted_at IS NULL AND project IS NOT NULL"
                 ).fetchall())
@@ -320,7 +321,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
     fetch_succeeded = any(project_outcomes.values()) or no_projects_proven
     completed_at = now_iso if fetch_succeeded else None
     if fetch_succeeded:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             if fetch_complete and projects:
                 project_placeholders = ",".join("?" for _ in projects)
                 conn.execute(
@@ -341,7 +342,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
                 d["requestedBy"], d["url"], now_iso
                 ) for d in final_deps])
             conn.commit()
-    with sync_service.db_lock, sync_service.get_db_connection() as conn:
+    with persistence.db_lock, persistence.get_db_connection() as conn:
         conn.execute('''INSERT INTO deployment_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects, errors_json)
             VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET attempted_at=excluded.attempted_at,
             completed_at=COALESCE(excluded.completed_at, deployment_cache_state.completed_at), outcome=excluded.outcome,
@@ -350,7 +351,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
         conn.commit()
 
     if not fetch_complete:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             cached = [_row_to_deployment_dict(r) for r in conn.execute(
                 "SELECT * FROM deployment_records WHERE started_on >= ? ORDER BY started_on DESC",
                 ((now - timedelta(days=days)).isoformat(timespec="seconds") + "Z",)
@@ -359,7 +360,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
             last_complete_sync = conn.execute("SELECT completed_at FROM deployment_cache_state WHERE id=1").fetchone()[0]
         final_deps = cached
     else:
-        with sync_service.db_lock, sync_service.get_db_connection() as conn:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
             last_row_sync = conn.execute("SELECT MAX(last_synced_at) FROM deployment_records").fetchone()[0]
             last_complete_sync = conn.execute("SELECT completed_at FROM deployment_cache_state WHERE id=1").fetchone()[0]
     last_success = max((stamp for stamp in (last_row_sync, last_complete_sync) if stamp), default=None)
@@ -465,7 +466,7 @@ def query_deployments(all_deps: List[Dict[str, Any]], params: Dict[str, Any]) ->
         "hasMore": (offset + len(page_items) < total_matching),
         "summary": summary,
         "supportedSources": ["Classic Release Deployments (Azure DevOps VSRM API)"],
-        "dataScope": "fixture" if sync_service.is_fixture_mode() else "live_cached",
+        "dataScope": "fixture" if feature_context.is_fixture_mode() else "live_cached",
         "lastSyncedAt": _utcnow().isoformat()
     }
 

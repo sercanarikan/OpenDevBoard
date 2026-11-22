@@ -8,6 +8,8 @@ from unittest.mock import patch
 import testsupport  # noqa: F401  (must precede the project imports)
 import pipeline_service
 import sync_service
+import persistence
+import feature_context
 
 testsupport.isolate_database(globals())
 
@@ -19,14 +21,14 @@ class TestPipelineHealthService(unittest.TestCase):
 
     def test_project_fallback_reports_organization_http_failure(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pipeline-fallback.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pipeline-fallback.db')):
                 pipeline_service.init_pipeline_db()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
                 forbidden = type('Response', (), {'status_code': 403})()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.azure_http, 'get', side_effect=[forbidden, self._ok([])]):
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'synthetic', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['cacheStatus']['outcome'], 'partial')
@@ -34,9 +36,9 @@ class TestPipelineHealthService(unittest.TestCase):
 
     def test_pipeline_cache_does_not_serve_a_different_days_window(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pipeline.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pipeline.db')):
                 pipeline_service.init_pipeline_db()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
@@ -46,7 +48,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 old_run = dict(self.fixture_runs[0])
                 old_run['queueTime'] = '2026-11-01T10:00:00Z'
                 old_run['finishTime'] = '2026-11-01T10:05:00Z'
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('''INSERT INTO pipeline_runs (
                         id, project, pipeline_name, pipeline_type, status, queue_time,
@@ -58,15 +60,15 @@ class TestPipelineHealthService(unittest.TestCase):
                     conn.commit()
                 finally:
                     conn.close()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute('''INSERT INTO pipeline_cache_state
                         (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
                         VALUES (1, 7, ?, ?, 'partial', '[]')''', (
                             pipeline_service._utcnow().isoformat(), pipeline_service._utcnow().isoformat()
                         ))
                 with patch.object(pipeline_service, '_utcnow', return_value=pipeline_service._utcnow()), \
-                        patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])) as get:
                         first = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, include_cache_status=True, project_scoped=False)
                         second = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True, project_scoped=False)
@@ -76,7 +78,7 @@ class TestPipelineHealthService(unittest.TestCase):
                 self.assertFalse(first['cacheStatus']['complete'])
                 self.assertFalse(first['cacheStatus']['stale'])
                 self.assertEqual(get.call_count, 1)
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     persisted = conn.execute('SELECT id FROM pipeline_runs').fetchall()
                 finally:
@@ -85,10 +87,10 @@ class TestPipelineHealthService(unittest.TestCase):
 
     def test_pipeline_successful_empty_response_is_reported_partial_not_complete(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'empty-pipeline.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'empty-pipeline.db')):
                 pipeline_service.init_pipeline_db()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])):
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['items'], [])
@@ -97,14 +99,14 @@ class TestPipelineHealthService(unittest.TestCase):
 
     def test_pipeline_reads_all_continuation_pages_and_tracks_terminal_token(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'paged-pipeline.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'paged-pipeline.db')):
                 pipeline_service.init_pipeline_db()
                 responses = [
                     type('Response', (), {'status_code': 200, 'headers': {'x-ms-continuationtoken': 'next'}, 'json': lambda self: {'value': [{'id': 10, 'project': {'name': 'Alpha'}, 'queueTime': '2026-11-08T00:00:00Z'}]}})(),
                     type('Response', (), {'status_code': 200, 'headers': {}, 'json': lambda self: {'value': [{'id': 11, 'project': {'name': 'Alpha'}, 'queueTime': '2026-11-08T00:00:00Z'}]}})(),
                 ]
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.azure_http, 'get', side_effect=responses) as get:
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual({item['id'] for item in result['items']}, {10, 11})
@@ -118,36 +120,36 @@ class TestPipelineHealthService(unittest.TestCase):
 
     def test_pipeline_metadata_ttl_expiration_forces_refresh(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'ttl-pipeline.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'ttl-pipeline.db')):
                 pipeline_service.init_pipeline_db()
                 now = pipeline_service._utcnow()
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     conn.execute("INSERT INTO pipeline_cache_state VALUES (1, 30, ?, ?, 'partial', '[]')", (now.isoformat(), (now - timedelta(seconds=301)).isoformat()))
                 with patch.object(pipeline_service, '_utcnow', return_value=now), \
-                        patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                        patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])) as get:
                     pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=30, include_cache_status=True, project_scoped=False)
                 self.assertEqual(get.call_count, 1)
 
     def test_pipeline_short_refresh_does_not_replace_long_window_snapshot(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pipeline-window.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pipeline-window.db')):
                 pipeline_service.init_pipeline_db()
                 old = pipeline_service._utcnow() - timedelta(days=20)
                 old_iso = old.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('''INSERT INTO pipeline_runs (id, project, pipeline_name, pipeline_type, status, queue_time, last_synced_at)
                         VALUES (901, 'Alpha', 'older', 'yaml', 'completed', ?, ?)''', (old_iso, pipeline_service._utcnow().isoformat()))
                     conn.commit()
                 finally:
                     conn.close()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.azure_http, 'get', return_value=self._ok([])):
                     pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', days=7, force_refresh=True, include_cache_status=True, project_scoped=False)
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     rows = conn.execute('SELECT id FROM pipeline_runs').fetchall()
                 finally:
@@ -156,9 +158,9 @@ class TestPipelineHealthService(unittest.TestCase):
 
     def test_pipeline_total_failure_keeps_previous_rows_and_reports_stale(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            with patch.object(sync_service, 'DB_PATH', os.path.join(temp_dir, 'pipeline-failure.db')):
+            with patch.object(persistence, 'DB_PATH', os.path.join(temp_dir, 'pipeline-failure.db')):
                 pipeline_service.init_pipeline_db()
-                conn = sync_service.get_db_connection()
+                conn = persistence.get_db_connection()
                 try:
                     conn.execute('CREATE TABLE work_items (id INTEGER, project TEXT, deleted_at TEXT)')
                     conn.execute("INSERT INTO work_items (project, deleted_at) VALUES ('Alpha', NULL)")
@@ -167,13 +169,13 @@ class TestPipelineHealthService(unittest.TestCase):
                 finally:
                     conn.close()
                 bad = type('Response', (), {'status_code': 500, 'json': lambda self: {}})()
-                with patch.object(sync_service, 'is_fixture_mode', return_value=False), \
-                        patch.object(sync_service, 'get_devops_headers', return_value={}), \
+                with patch.object(feature_context, 'is_fixture_mode', return_value=False), \
+                        patch.object(feature_context, 'get_devops_headers', return_value={}), \
                         patch.object(pipeline_service.azure_http, 'get', return_value=bad):
                     result = pipeline_service.sync_live_pipeline_runs('https://dev.azure.com/org', 'pat', force_refresh=True, include_cache_status=True, project_scoped=False)
                 self.assertEqual(result['cacheStatus']['outcome'], 'failed')
                 self.assertTrue(result['cacheStatus']['stale'])
-                with sync_service.get_db_connection() as conn:
+                with persistence.get_db_connection() as conn:
                     rows = conn.execute('SELECT id FROM pipeline_runs').fetchall()
                 self.assertEqual([row['id'] for row in rows], [1])
 

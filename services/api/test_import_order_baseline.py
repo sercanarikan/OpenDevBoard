@@ -1,6 +1,7 @@
 """Characterize staging cleanup under each import order in separate offline processes."""
 import os
 import contextlib
+import ast
 from pathlib import Path
 import subprocess
 import sys
@@ -9,6 +10,27 @@ import textwrap
 import unittest
 
 API_DIR = Path(__file__).resolve().parent
+
+
+class FeatureDependencyBoundaryTests(unittest.TestCase):
+    def test_feature_services_do_not_import_sync_orchestration(self):
+        feature_services = ('pipeline_service.py', 'deployment_service.py', 'pr_service.py',
+                            'team_service.py', 'history_service.py')
+        for filename in feature_services:
+            tree = ast.parse((API_DIR / filename).read_text(encoding='utf-8'))
+            imported = {
+                alias.name.split('.')[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            }
+            imported.update(
+                node.module.split('.')[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module
+            )
+            with self.subTest(module=filename):
+                self.assertNotIn('sync_service', imported)
 
 
 @unittest.skipUnless(os.name == 'posix', 'stale cleanup requires POSIX flock')
