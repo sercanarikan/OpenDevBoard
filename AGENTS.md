@@ -31,3 +31,5 @@ This guide applies only to the public `apps/web` React/TypeScript/Vite applicati
 - Keep the React/TypeScript/Vite and Flask/Python patterns used by neighboring code; add focused tests for behavior changes.
 - Keep user-facing documentation accurate and in its existing language. Do not include real customer, organization, project, work-item, or operational measurement data.
 - Keep changes focused and use Conventional Commit prefixes (`feat:`, `fix:`, `test:`, `docs:`, `chore:`). Never force-push or rewrite history.
+
+- Update relevant documentation when behavior, public API, configuration, operations, security, or supported environments change; explain when no update is needed. Check existing English/Turkish counterparts and follow [documentation governance](docs/documentation-governance.md).

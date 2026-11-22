@@ -6,9 +6,15 @@
   "scripts": {
     "e2e": "node e2e.mjs",
     "e2e:test": "node test-e2e-orchestrator.mjs",
-    "visual": "node visual-matrix.mjs"
+    "visual": "node visual-matrix.mjs",
+    "docs:lint": "node docs/lint.mjs",
+    "docs:links": "node docs/links.mjs",
+    "docs:test": "node --test docs/*.test.mjs"
   },
   "devDependencies": {
+    "github-slugger": "2.0.0",
+    "markdownlint-cli2": "0.24.2",
+    "marked": "18.1.2",
     "playwright": "1.62.1"
   }
 }
