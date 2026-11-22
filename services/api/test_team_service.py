@@ -77,14 +77,12 @@ class TestTeamActivityService(unittest.TestCase):
         db_path = os.path.join(temp_dir.name, 'team.db')
         old_db_path = persistence.DB_PATH
         persistence.DB_PATH = db_path
-        persistence.DB_PATH = db_path
         team_service.init_team_db()
         self.addCleanup(self._restore_db_path, old_db_path, temp_dir)
         return db_path
 
     @staticmethod
     def _restore_db_path(old_db_path, temp_dir):
-        persistence.DB_PATH = old_db_path
         persistence.DB_PATH = old_db_path
         gc.collect()
         temp_dir.cleanup()

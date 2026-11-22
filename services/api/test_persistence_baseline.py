@@ -32,6 +32,7 @@ class PersistenceProcessTests(unittest.TestCase):
         self.run_isolated('''
             import os, sqlite3, persistence, sync_service as s
             assert s.db_lock is persistence.db_lock
+            assert os.path.realpath(s.DB_PATH) == os.path.realpath(persistence.DB_PATH)
             s.DB_PATH = os.path.join(os.environ['DEVOPS_DATA_DIR'], 'other.db')
             persistence.DB_PATH = s.DB_PATH
             conn = s.get_db_connection()
