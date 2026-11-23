@@ -112,7 +112,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - opendevboard_last_successful_sync_timestamp_seconds",
+          "expr": "time() - (opendevboard_last_successful_sync_timestamp_seconds > 0)",
           "legendFormat": "Age",
           "range": false,
           "instant": true
@@ -241,7 +241,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(increase(opendevboard_http_results_total{result=~\"429|503|4xx|5xx|network|other\"}[5m])) or vector(0)) / clamp_min(sum(increase(opendevboard_http_attempts_total[5m])), 1)",
+          "expr": "((sum(increase(opendevboard_http_results_total{result=~\"429|503|4xx|5xx|network|other\"}[5m])) or vector(0)) / clamp_min(sum(increase(opendevboard_http_attempts_total[5m])), 1)) and (sum(increase(opendevboard_http_attempts_total[5m])) > 0)",
           "legendFormat": "HTTP error / attempt ratio",
           "range": false,
           "instant": true
@@ -327,7 +327,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - opendevboard_last_successful_sync_timestamp_seconds",
+          "expr": "time() - (opendevboard_last_successful_sync_timestamp_seconds > 0)",
           "legendFormat": "Age",
           "range": false,
           "instant": true
@@ -2093,7 +2093,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(increase(opendevboard_http_results_total{result=~\"429|503|4xx|5xx|network|other\"}[5m])) or vector(0)) / clamp_min(sum(increase(opendevboard_http_attempts_total[5m])), 1)",
+          "expr": "((sum(increase(opendevboard_http_results_total{result=~\"429|503|4xx|5xx|network|other\"}[5m])) or vector(0)) / clamp_min(sum(increase(opendevboard_http_attempts_total[5m])), 1)) and (sum(increase(opendevboard_http_attempts_total[5m])) > 0)",
           "legendFormat": "HTTP errors",
           "range": true,
           "instant": false
@@ -2401,7 +2401,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(increase(opendevboard_http_results_total{result=~\"429|503|4xx|5xx|network|other\"}[5m])) or vector(0)) / clamp_min(sum(increase(opendevboard_http_attempts_total[5m])), 1)",
+          "expr": "((sum(increase(opendevboard_http_results_total{result=~\"429|503|4xx|5xx|network|other\"}[5m])) or vector(0)) / clamp_min(sum(increase(opendevboard_http_attempts_total[5m])), 1)) and (sum(increase(opendevboard_http_attempts_total[5m])) > 0)",
           "legendFormat": "HTTP error / attempt ratio",
           "range": false,
           "instant": true

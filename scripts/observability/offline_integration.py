@@ -122,7 +122,12 @@ def service_health(project, service):
 
 def grafana_dashboards(url, username, password):
     rows = json.loads(request(url + '/api/search?type=dash-db', username, password))
-    return rows if len(rows) >= 3 else None
+    return rows if rows else None
+
+
+def grafana_dashboard(url, uid, username, password):
+    path = '/api/dashboards/uid/' + urllib.parse.quote(uid, safe='')
+    return json.loads(request(url + path, username, password))['dashboard']
 
 
 def api_http_health(project):
@@ -221,7 +226,48 @@ def main():
         assert any(ds.get('uid') == 'opendevboard-prometheus' and ds.get('type') == 'prometheus' for ds in datasources)
         dashboard_rows = wait_until('provisioned dashboards', lambda: grafana_dashboards(grafana, admin, password))
         titles = {row['title'] for row in dashboard_rows}
-        assert {'OpenDevBoard Sync Overview', 'OpenDevBoard Azure DevOps HTTP', 'OpenDevBoard Performance'} <= titles
+        assert titles == {'OpenDevBoard Overview'}, f'provisioned dashboards were {sorted(titles)}'
+        dashboard = grafana_dashboard(grafana, 'opendev-main-overview', admin, password)
+        assert len(dashboard['panels']) == 31, f'overview panel count was {len(dashboard["panels"])}'
+        section_titles = [panel['title'] for panel in dashboard['panels'] if panel.get('type') == 'row']
+        assert section_titles == ['Sync & data', 'Performance', 'Azure DevOps HTTP']
+
+        grafana_source_query = json.loads(request(
+            grafana + '/api/datasources/uid/opendevboard-prometheus/resources/api/v1/query?query=' +
+            urllib.parse.quote('up', safe=''), admin, password))
+        assert grafana_source_query.get('status') == 'success'
+        assert any(row.get('metric', {}).get('job') == 'opendevboard-api' and row['value'][1] == '1'
+                   for row in grafana_source_query.get('data', {}).get('result', []))
+
+        last_sync_panels = [panel for panel in dashboard['panels']
+                            if panel.get('title') in {'Last successful sync', 'Since last successful sync'}]
+        assert len(last_sync_panels) == 2
+        last_sync_expr = 'time() - (opendevboard_last_successful_sync_timestamp_seconds > 0)'
+        for panel in last_sync_panels:
+            assert panel['targets'][0]['expr'] == last_sync_expr
+            assert panel['fieldConfig']['defaults']['noValue'] == 'No successful sync yet'
+        no_success_expr = last_sync_expr.replace('opendevboard_last_successful_sync_timestamp_seconds', 'vector(0)')
+        assert prom_query(project, no_success_expr) == [], 'zero sync timestamp should produce no age sample'
+        recent_success_expr = last_sync_expr.replace('opendevboard_last_successful_sync_timestamp_seconds', 'vector(1)')
+        assert len(prom_query(project, recent_success_expr)) == 1, 'positive sync timestamp should produce an age sample'
+
+        http_error_panels = [panel for panel in dashboard['panels']
+                             if panel.get('title') in {'HTTP error rate', 'HTTP error / attempt ratio'}]
+        assert len(http_error_panels) == 3
+        http_error_expr = http_error_panels[0]['targets'][0]['expr']
+        assert all(panel['targets'][0]['expr'] == http_error_expr for panel in http_error_panels)
+        assert next(panel for panel in http_error_panels if panel['type'] == 'stat')[
+            'fieldConfig']['defaults']['noValue'] == 'No traffic'
+        attempts_sum = 'sum(increase(opendevboard_http_attempts_total[5m]))'
+        error_sum = 'sum(increase(opendevboard_http_results_total{result=~"429|503|4xx|5xx|network|other"}[5m]))'
+        no_traffic_expr = http_error_expr.replace(attempts_sum, 'vector(0)').replace(error_sum, 'vector(0)')
+        assert prom_query(project, no_traffic_expr) == [], 'zero HTTP traffic should produce no error ratio'
+        clean_traffic_expr = http_error_expr.replace(attempts_sum, 'vector(5)').replace(error_sum, 'vector(0)')
+        clean_traffic_result = prom_query(project, clean_traffic_expr)
+        assert len(clean_traffic_result) == 1 and float(clean_traffic_result[0]['value'][1]) == 0
+        failed_traffic_expr = http_error_expr.replace(attempts_sum, 'vector(5)').replace(error_sum, 'vector(1)')
+        failed_traffic_result = prom_query(project, failed_traffic_expr)
+        assert len(failed_traffic_result) == 1 and float(failed_traffic_result[0]['value'][1]) == 0.2
 
         # Evaluate each provisioned dashboard query through Prometheus, substituting only Grafana's range macros.
         dashboard_dir = ROOT / 'observability' / 'grafana' / 'dashboards'
@@ -262,13 +308,13 @@ def main():
         compose(project, 'restart', 'grafana')
         wait_until('Grafana restart health', lambda: service_health(project, 'grafana'))
         dashboard_rows_after = wait_until('Grafana dashboards after restart', lambda: grafana_dashboards(grafana, admin, password))
-        assert len(dashboard_rows_after) >= 3
+        assert [row['title'] for row in dashboard_rows_after] == ['OpenDevBoard Overview']
 
         stats_cmd = ['docker', 'stats', '--no-stream', '--format', '{{.Name}} {{.MemUsage}} {{.CPUPerc}}']
         ids = compose(project, 'ps', '-q', 'api', 'web', 'prometheus', 'grafana', capture=True).split()
         stats = subprocess.run(stats_cmd + ids, cwd=ROOT, check=True, text=True, capture_output=True).stdout.strip().splitlines()
         print('offline integration: PASS')
-        print('checks: opt-in default API/web, missing/empty Grafana secret rejection, synthetic sync scrape, datasource, dashboard PromQL validation, 3 dashboards, 6 alert rules, restart persistence with exporter stopped, sensitive-value scan, auth and loopback/nginx protections')
+        print('checks: opt-in default API/web, missing/empty Grafana secret rejection, synthetic sync scrape, Grafana datasource query, unified 31-panel dashboard provisioning, all dashboard PromQL, zero/nonzero sync-age behavior, no-traffic/error-ratio behavior, 6 alert rules, restart persistence with exporter stopped, sensitive-value scan, auth and loopback/nginx protections')
         print('resource snapshot with observability off (default API + web):')
         for line in off_stats:
             print(line)
