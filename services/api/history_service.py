@@ -15,6 +15,7 @@ import requests
 
 import feature_context
 import persistence
+from date_window import DateWindow, rolling_window
 
 logger = logging.getLogger("history_service")
 
@@ -321,8 +322,15 @@ def extract_verified_pr_events(pr: Dict[str, Any], user_info: Dict[str, Any], or
 # Live Sync & SQLite Caching
 # -----------------------------------------------------------------------------
 
-def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: int = 30, force_refresh: bool = False) -> Dict[str, Any]:
-    """Synchronizes user's personal activity events from Azure DevOps."""
+def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: int = 30, force_refresh: bool = False,
+                      window: Optional[DateWindow] = None) -> Dict[str, Any]:
+    """Synchronizes user's personal activity events from Azure DevOps.
+
+    A calendar ``window`` bounds every upstream query to ``[window.start, window.end)``. It never uses the
+    cache shortcut and never deletes cached rows; fetched true events are only upserted.
+    """
+    window = window or rolling_window(days)
+    calendar = window.is_calendar
     user_name = (user_info.get("displayName") or "Unknown").strip()
     user_id = (user_info.get("id") or "").lower()
     user_email = (user_info.get("uniqueName") or "").lower()
@@ -333,7 +341,7 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
     now = _utcnow()
     now_iso = now.isoformat()
 
-    if not force_refresh:
+    if not force_refresh and not calendar:
         with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT MAX(last_synced_at) as last_sync, COUNT(*) as count FROM history_events WHERE actor_name = ?", (user_name,))
@@ -350,6 +358,16 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
 
     headers = feature_context.get_devops_headers(pat)
     start_utc = now - timedelta(days=days)
+    commit_range = f"fromDate={start_utc.isoformat()}Z"
+    if calendar:
+        commit_range = f"fromDate={window.iso_start()}&searchCriteria.toDate={window.iso_end()}"
+        # Bounds come from validated datetimes, never from request text.
+        changed_clause = (
+            f"[System.ChangedDate] >= '{window.start.strftime('%Y-%m-%d')}' "
+            f"AND [System.ChangedDate] < '{window.end.strftime('%Y-%m-%d')}' "
+        )
+    else:
+        changed_clause = f"[System.ChangedDate] >= @Today - {days} "
 
     events = []
 
@@ -362,7 +380,7 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
             f"FROM WorkItems "
             f"WHERE [System.AssignedTo] = @Me "
             f"  AND [System.State] IN ('Closed', 'Completed', 'Resolved', 'Done') "
-            f"  AND [System.ChangedDate] >= @Today - {days} "
+            f"  AND {changed_clause}"
             f"ORDER BY [System.ChangedDate] DESC"
         )
         wiql_res = requests.post(wiql_url, headers=headers, json={"query": query_str}, timeout=15)
@@ -411,7 +429,7 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
                 if not p_name or not r_id:
                     return []
                 try:
-                    c_url = f"{org_url.rstrip('/')}/{p_name}/_apis/git/repositories/{r_id}/commits?searchCriteria.fromDate={start_utc.isoformat()}Z&$top=50&api-version=7.1"
+                    c_url = f"{org_url.rstrip('/')}/{p_name}/_apis/git/repositories/{r_id}/commits?searchCriteria.{commit_range}&$top=50&api-version=7.1"
                     res = requests.get(c_url, headers=headers, timeout=6)
                     if res.status_code == 200:
                         out = []
@@ -456,13 +474,16 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
     for ev in events:
         unique_map[ev["id"]] = ev
     final_events = list(unique_map.values())
+    if calendar:
+        final_events = [e for e in final_events if _window_matches(e.get("occurredAt"), window)]
     final_events.sort(key=lambda x: x["occurredAt"], reverse=True)
 
     # Cache in SQLite
     if final_events:
         with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM history_events WHERE actor_name = ?", (user_name,))
+            if not calendar:
+                cursor.execute("DELETE FROM history_events WHERE actor_name = ?", (user_name,))
             cursor.executemany('''
                 INSERT OR REPLACE INTO history_events (
                     id, event_type, occurred_at, project, entity_type, entity_id,
@@ -511,17 +532,33 @@ def _row_to_event_dict(row: sqlite3.Row) -> Dict[str, Any]:
 # Summary and Query Aggregations
 # -----------------------------------------------------------------------------
 
-def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, project: str = "all", activity_type: str = "all", search: str = "") -> Dict[str, Any]:
+def _window_matches(date_str: Optional[str], window: DateWindow) -> bool:
+    """Window membership. Rolling keeps the historical lower-bound-only semantics."""
+    if not window.is_calendar:
+        return _is_within_window(date_str, window.start)
+    if not date_str:
+        return False
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return window.contains(dt)
+    except Exception:
+        return False
+
+
+def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, project: str = "all", activity_type: str = "all", search: str = "",
+                            window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Computes personal activity counts, heatmap, and distinct projects touched."""
     now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    window = window or rolling_window(days, now_utc)
 
     project_key = (project or "all").strip().lower()
     activity_key = (activity_type or "all").strip().lower()
     search_key = (search or "").strip().lower()
     filtered = [
         e for e in events
-        if _is_within_window(e.get("occurredAt"), min_date)
+        if _window_matches(e.get("occurredAt"), window)
         and (project_key == "all" or (e.get("project") or "").lower() == project_key)
         and (activity_key == "all" or _matches_history_activity(e, activity_key))
         and (not search_key or search_key in _history_search_text(e))
@@ -535,10 +572,9 @@ def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, projec
     projects_touched = set()
 
     daily_map = {}
-    for i in range(days - 1, -1, -1):
-        d_key = (now_utc - timedelta(days=i)).strftime('%Y-%m-%d')
+    for d_key, d_label in window.day_keys(now_utc):
         daily_map[d_key] = {
-            "date": (now_utc - timedelta(days=i)).strftime('%d %b'),
+            "date": d_label,
             "count": 0,
             "commits": 0,
             "workItems": 0,
@@ -571,7 +607,7 @@ def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, projec
                 daily_map[d_str]["prs"] += 1
 
     return {
-        "periodDays": days,
+        "periodDays": window.days,
         "totalEvents": total_events,
         "totalMatchingEvents": total_events,
         "completedWorkItems": completed_wi,
@@ -584,7 +620,7 @@ def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, projec
     }
 
 
-def query_history_events(events: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
+def query_history_events(events: List[Dict[str, Any]], params: Dict[str, Any], window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Filters, searches, and paginates history events."""
     activity_type = (params.get("activityType") or params.get("eventType") or "all").strip().lower()
     project = (params.get("project") or "all").strip().lower()
@@ -593,12 +629,11 @@ def query_history_events(events: List[Dict[str, Any]], params: Dict[str, Any]) -
     limit = max(1, min(100, int(params.get("limit") or 25)))
     offset = max(0, int(params.get("offset") or 0))
 
-    now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    window = window or rolling_window(days, _utcnow())
 
     filtered = []
     for e in events:
-        if not _is_within_window(e.get("occurredAt"), min_date):
+        if not _window_matches(e.get("occurredAt"), window):
             continue
         if project != "all" and e.get("project", "").lower() != project:
             continue

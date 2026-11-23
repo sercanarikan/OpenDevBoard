@@ -17,6 +17,7 @@ import azure_http
 import project_inventory
 import feature_context
 import persistence
+from date_window import DateWindow, rolling_window
 
 logger = logging.getLogger("pipeline_service")
 
@@ -195,15 +196,24 @@ def build_fixture_pipelines() -> List[Dict[str, Any]]:
 # Live Sync & SQLite Caching
 # -----------------------------------------------------------------------------
 
-def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False, project_scoped: bool = True):
-    """Synchronizes pipeline runs from Azure DevOps and caches in SQLite."""
+def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False, project_scoped: bool = True, window: Optional[DateWindow] = None):
+    """Synchronizes pipeline runs from Azure DevOps and caches in SQLite.
+
+    A calendar ``window`` bounds the fetch to [start, end), never uses the rolling cache shortcut and
+    never writes pipeline_cache_state (it covers only part of the timeline).
+    """
     if feature_context.is_fixture_mode():
         return build_fixture_pipelines()
 
     now = _utcnow()
     now_iso = now.isoformat()
+    if window is None:
+        window = rolling_window(days, now)
+    calendar = window.is_calendar
+    if not calendar:
+        days = window.days
 
-    if not force_refresh:
+    if not force_refresh and not calendar:
         with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             state = cursor.execute("SELECT * FROM pipeline_cache_state WHERE id=1").fetchone()
@@ -222,6 +232,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     headers = feature_context.get_devops_headers(pat)
     start_utc = now - timedelta(days=days)
     start_date_iso = start_utc.isoformat() + "Z"
+    time_bounds = {"minTime": window.iso_start(), "maxTime": window.iso_end()} if calendar else {"minTime": start_date_iso}
 
     all_raw = []
     org_fetch_succeeded = False
@@ -248,7 +259,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
         def fetch_project(project):
             records, token, seen = [], None, set()
             for _ in range(BUILD_MAX_PAGES):
-                params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
+                params = {**time_bounds, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
                 if token:
                     params["continuationToken"] = token
                 try:
@@ -283,7 +294,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
             token = None
             seen_tokens = set()
             for _ in range(BUILD_MAX_PAGES):
-                params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
+                params = {**time_bounds, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
                 if token:
                     params["continuationToken"] = token
                 res = azure_http.get(url, headers=headers, params=params, timeout=15)
@@ -326,7 +337,7 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
                         seen_tokens = set()
                         project_complete = False
                         for _ in range(BUILD_MAX_PAGES):
-                            params = {"minTime": start_date_iso, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
+                            params = {**time_bounds, "$top": BUILD_PAGE_SIZE, "queryOrder": "finishTimeDescending", "api-version": "7.1"}
                             if token:
                                 params["continuationToken"] = token
                             r = azure_http.get(url, headers=headers, params=params, timeout=10)
@@ -362,6 +373,9 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     for r in normalized:
         unique_map[(r["id"], r["project"])] = r
     final_runs = list(unique_map.values())
+    if calendar:
+        # Defensive in-memory bound in case upstream returns records outside [start, end).
+        final_runs = [r for r in final_runs if _run_in_window(r, window)]
 
     fetch_complete = org_fetch_complete and bool(all_raw) and not fetch_failed
     fetch_succeeded = org_fetch_succeeded or any(project_outcomes.values()) or (project_scoped and project_discovery_complete and not projects)
@@ -394,13 +408,14 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
     # True only when the accessible-project inventory and every required query finished all their pages. It is
     # independent of `outcome`/`organizationSnapshotComplete`, which keep their organization-wide meaning.
     accessible_scope_complete = fetch_complete or (project_scoped and project_discovery_complete and fetch_succeeded and not fetch_failed)
-    with persistence.db_lock, persistence.get_db_connection() as conn:
-        conn.execute('''INSERT INTO pipeline_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
-            VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET requested_days=excluded.requested_days,
-            attempted_at=excluded.attempted_at, completed_at=excluded.completed_at, outcome=excluded.outcome,
-            successful_projects=excluded.successful_projects''',
-            (days, now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_outcomes.items() if ok))))
-        conn.commit()
+    if not calendar:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
+            conn.execute('''INSERT INTO pipeline_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects)
+                VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET requested_days=excluded.requested_days,
+                attempted_at=excluded.attempted_at, completed_at=excluded.completed_at, outcome=excluded.outcome,
+                successful_projects=excluded.successful_projects''',
+                (days, now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_outcomes.items() if ok))))
+            conn.commit()
 
     if include_cache_status:
         return {"items": final_runs, "cacheStatus": {
@@ -415,6 +430,22 @@ def sync_live_pipeline_runs(org_url: str, pat: str, days: int = 30, force_refres
             "organizationSnapshotComplete": False,
         }}
     return final_runs
+
+
+def _run_timestamp(run: Dict[str, Any]) -> Optional[datetime]:
+    ts = run.get("finishTime") or run.get("queueTime")
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _run_in_window(run: Dict[str, Any], window: DateWindow) -> bool:
+    dt = _run_timestamp(run)
+    # Missing/unparseable timestamps keep the existing behaviour (kept).
+    return True if dt is None else window.contains(dt)
 
 
 def _row_to_pipeline_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -442,7 +473,7 @@ def _row_to_pipeline_dict(row: sqlite3.Row) -> Dict[str, Any]:
 # Query and Metrics Calculation
 # -----------------------------------------------------------------------------
 
-def query_pipeline_runs(all_runs: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
+def query_pipeline_runs(all_runs: List[Dict[str, Any]], params: Dict[str, Any], window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Filters, paginates, and computes summary metrics over pipeline runs."""
     project_filter = (params.get("project") or "").strip()
     status_filter = (params.get("status") or "").strip().lower()
@@ -455,8 +486,10 @@ def query_pipeline_runs(all_runs: List[Dict[str, Any]], params: Dict[str, Any]) 
     offset = max(0, int(params.get("offset") or 0))
 
     # Time cut-off
-    now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    if window is None:
+        window = rolling_window(days, _utcnow())
+    days = window.days
+    min_date = window.start
 
     filtered = []
     for r in all_runs:
@@ -465,7 +498,7 @@ def query_pipeline_runs(all_runs: List[Dict[str, Any]], params: Dict[str, Any]) 
         if ts:
             try:
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
-                if dt < min_date:
+                if dt < min_date or (window.is_calendar and dt >= window.end):
                     continue
             except Exception:
                 pass
@@ -501,7 +534,7 @@ def query_pipeline_runs(all_runs: List[Dict[str, Any]], params: Dict[str, Any]) 
     filtered.sort(key=lambda r: r.get("finishTime") or r.get("queueTime") or "", reverse=True)
 
     # Compute summary over the filtered time & project window
-    summary = compute_pipeline_summary(filtered, days)
+    summary = compute_pipeline_summary(filtered, days, window)
 
     total_matching = len(filtered)
     page_items = filtered[offset:offset + limit]
@@ -518,7 +551,7 @@ def query_pipeline_runs(all_runs: List[Dict[str, Any]], params: Dict[str, Any]) 
     }
 
 
-def compute_pipeline_summary(runs: List[Dict[str, Any]], days: int = 30) -> Dict[str, Any]:
+def compute_pipeline_summary(runs: List[Dict[str, Any]], days: int = 30, window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Computes success rate (completed denominator), run counts, and daily breakdown."""
     total_runs = len(runs)
     unique_pipelines = len({r["pipelineName"] for r in runs})
@@ -533,10 +566,13 @@ def compute_pipeline_summary(runs: List[Dict[str, Any]], days: int = 30) -> Dict
     now_utc = _utcnow()
     daily_map = {}
 
-    for i in range(days - 1, -1, -1):
-        d_key = (now_utc - timedelta(days=i)).strftime('%Y-%m-%d')
+    if window is None:
+        window = rolling_window(days, now_utc)
+    days = window.days
+
+    for d_key, label in window.day_keys(now_utc):
         daily_map[d_key] = {
-            "date": (now_utc - timedelta(days=i)).strftime('%d %b'),
+            "date": label,
             "succeeded": 0,
             "failed": 0,
             "total": 0
