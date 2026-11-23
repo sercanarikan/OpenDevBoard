@@ -1,0 +1,33 @@
+{
+  "title": "Date range",
+  "presets": {
+    "last7": "Last 7 days",
+    "last14": "Last 14 days",
+    "last30": "Last 30 days",
+    "last90": "Last 90 days",
+    "thisMonth": "This month",
+    "lastMonth": "Last month",
+    "custom": "Custom range"
+  },
+  "summary": {
+    "rolling": "Last {{count}} days",
+    "pickStart": "Pick a start day",
+    "spanDays": "{{count}} days selected"
+  },
+  "calendar": {
+    "previousMonth": "Previous month",
+    "nextMonth": "Next month"
+  },
+  "actions": {
+    "apply": "Apply",
+    "cancel": "Cancel"
+  },
+  "errors": {
+    "invalidDate": "Enter a valid date.",
+    "endBeforeStart": "The end date must be on or after the start date.",
+    "tooLong": "The range can be at most {{max}} days.",
+    "future": "Future dates are not available.",
+    "tooOld": "Only the last 90 days are available."
+  },
+  "hintUtc": "Dates are UTC calendar days."
+}

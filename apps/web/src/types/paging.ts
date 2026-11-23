@@ -1,3 +1,4 @@
+import type { AnalyticsRange } from '../services/dateRange';
 import type { WorkItem } from './index';
 import type { PipelineCacheStatus } from '../utils/pipelineNotice';
 
@@ -166,15 +167,15 @@ export interface WorkItemsApi {
   pullRequestsSummary(project?: string, signal?: AbortSignal): Promise<PullRequestsSummary>;
   pullRequest(id: number, signal?: AbortSignal): Promise<PullRequest | null>;
   pipelines(params: PipelineParams, signal?: AbortSignal): Promise<PipelineRunsResponse>;
-  pipelinesSummary(days?: number, project?: string, signal?: AbortSignal): Promise<PipelineSummary>;
+  pipelinesSummary(range?: AnalyticsRange, project?: string, signal?: AbortSignal): Promise<PipelineSummary>;
   pipelineRun(id: number, project?: string, signal?: AbortSignal): Promise<PipelineRun | null>;
   deployments(params: DeploymentParams, signal?: AbortSignal): Promise<DeploymentsResponse>;
-  deploymentsSummary(days?: number, project?: string, signal?: AbortSignal): Promise<DeploymentSummary>;
+  deploymentsSummary(range?: AnalyticsRange, project?: string, signal?: AbortSignal): Promise<DeploymentSummary>;
   deployment(id: number, project?: string, signal?: AbortSignal): Promise<DeploymentRecord | null>;
-  teamActivitySummary(days?: number, project?: string, signal?: AbortSignal): Promise<TeamActivitySummary>;
+  teamActivitySummary(range?: AnalyticsRange, project?: string, signal?: AbortSignal): Promise<TeamActivitySummary>;
   teamContributors(params: TeamActivityParams, signal?: AbortSignal): Promise<TeamContributorsResponse>;
   teamCommits(params: TeamActivityParams, signal?: AbortSignal): Promise<TeamCommitsResponse>;
-  myHistorySummary(days?: number, project?: string, signal?: AbortSignal, filters?: Pick<HistoryParams, 'activityType' | 'search'>): Promise<HistorySummary>;
+  myHistorySummary(range?: AnalyticsRange, project?: string, signal?: AbortSignal, filters?: Pick<HistoryParams, 'activityType' | 'search'>): Promise<HistorySummary>;
   myHistoryTimeline(params: HistoryParams, signal?: AbortSignal): Promise<HistoryTimelineResponse>;
 }
 
@@ -332,6 +333,8 @@ export interface PipelineParams {
   branch?: string;
   search?: string;
   days?: number;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
   refresh?: boolean;
@@ -408,6 +411,8 @@ export interface DeploymentParams {
   status?: string;
   search?: string;
   days?: number;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
   refresh?: boolean;
@@ -486,6 +491,8 @@ export interface TeamActivityParams {
   contributor?: string;
   search?: string;
   days?: number;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
   sortBy?: string;
@@ -549,6 +556,8 @@ export interface HistoryParams {
   activityType?: string;
   search?: string;
   days?: number;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
   refresh?: boolean;

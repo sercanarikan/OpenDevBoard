@@ -1,4 +1,5 @@
 import type { WorkItem } from '../types';
+import { analyticsRangeDays, type AnalyticsRange } from './dateRange';
 import { mockFlatItems, CURRENT_USER_NAME } from './mockData';
 import { buildHierarchyTree } from '../utils/hierarchy';
 import { computeCanonicalProgressMap } from '../utils/progress';
@@ -379,10 +380,10 @@ export const demoApi: WorkItemsApi = {
     };
   },
 
-  async pipelinesSummary(days = 30, project): Promise<PipelineSummary> {
+  async pipelinesSummary(range: AnalyticsRange = 30, project): Promise<PipelineSummary> {
     let items = DEMO_PIPELINES;
     if (project && project !== 'all') items = items.filter(r => r.project === project);
-    return computeDemoPipelineSummary(items, days);
+    return computeDemoPipelineSummary(items, analyticsRangeDays(range));
   },
 
   async pipelineRun(id): Promise<PipelineRun | null> {
@@ -420,24 +421,24 @@ export const demoApi: WorkItemsApi = {
     };
   },
 
-  async deploymentsSummary(days = 30, project): Promise<DeploymentSummary> {
+  async deploymentsSummary(range: AnalyticsRange = 30, project): Promise<DeploymentSummary> {
     let items = DEMO_DEPLOYMENTS;
     if (project && project !== 'all') items = items.filter(d => d.project === project);
-    return computeDemoDeploymentSummary(items, days);
+    return computeDemoDeploymentSummary(items, analyticsRangeDays(range));
   },
 
   async deployment(id): Promise<DeploymentRecord | null> {
     return DEMO_DEPLOYMENTS.find(d => d.id === id) || null;
   },
 
-  async teamActivitySummary(days = 30, project): Promise<TeamActivitySummary> {
+  async teamActivitySummary(range: AnalyticsRange = 30, project): Promise<TeamActivitySummary> {
     let commits = DEMO_COMMITS;
     let prs = DEMO_PRS;
     if (project && project !== 'all') {
       commits = commits.filter(c => c.project === project);
       prs = prs.filter(p => p.project === project);
     }
-    return computeDemoTeamSummary(commits, prs, days);
+    return computeDemoTeamSummary(commits, prs, analyticsRangeDays(range));
   },
 
   async teamContributors(params: TeamActivityParams): Promise<TeamContributorsResponse> {
@@ -486,7 +487,7 @@ export const demoApi: WorkItemsApi = {
     };
   },
 
-  async myHistorySummary(days = 30, project = 'all', _signal?: AbortSignal, filters: Pick<HistoryParams, 'activityType' | 'search'> = {}): Promise<HistorySummary> {
+  async myHistorySummary(range: AnalyticsRange = 30, project = 'all', _signal?: AbortSignal, filters: Pick<HistoryParams, 'activityType' | 'search'> = {}): Promise<HistorySummary> {
     let events = project === 'all' ? DEMO_HISTORY_EVENTS : DEMO_HISTORY_EVENTS.filter(e => e.project.toLowerCase() === project.toLowerCase());
     if (filters.activityType && filters.activityType !== 'all') {
       events = events.filter(e => e.entity.type.toLowerCase() === filters.activityType!.toLowerCase() || e.eventType.toLowerCase().includes(filters.activityType!.toLowerCase()));
@@ -495,7 +496,7 @@ export const demoApi: WorkItemsApi = {
       const q = filters.search.trim().toLowerCase();
       events = events.filter(e => `${e.summary} ${e.entity.title} ${e.project} ${e.entity.id}`.toLowerCase().includes(q));
     }
-    return computeDemoHistorySummary(events, days);
+    return computeDemoHistorySummary(events, analyticsRangeDays(range));
   },
 
   async myHistoryTimeline(params: HistoryParams): Promise<HistoryTimelineResponse> {

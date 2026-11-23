@@ -1,4 +1,5 @@
 import type { WorkItem, WorkItemsPoolResponse } from '../types';
+import { applyRangeParams, rangeParams, type AnalyticsRange } from './dateRange';
 import { adaptLiveWorkItemsPool } from './dataAdapter';
 import { buildGraphItems, buildProgressHierarchy, type ContextItem } from '../utils/contextHierarchy';
 import {
@@ -202,7 +203,7 @@ export function pipelineQuery(p: PipelineParams): URLSearchParams {
   if (p.status && p.status !== 'all') q.set('status', p.status);
   if (p.result && p.result !== 'all') q.set('result', p.result);
   if (p.branch && p.branch !== 'all') q.set('branch', p.branch);
-  if (p.days !== undefined) q.set('days', String(p.days));
+  applyRangeParams(q, p);
   if (p.refresh) q.set('refresh', 'true');
   return q;
 }
@@ -215,7 +216,7 @@ export function deploymentQuery(p: DeploymentParams): URLSearchParams {
   if (p.project && p.project !== 'all') q.set('project', p.project);
   if (p.environment && p.environment !== 'all') q.set('environment', p.environment);
   if (p.status && p.status !== 'all') q.set('status', p.status);
-  if (p.days !== undefined) q.set('days', String(p.days));
+  applyRangeParams(q, p);
   if (p.refresh) q.set('refresh', 'true');
   return q;
 }
@@ -228,7 +229,7 @@ export function teamQuery(p: TeamActivityParams): URLSearchParams {
   if (p.project && p.project !== 'all') q.set('project', p.project);
   if (p.repository && p.repository !== 'all') q.set('repository', p.repository);
   if (p.contributor && p.contributor !== 'all') q.set('contributor', p.contributor);
-  if (p.days !== undefined) q.set('days', String(p.days));
+  applyRangeParams(q, p);
   if (p.sortBy) q.set('sortBy', p.sortBy);
   if (p.sortOrder) q.set('sortOrder', p.sortOrder);
   if (p.refresh) q.set('refresh', 'true');
@@ -242,7 +243,7 @@ export function historyQuery(p: HistoryParams): URLSearchParams {
   if (p.search && p.search.trim()) q.set('search', p.search.trim());
   if (p.project && p.project !== 'all') q.set('project', p.project);
   if (p.activityType && p.activityType !== 'all') q.set('activityType', p.activityType);
-  if (p.days !== undefined) q.set('days', String(p.days));
+  applyRangeParams(q, p);
   if (p.refresh) q.set('refresh', 'true');
   return q;
 }
@@ -360,8 +361,8 @@ export const liveApi: WorkItemsApi = {
 
   pipelines: (params, signal) => getJson<PipelineRunsResponse>('/pipelines/runs', pipelineQuery(params), signal),
 
-  pipelinesSummary: (days = 30, project, signal) => {
-    const q = new URLSearchParams({ days: String(days) });
+  pipelinesSummary: (range: AnalyticsRange = 30, project, signal) => {
+    const q = rangeParams(range);
     if (project && project !== 'all') q.set('project', project);
     return getJson<PipelineSummary>('/pipelines/summary', q, signal, 50000);
   },
@@ -378,8 +379,8 @@ export const liveApi: WorkItemsApi = {
 
   deployments: (params, signal) => getJson<DeploymentsResponse>('/deployments', deploymentQuery(params), signal),
 
-  deploymentsSummary: (days = 30, project, signal) => {
-    const q = new URLSearchParams({ days: String(days) });
+  deploymentsSummary: (range: AnalyticsRange = 30, project, signal) => {
+    const q = rangeParams(range);
     if (project && project !== 'all') q.set('project', project);
     return getJson<DeploymentSummary>('/deployments/summary', q, signal, 50000);
   },
@@ -394,8 +395,8 @@ export const liveApi: WorkItemsApi = {
     }
   },
 
-  teamActivitySummary: (days = 30, project, signal) => {
-    const q = new URLSearchParams({ days: String(days) });
+  teamActivitySummary: (range: AnalyticsRange = 30, project, signal) => {
+    const q = rangeParams(range);
     if (project && project !== 'all') q.set('project', project);
     return getJson<TeamActivitySummary>('/team-activity/summary', q, signal, 50000);
   },
@@ -404,8 +405,8 @@ export const liveApi: WorkItemsApi = {
 
   teamCommits: (params, signal) => getJson<TeamCommitsResponse>('/team-activity/commits', teamQuery(params), signal),
 
-  myHistorySummary: (days = 30, project = 'all', signal, filters = {}) => {
-    const q = new URLSearchParams({ days: String(days) });
+  myHistorySummary: (range: AnalyticsRange = 30, project = 'all', signal, filters = {}) => {
+    const q = rangeParams(range);
     if (project && project !== 'all') q.set('project', project);
     if (filters.activityType && filters.activityType !== 'all') q.set('activityType', filters.activityType);
     if (filters.search?.trim()) q.set('search', filters.search.trim());

@@ -10,7 +10,7 @@ const sources = import.meta.glob('../**/*.{ts,tsx}', {
 }) as Record<string, string>;
 
 const DEFAULT_NS = 'common';
-const KNOWN_NS = ['common', 'kanban', 'dependencies', 'pullRequests', 'dashboard', 'pipelines', 'deployments', 'teamActivity', 'myHistory'];
+const KNOWN_NS = ['common', 'kanban', 'dependencies', 'pullRequests', 'dashboard', 'pipelines', 'deployments', 'teamActivity', 'myHistory', 'dateRange'];
 
 const stripComments = (src: string) =>
   src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/.*$/gm, '$1');

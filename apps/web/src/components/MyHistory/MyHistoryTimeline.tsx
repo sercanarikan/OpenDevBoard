@@ -18,6 +18,8 @@ import type { HistoryEvent, HistorySummary } from '../../types/paging';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { PullRequestInspector } from '../PullRequests/PullRequestInspector';
 import { groupTimelineEvents } from './timelineGroups';
+import { DateRangeFilter } from '../Common/DateRangeFilter';
+import { DEFAULT_DATE_RANGE_PRESET, presetSelection, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
 
 export const MyHistoryTimeline: React.FC = () => {
   const { t } = useTranslation(['myHistory', 'common']);
@@ -31,7 +33,8 @@ export const MyHistoryTimeline: React.FC = () => {
     setSelectedPR
   } = useApp();
 
-  const [days, setDays] = useState<number>(30);
+  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
+  const rangeQuery = useMemo(() => toApiRange(range), [range]);
   const [activityType, setActivityType] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -56,14 +59,14 @@ export const MyHistoryTimeline: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const request = useMemo(() => ({ api, days, project: filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce }),
-    [api, days, filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce]);
+  const request = useMemo(() => ({ api, range: rangeQuery, project: filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce }),
+    [api, rangeQuery, filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce]);
   const loading = settled?.request !== request;
   const error = loading ? null : settled.error;
 
   useEffect(() => {
     const ctrl = new AbortController();
-    request.api.myHistorySummary(request.days, request.project, ctrl.signal, {
+    request.api.myHistorySummary(request.range, request.project, ctrl.signal, {
       activityType: request.activityType,
       search: request.debouncedSearch
     }).then(async sum => {
@@ -76,7 +79,7 @@ export const MyHistoryTimeline: React.FC = () => {
           project: request.project,
           activityType: request.activityType,
           search: request.debouncedSearch,
-          days: request.days,
+          ...request.range,
           limit: pageSize,
           offset
         },
@@ -257,18 +260,11 @@ export const MyHistoryTimeline: React.FC = () => {
             </button>
           </div>
 
-          {/* Period Selector (7d vs 30d) */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1 bg-slate-50 dark:bg-slate-900">
-            <span className="text-[11px]">{t('summary.period7d')}:</span>
-            <select
-              value={days}
-              onChange={e => { setDays(Number(e.target.value)); setPage(1); }}
-              className="bg-transparent font-semibold text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
-            >
-              <option value={7}>{t('summary.period7d')}</option>
-              <option value={30}>{t('summary.period30d')}</option>
-            </select>
-          </div>
+          {/* Shared date range filter (presets + calendar range, applied on Apply) */}
+          <DateRangeFilter
+            value={range}
+            onApply={next => { setRange(next); setPage(1); }}
+          />
         </div>
 
         {/* Right Search and Refresh */}

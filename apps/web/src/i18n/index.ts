@@ -10,6 +10,7 @@ import pipelinesTR from './locales/tr/pipelines.json';
 import deploymentsTR from './locales/tr/deployments.json';
 import teamActivityTR from './locales/tr/teamActivity.json';
 import myHistoryTR from './locales/tr/myHistory.json';
+import dateRangeTR from './locales/tr/dateRange.json';
 
 import commonEN from './locales/en/common.json';
 import kanbanEN from './locales/en/kanban.json';
@@ -20,6 +21,7 @@ import pipelinesEN from './locales/en/pipelines.json';
 import deploymentsEN from './locales/en/deployments.json';
 import teamActivityEN from './locales/en/teamActivity.json';
 import myHistoryEN from './locales/en/myHistory.json';
+import dateRangeEN from './locales/en/dateRange.json';
 
 const resources = {
   tr: {
@@ -31,7 +33,8 @@ const resources = {
     pipelines: pipelinesTR,
     deployments: deploymentsTR,
     teamActivity: teamActivityTR,
-    myHistory: myHistoryTR
+    myHistory: myHistoryTR,
+    dateRange: dateRangeTR
   },
   en: {
     common: commonEN,
@@ -42,7 +45,8 @@ const resources = {
     pipelines: pipelinesEN,
     deployments: deploymentsEN,
     teamActivity: teamActivityEN,
-    myHistory: myHistoryEN
+    myHistory: myHistoryEN,
+    dateRange: dateRangeEN
   }
 };
 
@@ -64,7 +68,7 @@ i18n
     lng: savedLanguage,
     fallbackLng: 'tr',
     defaultNS: 'common',
-    ns: ['common', 'kanban', 'dependencies', 'pullRequests', 'dashboard', 'pipelines', 'deployments', 'teamActivity', 'myHistory'],
+    ns: ['common', 'kanban', 'dependencies', 'pullRequests', 'dashboard', 'pipelines', 'deployments', 'teamActivity', 'myHistory', 'dateRange'],
     interpolation: {
       escapeValue: false // React already escapes values safely
     }
