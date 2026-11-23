@@ -131,8 +131,11 @@ export async function getJson<T>(path: string, query?: URLSearchParams, signal?:
     return body;
   } catch (err: any) {
     if (err instanceof ApiError) {
-      // An HTTP answer (even 4xx/5xx) proves the server is reachable; only gateway errors mean "backend gone".
-      if (err.status === 502 || err.status === 503 || err.status === 504) emitNetwork({ ok: false, error: err });
+      // A cold PR snapshot is an intentional loading response; a 503 otherwise still means the backend is unavailable.
+      if (err.isLoading) {
+        lastResponseAt = Date.now();
+        emitNetwork({ ok: true });
+      } else if (err.status === 502 || err.status === 503 || err.status === 504) emitNetwork({ ok: false, error: err });
       else {
         lastResponseAt = Date.now();
         emitNetwork({ ok: true });

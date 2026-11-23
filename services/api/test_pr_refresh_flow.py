@@ -2,6 +2,7 @@
 import os
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -136,6 +137,49 @@ class PullRequestSnapshotFlowTests(unittest.TestCase):
             release.set()
             flights.shutdown(timeout=1)
         self.assertEqual(refresh_calls, [1])
+
+    def test_unexpected_background_exception_preserves_snapshot_and_stops_refresh_storm(self):
+        now = pr_service._utcnow()
+        self.seed_snapshot(now - timedelta(seconds=301))
+        flights = request_coalescing.Coalescer()
+        calls = []
+
+        def fail_refresh(*_args, **_kwargs):
+            calls.append(1)
+            raise RuntimeError('synthetic secret-bearing upstream detail')
+
+        with patch.object(pr_service.feature_context, 'is_fixture_mode', return_value=False), \
+                patch.object(pr_service, 'sync_live_pull_requests', side_effect=fail_refresh), \
+                self.assertLogs('pr_service', level='ERROR') as captured:
+            first = pr_service.load_live_pull_requests(
+                'https://dev.azure.com/synthetic', 'synthetic-token', flights, now=now
+            )
+            deadline = time.monotonic() + 2
+            while flights.in_flight(('pull-requests',)) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(flights.in_flight(('pull-requests',)))
+
+            second = pr_service.load_live_pull_requests(
+                'https://dev.azure.com/synthetic', 'synthetic-token', flights, now=now + timedelta(seconds=5)
+            )
+
+        flights.shutdown(timeout=1)
+        self.assertEqual(calls, [1])
+        self.assertEqual([item['id'] for item in first['items']], [1])
+        self.assertTrue(first['cacheStatus']['stale'])
+        self.assertEqual([item['id'] for item in second['items']], [1])
+        self.assertTrue(second['cacheStatus']['stale'])
+        self.assertFalse(second['cacheStatus']['refreshing'])
+        self.assertEqual(second['cacheStatus']['retryAfterSeconds'], 30)
+        self.assertNotIn('secret-bearing', '\n'.join(captured.output))
+        self.assertIn('RuntimeError', '\n'.join(captured.output))
+        with persistence.get_db_connection() as conn:
+            row = conn.execute("SELECT outcome, attempted_at, last_complete_at FROM pr_cache_state WHERE id=1").fetchone()
+            items = conn.execute("SELECT id FROM pull_requests").fetchall()
+        self.assertEqual(row['outcome'], 'failed')
+        self.assertIsNotNone(row['attempted_at'])
+        self.assertEqual(row['last_complete_at'], (now - timedelta(seconds=301)).isoformat())
+        self.assertEqual([item['id'] for item in items], [1])
 
 
 if __name__ == '__main__':

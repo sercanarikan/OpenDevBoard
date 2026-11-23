@@ -21,7 +21,7 @@ All labels use bounded enums. No PAT, organization URL, project, Work Item ID, t
 | `opendevboard_sync_runs_total` | Counter | `mode=full|incremental`, bounded `status` outcome |
 | `opendevboard_sync_duration_seconds` | Histogram | `mode`; wall-clock time around one sync invocation |
 | `opendevboard_sync_phase_duration_seconds` | Histogram | `phase=wiql|detail_fetch|context_closure|reconciliation|sqlite_publish` |
-| `opendevboard_pr_stage_duration_seconds` | Histogram | Fixed `stage` and `result` labels for dashboard PR identity, group lookup, SQLite read, project discovery, per-project fetch, executor wait, cache publish and response preparation durations |
+| `opendevboard_pr_stage_duration_seconds` | Histogram | Fixed `stage` and `result` labels for dashboard PR identity, group lookup, SQLite read, project discovery, per-project fetch, executor wait, cache refresh, cache publish and response preparation durations |
 | `opendevboard_pr_upstream_requests_total` | Counter | `stage=group_membership|project_fetch|org_fallback|project_fallback`, `result=ok|rate_limited|server_error|http_error|timeout|connection_error|transport_error`; one count per PR/identity GET. This code path has no automatic retry loop. |
 | `opendevboard_http_attempts_total` | Counter | `method=GET|POST`; incremented immediately before each Azure HTTP call |
 | `opendevboard_http_retries_total` | Counter | Retry attempts after transient responses or network errors |

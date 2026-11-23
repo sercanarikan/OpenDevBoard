@@ -157,13 +157,47 @@ def _read_pr_cache_snapshot(now=None):
         observability.observe_pr_stage('sqlite_cache_read', started, result)
 
 
+def _record_pr_refresh_failure():
+    """Record an opaque failed attempt without changing PR rows or successful timestamps."""
+    attempted_at = _utcnow().isoformat()
+    errors_json = json.dumps([{"kind": "upstream_error"}])
+    with persistence.db_lock, persistence.get_db_connection() as conn:
+        state = conn.execute("SELECT id FROM pr_cache_state WHERE id=1").fetchone()
+        if state:
+            conn.execute("UPDATE pr_cache_state SET attempted_at=?, outcome='failed', errors_json=? WHERE id=1",
+                         (attempted_at, errors_json))
+        else:
+            conn.execute('''INSERT INTO pr_cache_state
+                (id, attempted_at, completed_at, outcome, successful_projects, errors_json, last_complete_at, scope)
+                VALUES (1, ?, NULL, 'failed', '[]', ?, NULL, ?)''',
+                (attempted_at, errors_json, PROJECT_SCOPE))
+        conn.commit()
+
+
 def load_live_pull_requests(org_url: str, pat: str, refresh_flights, now=None, force_refresh=False):
     """Serve a bounded PR cache read and share at most one refresh flight per process."""
     if feature_context.is_fixture_mode():
         return build_fixture_prs()
 
     key = ('pull-requests',)
-    compute = lambda: sync_live_pull_requests(org_url, pat, force_refresh=force_refresh, include_cache_status=True)
+    def compute():
+        started = time.monotonic()
+        result = 'error'
+        try:
+            data = sync_live_pull_requests(org_url, pat, force_refresh=force_refresh, include_cache_status=True)
+            outcome = data.get('cacheStatus', {}).get('outcome') if isinstance(data, dict) else None
+            result = 'ok' if outcome == 'complete' else 'partial' if outcome == 'partial' else 'failed'
+            return data
+        except Exception as error:
+            try:
+                _record_pr_refresh_failure()
+            except Exception as state_error:
+                logger.error("Could not record PR refresh failure (%s)", type(state_error).__name__)
+            logger.error("PR refresh raised unexpectedly (%s)", type(error).__name__)
+            raise
+        finally:
+            observability.observe_pr_stage('cache_refresh', started, result)
+
     if force_refresh:
         return refresh_flights.run(key, compute)
 
