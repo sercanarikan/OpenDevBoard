@@ -27,7 +27,7 @@ Bu iki metrik farklı amaçlara hizmet eder; yapay olarak eşitlenmez.
 Seçilen zaman penceresindeki (7 veya 30 gün) özet metrikleri döndürür.
 
 **Sorgu Parametreleri:**
-- `days` (int, varsayılan: 30): 7 veya 30 günlük zaman penceresi.
+- `days` (int, varsayılan: 30): 7 veya 30 günlük zaman penceresi. Alternatif olarak `startDate` ve `endDate` (`YYYY-MM-DD`, UTC, ikisi birlikte) takvim aralığı verilebilir; bkz. [Tarih aralığı filtresi](date-range-filter.md).
 - `project` (string, opsiyonel): Proje filtresi (`'all'` veya proje adı).
 - `refresh` (boolean, opsiyonel): `true` ise önbellek atlanır ve canlı API sorgulanır.
 
