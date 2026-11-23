@@ -73,8 +73,74 @@ class CoalescerTests(unittest.TestCase):
         self.assertTrue(all(isinstance(e, RuntimeError) for e in errors))
         self.assertEqual(coalescer.run('k', lambda: 'recovered'), 'recovered')
 
+    def test_background_start_is_single_flight_and_sync_run_joins_it(self):
+        coalescer = request_coalescing.Coalescer()
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def compute():
+            calls.append(1)
+            started.set()
+            release.wait(2)
+            return {'items': [1]}
+
+        self.assertTrue(coalescer.start('prs', compute))
+        self.assertTrue(started.wait(1))
+        self.assertFalse(coalescer.start('prs', compute))
+        self.assertTrue(coalescer.in_flight('prs'))
+        result = []
+        waiter = threading.Thread(target=lambda: result.append(coalescer.run('prs', lambda: 'duplicate')))
+        waiter.start()
+        release.set()
+        waiter.join(2)
+        self.assertEqual(result, [{'items': [1]}])
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(coalescer.in_flight('prs'))
+
+    def test_shutdown_rejects_new_background_work_and_waits_only_to_its_bound(self):
+        coalescer = request_coalescing.Coalescer()
+        started, release = threading.Event(), threading.Event()
+        self.assertTrue(coalescer.start('prs', lambda: (started.set(), release.wait(2))))
+        self.assertTrue(started.wait(1))
+        coalescer.shutdown(timeout=0.01)
+        self.assertFalse(coalescer.start('other', lambda: None))
+        release.set()
+
 
 class AppLoaderCoalescingTests(unittest.TestCase):
+    def test_cold_identity_lookup_does_not_block_dashboard_and_is_single_flight(self):
+        flights = request_coalescing.Coalescer()
+        started, release, group_started = threading.Event(), threading.Event(), threading.Event()
+        identity = {"id": "synthetic", "subjectDescriptor": "synthetic-descriptor"}
+
+        def delayed_identity():
+            started.set()
+            release.wait(2)
+            return identity
+
+        def delayed_groups(*_args):
+            group_started.set()
+            return {'groupIds': [], 'status': 'available'}
+
+        with patch.object(api_app, '_pr_background_flights', flights), \
+                patch.object(api_app, '_pr_current_user_cache', None), \
+                patch.object(api_app.sync_service, 'is_fixture_mode', return_value=False), \
+                patch.object(api_app, 'get_current_user_info', side_effect=delayed_identity), \
+                patch.object(api_app, 'get_devops_org_name', return_value='synthetic-org'), \
+                patch.object(api_app, 'get_headers', return_value={}), \
+                patch.object(api_app.pr_service, 'cached_user_group_ids', return_value=(None, False)), \
+                patch.object(api_app.pr_service, 'fetch_user_group_ids', side_effect=delayed_groups) as groups:
+            user = api_app._get_pr_current_user()
+            self.assertTrue(started.wait(1))
+            self.assertEqual(user['groupMembershipStatus'], 'unavailable')
+            self.assertEqual(user['groupMembershipError']['kind'], 'loading')
+            self.assertTrue(user['groupMembershipRefreshing'])
+            self.assertTrue(flights.in_flight(('pr-current-user',)))
+            release.set()
+            self.assertTrue(group_started.wait(1))
+            flights.shutdown(timeout=1)
+        groups.assert_called_once()
+
     def _loads(self, loader, service, attr, kwargs=None):
         release = threading.Event()
         calls = []

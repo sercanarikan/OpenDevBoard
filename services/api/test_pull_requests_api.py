@@ -34,6 +34,20 @@ class TestPullRequestFailureResponses(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.get_json()['cacheStatus']['outcome'], 'partial')
 
+    def test_cold_cache_returns_bounded_loading_response_with_retry_hint(self):
+        loading = {"items": [], "cacheStatus": {
+            "outcome": "loading", "complete": False, "stale": False,
+            "hasSnapshot": False, "refreshing": True, "retryAfterSeconds": 2,
+        }}
+        with patch.object(api_app, '_get_pr_current_user', return_value={"id": "fixture-user"}), \
+                patch.object(api_app, '_load_all_prs', return_value=loading):
+            response = self.client.get('/api/pull-requests/summary?project=all')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers['Retry-After'], '2')
+        self.assertEqual(response.get_json()['error'], 'Pull requests are loading')
+        self.assertEqual(response.get_json()['cacheStatus']['outcome'], 'loading')
+        self.assertFalse(response.get_json()['cacheStatus']['hasSnapshot'])
+
     def test_failed_refresh_can_serve_a_successful_empty_snapshot_as_stale(self):
         stale_empty = {"items": [], "cacheStatus": {"outcome": "failed", "complete": False, "stale": True, "hasSnapshot": True, "lastSyncedAt": "2026-11-01T00:00:00Z", "errors": [{"kind": "timeout"}]}}
         with patch.object(api_app, '_get_pr_current_user', return_value={"id": "fixture-user"}), \

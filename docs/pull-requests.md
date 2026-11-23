@@ -39,7 +39,7 @@ Sunucu taraflı sayfalama, filtreleme, arama ve sıralama destekleyen ana PR lis
 - `sortOrder` (string, varsayılan: `desc`): `desc`, `asc`.
 - `refresh` (boolean, opsiyonel): `true` verilirse önbellek atlanır ve Azure DevOps'tan taze veri çekilir.
 
-PR senkronizasyonu aktif talepleri oluşturulma tarihinden bağımsız çeker; böylece 30 günden eski ama hâlâ aktif olan PR'lar da kapsama girer. Sayfalama üst sınırına ulaşılırsa `cacheStatus.complete=false` ve `stale=true` döner. Veri alınamaz ve kullanılabilir cache yoksa liste/özet uç noktaları `503` döndürür; bu durum boş sonuç değildir. `cacheStatus.hasSnapshot` daha önce tamamlanmış boş snapshot'ı da ayırt eder. Cache varsa son başarılı snapshot gösterilir ve `cacheStatus` bunun stale olduğunu bildirir.
+PR senkronizasyonu aktif talepleri oluşturulma tarihinden bağımsız çeker; böylece 30 günden eski ama hâlâ aktif olan PR'lar da kapsama girer. Sayfalama üst sınırına ulaşılırsa `cacheStatus.complete=false` ve `stale=true` döner. TTL dolduğunda varsa son snapshot hemen döner ve yenileme tek bir arka plan isteğiyle başlar; `cacheStatus.stale=true` ve yenileme sürüyorsa `refreshing=true` olur. Başarısız yenileme mevcut snapshot'ı silmez. İlk kurulumda snapshot yokken liste/özet uç noktaları boş sonuç gibi `200` dönmek yerine `503`, `cacheStatus.outcome="loading"` ve `Retry-After` başlığı döndürür; arayüz bu yanıtı en fazla 8 saniye yeniden dener. Deneme süresi dolarsa kullanıcıya yüklenme durumu gösterilir. `cacheStatus.hasSnapshot` daha önce tamamlanmış boş snapshot'ı da ayırt eder.
 
 **Örnek Yanıt:**
 ```json
@@ -155,9 +155,11 @@ Azure DevOps üzerindeki inceleyen kimliği, oturum açmış kullanıcının kim
 
 - SQLite veritabanında `pull_requests` tablosunda saklanır.
 - **TTL:** 300 saniye (5 dakika).
+- **Süresi dolmuş cache:** Snapshot senkron SQLite okumasıyla alınır, kullanıcı yanıtı bekletmeden döner ve aynı process içindeki dashboard/gezgin istekleri tek bir arka plan yenilemesini paylaşır. Cache okunurken satırlar ve metadata aynı SQLite snapshot'ından alınır.
 - **Proje kapsamı:** Senkronizasyon önce erişilebilir proje envanterini (tüm sayfalarıyla) okur ve her projeyi ayrı sorgular; boş sayfaya kadar sayfalar. Organizasyon seviyesi PR uç noktası sayfa sonrası filtreleme yaptığı için `$top`'tan kısa ve son olmayan sayfalar döndürür (canlı ölçümde 1895 PR'dan yalnızca 12'si geldi); bu yüzden artık yalnızca envanter okunamadığında (degrade mod) kullanılır. Proje kapsamlı tam okumada `cacheStatus.completenessScope` `accessible-projects`, `projectDiscoveryComplete` `true` olur; degrade modda `organization-pr-query` ve `false` kalır. `organizationSnapshotComplete` her zaman `false`'tur.
 - Tamamlanan senkronizasyondan sonraki 5 dakika içindeki istekler Azure DevOps'a gitmeden yerel veritabanından döndürülür.
 - Kısmi/başarısız yenileme varsa önbellekteki satırlar korunur; API bunları sıfır PR gibi sunmaz ve `cacheStatus.errors` içinde yalnızca hata kategorisi ile HTTP kodunu döndürür.
+- Soğuk cache yanıtı `503` ile `Retry-After` döndürür; arayüz bunu sınırlı süre tekrar dener. Kimlik ve Graph grup üyeliği arka planda yenilenir; `reviewerIdentityStatus.refreshing` kontrol sürerken bekleyen inceleme sayacının yükleniyor durumunda kalmasını sağlar.
 - Manuel "Yenile" butonuna basıldığında `refresh=true` ile Azure DevOps'tan taze veri çekilir.
 - **İzole Test Modu (`DEVOPS_FIXTURE_MODE=1`):** Ağ erişimi olmadan 16 deterministik PR üretilerek CI testlerinin stabil çalışması sağlanır.
 

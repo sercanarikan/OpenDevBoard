@@ -21,6 +21,8 @@ All labels use bounded enums. No PAT, organization URL, project, Work Item ID, t
 | `opendevboard_sync_runs_total` | Counter | `mode=full|incremental`, bounded `status` outcome |
 | `opendevboard_sync_duration_seconds` | Histogram | `mode`; wall-clock time around one sync invocation |
 | `opendevboard_sync_phase_duration_seconds` | Histogram | `phase=wiql|detail_fetch|context_closure|reconciliation|sqlite_publish` |
+| `opendevboard_pr_stage_duration_seconds` | Histogram | Fixed `stage` and `result` labels for dashboard PR identity, group lookup, SQLite read, project discovery, per-project fetch, executor wait, cache publish and response preparation durations |
+| `opendevboard_pr_upstream_requests_total` | Counter | `stage=group_membership|project_fetch|org_fallback|project_fallback`, `result=ok|rate_limited|server_error|http_error|timeout|connection_error|transport_error`; one count per PR/identity GET. This code path has no automatic retry loop. |
 | `opendevboard_http_attempts_total` | Counter | `method=GET|POST`; incremented immediately before each Azure HTTP call |
 | `opendevboard_http_retries_total` | Counter | Retry attempts after transient responses or network errors |
 | `opendevboard_http_results_total` | Counter | `result=2xx|429|503|4xx|5xx|other|network` |
@@ -38,6 +40,8 @@ All labels use bounded enums. No PAT, organization URL, project, Work Item ID, t
 | `opendevboard_sync_cpu_seconds` | Histogram | Process CPU consumed during a sync wall-clock window; includes concurrent work in other threads |
 
 `sync_duration_seconds` is wall time for the sync implementation, including Azure retry/backoff waits and phase work. Phase histograms time logical operations: WIQL collection includes partition fallback; detail fetch records each Azure item-detail read (including retries and streaming batches); context closure and reconciliation measure their broader work and therefore overlap with detail-fetch observations; SQLite publish covers the cache publish transaction and derived-data work. Phase samples are not additive and should not be summed to estimate total duration. Failed phase operations are observed as well.
+
+PR stage histograms use only fixed stage/result labels and expose per-stage duration distributions; `project_fetch_wait` measures the fan-out barrier separately from each project's paginated request duration. `pr_upstream_requests_total` groups HTTP and transport failures, including 429 and 5xx, without recording URLs or response bodies. PR/identity GETs do not use the Azure client retry loop, so they are not included in `http_retries_total`. These new process-local series appear after the updated API process starts and do not backfill historical PR request timings.
 
 The per-sync RSS gauge is sampled during the run and includes its start/end readings; short-lived memory spikes between samples may not be captured. The process lifetime peak is reported separately from the OS high-water mark. Metrics collection is best-effort and does not participate in sync/cache transaction outcomes.
 
