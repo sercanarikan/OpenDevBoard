@@ -193,6 +193,12 @@ export const TeamActivityExplorer: React.FC = () => {
           </div>
         </div>
 
+        {summary?.cacheStatus && summary.cacheStatus.complete === false && (
+          <div role="status" data-testid="team-partial-notice" className="px-3 py-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-900 dark:text-amber-200">
+            {t('partial.message')}
+          </div>
+        )}
+
         {/* Daily Activity Trend Bar Chart */}
         {isReady && summary.dailyStats?.length > 0 && (
           <div data-testid="team-trend-chart" className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/40 space-y-2">
