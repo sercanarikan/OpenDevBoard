@@ -47,7 +47,7 @@ Kişisel aktivite akışını sayfalanmış ve filtrelenebilir olarak döndürü
 - `activityType` (string, opsiyonel): `'all'`, `'workItem'`, `'commit'`, `'pullRequest'`, `'review'`.
 - `project` (string, opsiyonel): Proje filtresi.
 - `search` (string, opsiyonel): Başlık, iş no veya commit mesajında arama.
-- `days` (int, varsayılan: 30): 7 veya 30 günlük zaman penceresi.
+- `days` (int, varsayılan: 30): 7 veya 30 günlük zaman penceresi. Alternatif olarak `startDate` ve `endDate` (`YYYY-MM-DD`, UTC, ikisi birlikte) takvim aralığı verilebilir; bkz. [Tarih aralığı filtresi](date-range-filter.md).
 - `limit`, `offset`: Sayfalama parametreleri.
 
 ### 2.2. `GET /api/my-history/summary`

@@ -38,5 +38,8 @@
     "loading": "Loading team activity metrics…",
     "loadFailed": "Failed to load team activity metrics.",
     "retry": "Retry"
+  },
+  "partial": {
+    "message": "Some Azure DevOps sources could not be read completely for this range. Totals and the charts may be incomplete."
   }
 }

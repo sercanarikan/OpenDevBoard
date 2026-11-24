@@ -16,6 +16,7 @@ import azure_http
 import project_inventory
 import feature_context
 import persistence
+from date_window import DateWindow, rolling_window
 from urllib.parse import quote
 
 logger = logging.getLogger("deployment_service")
@@ -190,15 +191,24 @@ def build_fixture_deployments() -> List[Dict[str, Any]]:
 # Live Sync & SQLite Caching
 # -----------------------------------------------------------------------------
 
-def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False):
-    """Synchronizes deployment records from Azure DevOps VSRM API and caches in SQLite."""
+def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30, force_refresh: bool = False, include_cache_status: bool = False, window: Optional[DateWindow] = None):
+    """Synchronizes deployment records from Azure DevOps VSRM API and caches in SQLite.
+
+    A calendar ``window`` bounds the fetch to [start, end), never uses the rolling cache shortcut, never
+    deletes rows and never writes deployment_cache_state (it covers only part of the timeline).
+    """
     if feature_context.is_fixture_mode():
         return build_fixture_deployments()
 
     now = _utcnow()
     now_iso = now.isoformat()
+    if window is None:
+        window = rolling_window(days, now)
+    calendar = window.is_calendar
+    if not calendar:
+        days = window.days
 
-    if not force_refresh:
+    if not force_refresh and not calendar:
         with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             state = cursor.execute("SELECT * FROM deployment_cache_state WHERE id=1").fetchone()
@@ -219,6 +229,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
     headers = feature_context.get_devops_headers(pat)
     start_utc = now - timedelta(days=days)
     start_date_iso = start_utc.isoformat() + "Z"
+    time_bounds = {"minStartedTime": window.iso_start(), "maxStartedTime": window.iso_end()} if calendar else {"minStartedTime": start_date_iso}
 
     # Discover the accessible project inventory (all pages) instead of deriving scope from cached work items.
     # Projects without work items can still have releases. If discovery fails, fall back to the work-item
@@ -270,7 +281,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
             token = None
             seen_tokens = set()
             for _ in range(DEPLOYMENT_MAX_PAGES):
-                params = {"minStartedTime": start_date_iso, "$top": DEPLOYMENT_PAGE_SIZE, "$expand": "releaseEnvironment", "api-version": "7.0"}
+                params = {**time_bounds, "$top": DEPLOYMENT_PAGE_SIZE, "$expand": "releaseEnvironment", "api-version": "7.0"}
                 if token:
                     params["continuationToken"] = token
                 response = azure_http.get(vsrm_url, headers=headers, params=params, timeout=10)
@@ -312,6 +323,9 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
     for d in normalized:
         unique_map[(d["id"], d["project"])] = d
     final_deps = list(unique_map.values())
+    if calendar:
+        # Defensive in-memory bound in case upstream returns records outside [start, end).
+        final_deps = [d for d in final_deps if _deployment_in_window(d, window)]
 
     no_projects_proven = project_discovery_complete and not projects
     fetch_complete = (bool(projects) or no_projects_proven) and all(project_outcomes.get(p, False) for p in projects)
@@ -322,7 +336,7 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
     completed_at = now_iso if fetch_succeeded else None
     if fetch_succeeded:
         with persistence.db_lock, persistence.get_db_connection() as conn:
-            if fetch_complete and projects:
+            if fetch_complete and projects and not calendar:
                 project_placeholders = ",".join("?" for _ in projects)
                 conn.execute(
                     f"DELETE FROM deployment_records WHERE project IN ({project_placeholders}) AND started_on >= ?",
@@ -342,20 +356,28 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
                 d["requestedBy"], d["url"], now_iso
                 ) for d in final_deps])
             conn.commit()
-    with persistence.db_lock, persistence.get_db_connection() as conn:
-        conn.execute('''INSERT INTO deployment_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects, errors_json)
-            VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET attempted_at=excluded.attempted_at,
-            completed_at=COALESCE(excluded.completed_at, deployment_cache_state.completed_at), outcome=excluded.outcome,
-            successful_projects=excluded.successful_projects, errors_json=excluded.errors_json''',
-            (days, now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_outcomes.items() if ok)), json.dumps(upstream_errors)))
-        conn.commit()
+    if not calendar:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
+            conn.execute('''INSERT INTO deployment_cache_state (id, requested_days, attempted_at, completed_at, outcome, successful_projects, errors_json)
+                VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET attempted_at=excluded.attempted_at,
+                completed_at=COALESCE(excluded.completed_at, deployment_cache_state.completed_at), outcome=excluded.outcome,
+                successful_projects=excluded.successful_projects, errors_json=excluded.errors_json''',
+                (days, now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_outcomes.items() if ok)), json.dumps(upstream_errors)))
+            conn.commit()
 
     if not fetch_complete:
         with persistence.db_lock, persistence.get_db_connection() as conn:
-            cached = [_row_to_deployment_dict(r) for r in conn.execute(
-                "SELECT * FROM deployment_records WHERE started_on >= ? ORDER BY started_on DESC",
-                ((now - timedelta(days=days)).isoformat(timespec="seconds") + "Z",)
-            ).fetchall()]
+            if calendar:
+                cache_rows = conn.execute(
+                    "SELECT * FROM deployment_records WHERE started_on >= ? AND started_on < ? ORDER BY started_on DESC",
+                    (window.iso_start(), window.iso_end())
+                ).fetchall()
+            else:
+                cache_rows = conn.execute(
+                    "SELECT * FROM deployment_records WHERE started_on >= ? ORDER BY started_on DESC",
+                    ((now - timedelta(days=days)).isoformat(timespec="seconds") + "Z",)
+                ).fetchall()
+            cached = [_row_to_deployment_dict(r) for r in cache_rows]
             last_row_sync = conn.execute("SELECT MAX(last_synced_at) FROM deployment_records").fetchone()[0]
             last_complete_sync = conn.execute("SELECT completed_at FROM deployment_cache_state WHERE id=1").fetchone()[0]
         final_deps = cached
@@ -377,6 +399,17 @@ def sync_live_deployments(org_url: str, org_name: str, pat: str, days: int = 30,
             "organizationSnapshotComplete": False,
         }}
     return final_deps
+
+
+def _deployment_in_window(dep: Dict[str, Any], window: DateWindow) -> bool:
+    ts = dep.get("startedOn") or dep.get("completedOn")
+    if not ts:
+        return True
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return True
+    return window.contains(dt)
 
 
 def _row_to_deployment_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -403,7 +436,7 @@ def _row_to_deployment_dict(row: sqlite3.Row) -> Dict[str, Any]:
 # Query and Metrics Calculation
 # -----------------------------------------------------------------------------
 
-def query_deployments(all_deps: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
+def query_deployments(all_deps: List[Dict[str, Any]], params: Dict[str, Any], window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Filters, paginates, and computes summary metrics over deployment records."""
     project_filter = (params.get("project") or "").strip()
     env_filter = (params.get("environment") or "").strip()
@@ -414,8 +447,10 @@ def query_deployments(all_deps: List[Dict[str, Any]], params: Dict[str, Any]) ->
     limit = max(1, min(100, int(params.get("limit") or 25)))
     offset = max(0, int(params.get("offset") or 0))
 
-    now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    if window is None:
+        window = rolling_window(days, _utcnow())
+    days = window.days
+    min_date = window.start
 
     filtered = []
     for d in all_deps:
@@ -423,7 +458,7 @@ def query_deployments(all_deps: List[Dict[str, Any]], params: Dict[str, Any]) ->
         if ts:
             try:
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
-                if dt < min_date:
+                if dt < min_date or (window.is_calendar and dt >= window.end):
                     continue
             except Exception:
                 pass
@@ -453,7 +488,7 @@ def query_deployments(all_deps: List[Dict[str, Any]], params: Dict[str, Any]) ->
 
     filtered.sort(key=lambda d: d.get("startedOn") or d.get("completedOn") or "", reverse=True)
 
-    summary = compute_deployment_summary(filtered, days)
+    summary = compute_deployment_summary(filtered, days, window)
 
     total_matching = len(filtered)
     page_items = filtered[offset:offset + limit]
@@ -471,7 +506,7 @@ def query_deployments(all_deps: List[Dict[str, Any]], params: Dict[str, Any]) ->
     }
 
 
-def compute_deployment_summary(deps: List[Dict[str, Any]], days: int = 30) -> Dict[str, Any]:
+def compute_deployment_summary(deps: List[Dict[str, Any]], days: int = 30, window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Computes deployment rates, environment breakdowns and daily stats."""
     total_deployments = len(deps)
     succeeded = 0
@@ -483,10 +518,13 @@ def compute_deployment_summary(deps: List[Dict[str, Any]], days: int = 30) -> Di
     now_utc = _utcnow()
     daily_map = {}
 
-    for i in range(days - 1, -1, -1):
-        d_key = (now_utc - timedelta(days=i)).strftime('%Y-%m-%d')
+    if window is None:
+        window = rolling_window(days, now_utc)
+    days = window.days
+
+    for d_key, label in window.day_keys(now_utc):
         daily_map[d_key] = {
-            "date": (now_utc - timedelta(days=i)).strftime('%d %b'),
+            "date": label,
             "succeeded": 0,
             "failed": 0,
             "total": 0

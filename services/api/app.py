@@ -21,6 +21,7 @@ import request_coalescing
 import observability
 import ipaddress
 import projects_cache
+import date_window
 
 # Azure DevOps SDK imports
 from msrest.authentication import BasicAuthentication
@@ -31,6 +32,11 @@ app = Flask(__name__)
 
 def _team_activity_cache_status(data):
     return data.get("cacheStatus", {"outcome": "complete", "complete": True, "stale": False})
+
+
+def _history_cache_status(data):
+    """Calendar My History fetches report coverage; rolling and fixture results are complete by definition."""
+    return data.get("cacheStatus", {"outcome": "complete", "complete": True, "stale": False, "issues": []})
 
 
 CORS(app)
@@ -544,35 +550,56 @@ def get_pull_request_by_id(pr_id):
 _live_flights = request_coalescing.Coalescer()
 
 
-def _load_all_team_activity(days=30, force_refresh=False):
+def _load_all_team_activity(days=30, force_refresh=False, window=None):
+    window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return team_service.build_fixture_team_activity()
     org_url = get_devops_org_url()
     pat = get_devops_pat()
-    return _live_flights.run(('team', days, force_refresh), lambda: team_service.sync_live_team_activity(org_url, pat, days=days, force_refresh=force_refresh))
+    return _live_flights.run(('team',) + window.key + (force_refresh,), lambda: team_service.sync_live_team_activity(org_url, pat, days=window.days, force_refresh=force_refresh, **_window_kw(window)))
 
-def _validated_days():
-    """Parse the shared positive-integer days query parameter."""
+def _window_kw(window):
+    """Pass the window to the sync layer only for calendar requests; rolling calls keep their legacy shape."""
+    return {"window": window} if window.is_calendar else {}
+
+
+def _range_kwargs(window):
+    """Keyword arguments for loaders and summaries: rolling windows keep the legacy `days` call shape."""
+    return {"window": window} if window.is_calendar else {"days": window.days}
+
+
+def _request_window(allowed_days=None):
+    """Parse the shared date window (rolling `days` or calendar `startDate`/`endDate`).
+
+    `allowed_days` restricts rolling windows only; calendar windows are validated by date_window.
+    """
+    allowed_message = "days must be one of: " + ", ".join(str(d) for d in sorted(allowed_days or ()))
+    calendar_requested = bool((request.args.get("startDate") or "").strip() or (request.args.get("endDate") or "").strip())
+    if allowed_days is not None and not calendar_requested:
+        try:
+            days = int(request.args.get("days", 30))
+        except (TypeError, ValueError):
+            return None, allowed_message
+        if days not in allowed_days:
+            return None, allowed_message
     try:
-        days = int(request.args.get('days', 30))
-    except (TypeError, ValueError):
-        return None, "days must be a positive integer"
-    if days < 1:
-        return None, "days must be a positive integer"
-    return days, None
+        window = date_window.parse_request_window(request.args)
+    except ValueError as e:
+        return None, str(e)
+    return window, None
 
 @app.route('/api/team-activity', methods=['GET'])
 def get_team_activity():
     """Calculates top committers, top PR authors, top reviewers, and project activity (supports legacy & modern UI)."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        data = _load_all_team_activity(days=days, force_refresh=force_refresh)
+        data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
         commits = data["commits"]
         prs = data["pullRequests"]
-        summary = team_service.compute_team_summary(commits, prs, days=days)
+        summary = team_service.compute_team_summary(commits, prs, **_range_kwargs(window))
 
         top_committers = [
             {"name": c["name"], "count": c["commitCount"]}
@@ -608,7 +635,7 @@ def get_team_activity():
 
         return jsonify({
             # Legacy UI compatibility
-            "period_days": days,
+            "period_days": window.days,
             "total_commits": summary["totalCommits"],
             "total_prs": summary["totalPRs"],
             "contributors_count": summary["activeContributors"],
@@ -636,15 +663,15 @@ def get_team_activity():
 def get_team_activity_summary():
     """Returns team activity summary, daily trend and top metrics."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         project = request.args.get('project')
         repository = request.args.get('repository')
-        data = _load_all_team_activity(days=days, force_refresh=force_refresh)
-        summary = team_service.compute_team_summary(data["commits"], data["pullRequests"], days=days, project=project, repository=repository)
-        return jsonify({**summary, "cacheStatus": _team_activity_cache_status(data)}), 200
+        data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
+        summary = team_service.compute_team_summary(data["commits"], data["pullRequests"], project=project, repository=repository, **_range_kwargs(window))
+        return jsonify({**summary, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_summary: {e}", exc_info=True)
         return jsonify({"error": str(e), "totalCommits": 0, "activeContributors": 0}), 500
@@ -653,13 +680,13 @@ def get_team_activity_summary():
 def get_team_activity_contributors():
     """Returns paginated, searchable and sorted contributors."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        data = _load_all_team_activity(days=days, force_refresh=force_refresh)
-        res = team_service.query_contributors(data["commits"], data["pullRequests"], request.args)
-        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data)}), 200
+        data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
+        res = team_service.query_contributors(data["commits"], data["pullRequests"], request.args, window=window)
+        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_contributors: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -668,13 +695,13 @@ def get_team_activity_contributors():
 def get_team_activity_commits():
     """Returns paginated commit timeline with project, repo and contributor filters."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        data = _load_all_team_activity(days=days, force_refresh=force_refresh)
-        res = team_service.query_commits(data["commits"], request.args)
-        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data)}), 200
+        data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
+        res = team_service.query_commits(data["commits"], request.args, window=window)
+        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_commits: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -683,47 +710,47 @@ def get_team_activity_commits():
 def get_team_activity_repositories():
     """Returns repository-level commit and PR activity."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         project = request.args.get('project')
-        data = _load_all_team_activity(days=days, force_refresh=force_refresh)
+        data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
         repos = team_service.compute_repository_activity(data["commits"], data["pullRequests"], project=project)
-        return jsonify({"repositories": repos, "total": len(repos), "cacheStatus": _team_activity_cache_status(data)}), 200
+        return jsonify({"repositories": repos, "total": len(repos), "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_repositories: {e}", exc_info=True)
         return jsonify({"error": str(e), "repositories": []}), 500
 
-def _load_all_pipelines(days=30, force_refresh=False):
+def _load_all_pipelines(days=30, force_refresh=False, window=None):
+    window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return pipeline_service.build_fixture_pipelines()
     org_url = get_devops_org_url()
     pat = get_devops_pat()
-    return _live_flights.run(('pipelines', days, force_refresh), lambda: pipeline_service.sync_live_pipeline_runs(org_url, pat, days=days, force_refresh=force_refresh, include_cache_status=True, project_scoped=True))
+    return _live_flights.run(('pipelines',) + window.key + (force_refresh,), lambda: pipeline_service.sync_live_pipeline_runs(org_url, pat, days=window.days, force_refresh=force_refresh, include_cache_status=True, project_scoped=True, **_window_kw(window)))
 
-def _load_all_deployments(days=30, force_refresh=False):
+def _load_all_deployments(days=30, force_refresh=False, window=None):
+    window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return deployment_service.build_fixture_deployments()
     org_url = get_devops_org_url()
     org_name = get_devops_org_name()
     pat = get_devops_pat()
-    return _live_flights.run(('deployments', days, force_refresh), lambda: deployment_service.sync_live_deployments(org_url, org_name, pat, days=days, force_refresh=force_refresh, include_cache_status=True))
+    return _live_flights.run(('deployments',) + window.key + (force_refresh,), lambda: deployment_service.sync_live_deployments(org_url, org_name, pat, days=window.days, force_refresh=force_refresh, include_cache_status=True, **_window_kw(window)))
 
 @app.route('/api/pipeline-health', methods=['GET'])
 def get_pipeline_health():
     """Fetches recent build pipeline runs (legacy UI backward compatibility)."""
-    days, days_error = _validated_days()
-    if days_error:
-        return jsonify({"error": "days must be one of: 7, 14, 30, 90"}), 400
-    if days not in {7, 14, 30, 90}:
-        return jsonify({"error": "days must be one of: 7, 14, 30, 90"}), 400
+    window, window_error = _request_window(allowed_days={7, 14, 30, 90})
+    if window_error:
+        return jsonify({"error": window_error}), 400
 
     try:
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        sync_data = _load_all_pipelines(days=days, force_refresh=force_refresh)
+        sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
-        summary = pipeline_service.compute_pipeline_summary(all_runs, days=days)
+        summary = pipeline_service.compute_pipeline_summary(all_runs, **_range_kwargs(window))
 
         recent_builds = [
             {
@@ -758,7 +785,7 @@ def get_pipeline_health():
         ]
 
         return jsonify({
-            "period_days": days,
+            "period_days": window.days,
             "total_runs": summary["totalRuns"],
             "succeeded": summary["succeeded"],
             "failed": summary["failed"],
@@ -779,13 +806,13 @@ def get_pipeline_health():
 def get_pipelines():
     """Returns pipeline definitions and grouped run status."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        sync_data = _load_all_pipelines(days=days, force_refresh=force_refresh)
+        sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
-        res = pipeline_service.query_pipeline_runs(all_runs, request.args)
+        res = pipeline_service.query_pipeline_runs(all_runs, request.args, window=window)
         if isinstance(sync_data, dict):
             res["cacheStatus"] = sync_data.get("cacheStatus")
         return jsonify(res), 200
@@ -797,16 +824,16 @@ def get_pipelines():
 def get_pipelines_summary():
     """Summary metrics (success rate, counts, daily breakdown)."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        sync_data = _load_all_pipelines(days=days, force_refresh=force_refresh)
+        sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         project = request.args.get('project')
         if project and project != 'all':
             all_runs = [r for r in all_runs if r["project"].lower() == project.lower()]
-        summary = pipeline_service.compute_pipeline_summary(all_runs, days=days)
+        summary = pipeline_service.compute_pipeline_summary(all_runs, **_range_kwargs(window))
         if isinstance(sync_data, dict):
             summary["cacheStatus"] = sync_data.get("cacheStatus")
         return jsonify(summary), 200
@@ -818,13 +845,13 @@ def get_pipelines_summary():
 def get_pipeline_runs():
     """Paginated list of pipeline runs with filters."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        sync_data = _load_all_pipelines(days=days, force_refresh=force_refresh)
+        sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
-        res = pipeline_service.query_pipeline_runs(all_runs, request.args)
+        res = pipeline_service.query_pipeline_runs(all_runs, request.args, window=window)
         if isinstance(sync_data, dict):
             res["cacheStatus"] = sync_data.get("cacheStatus")
         return jsonify(res), 200
@@ -836,7 +863,10 @@ def get_pipeline_runs():
 def get_pipeline_run_by_id(run_id):
     """Detailed information for a single pipeline run."""
     try:
-        all_runs = _load_all_pipelines(days=30)
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
+        all_runs = _load_all_pipelines(**_range_kwargs(window))
         project = request.args.get('project')
         run = pipeline_service.get_single_run_details(all_runs, run_id, project=project)
         if not run:
@@ -850,13 +880,13 @@ def get_pipeline_run_by_id(run_id):
 def get_deployment_metrics():
     """Legacy UI compatibility for deployment metrics."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        sync_data = _load_all_deployments(days=days, force_refresh=force_refresh)
+        sync_data = _load_all_deployments(**_range_kwargs(window), force_refresh=force_refresh)
         all_deps = sync_data["items"] if isinstance(sync_data, dict) else sync_data
-        summary = deployment_service.compute_deployment_summary(all_deps, days=days)
+        summary = deployment_service.compute_deployment_summary(all_deps, **_range_kwargs(window))
 
         env_counts = {
             "Production": {"succeeded": 0, "failed": 0, "total": 0},
@@ -900,7 +930,7 @@ def get_deployment_metrics():
 
         return jsonify({
             "total_deployments": summary["totalDeployments"],
-            "deployment_frequency": round(summary["totalDeployments"] / max(1, days), 2),
+            "deployment_frequency": round(summary["totalDeployments"] / max(1, window.days), 2),
             "chart_data": chart_data,
             "recent_deployments": recent_deployments,
             "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None
@@ -913,13 +943,13 @@ def get_deployment_metrics():
 def get_deployments():
     """List of deployment records with filters and pagination."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        sync_data = _load_all_deployments(days=days, force_refresh=force_refresh)
+        sync_data = _load_all_deployments(**_range_kwargs(window), force_refresh=force_refresh)
         all_deps = sync_data["items"] if isinstance(sync_data, dict) else sync_data
-        res = deployment_service.query_deployments(all_deps, request.args)
+        res = deployment_service.query_deployments(all_deps, request.args, window=window)
         if isinstance(sync_data, dict):
             res["cacheStatus"] = sync_data.get("cacheStatus")
             res["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
@@ -932,16 +962,16 @@ def get_deployments():
 def get_deployments_summary():
     """Deployment summary metrics (environment breakdown, success rates)."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        sync_data = _load_all_deployments(days=days, force_refresh=force_refresh)
+        sync_data = _load_all_deployments(**_range_kwargs(window), force_refresh=force_refresh)
         all_deps = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         project = request.args.get('project')
         if project and project != 'all':
             all_deps = [d for d in all_deps if d["project"].lower() == project.lower()]
-        summary = deployment_service.compute_deployment_summary(all_deps, days=days)
+        summary = deployment_service.compute_deployment_summary(all_deps, **_range_kwargs(window))
         if isinstance(sync_data, dict):
             summary["cacheStatus"] = sync_data.get("cacheStatus")
             summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
@@ -954,7 +984,10 @@ def get_deployments_summary():
 def get_deployment_by_id(dep_id):
     """Details for a single deployment."""
     try:
-        all_deps = _load_all_deployments(days=30)
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
+        all_deps = _load_all_deployments(**_range_kwargs(window))
         project = request.args.get('project')
         dep = deployment_service.get_single_deployment_details(all_deps, dep_id, project=project)
         if not dep:
@@ -1031,28 +1064,29 @@ def get_project_work_item_stats():
         app.logger.error(f"Error in get_project_work_item_stats: {e}", exc_info=True)
         return jsonify({"total_active_work_items": 0, "stats_by_project": {}}), 500
 
-def _load_all_history(days=30, force_refresh=False):
+def _load_all_history(days=30, force_refresh=False, window=None):
+    window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return history_service.build_fixture_history("Fixture User")
     org_url = get_devops_org_url()
     pat = get_devops_pat()
     user_info = get_current_user_info() or {}
-    return history_service.sync_live_history(org_url, pat, user_info, days=days, force_refresh=force_refresh)
+    return history_service.sync_live_history(org_url, pat, user_info, days=window.days, force_refresh=force_refresh, **_window_kw(window))
 
 @app.route('/api/my-history', methods=['GET'])
 def get_my_history():
     """Fetches user's historical contributions: completed work items, merged PRs, reviewed PRs, commits, and activity heatmap."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         user_info = get_current_user_info() or {}
         user_name = user_info.get("displayName") or "Fixture User"
 
-        history_data = _load_all_history(days=days, force_refresh=force_refresh)
+        history_data = _load_all_history(**_range_kwargs(window), force_refresh=force_refresh)
         events = history_data["events"]
-        summary = history_service.compute_history_summary(events, days=days)
+        summary = history_service.compute_history_summary(events, **_range_kwargs(window))
         timeline_groups = history_service.group_events_by_timeline(events)
 
         # Legacy UI compatibility structures
@@ -1125,8 +1159,9 @@ def get_my_history():
 
         return jsonify({
             # Legacy fields
-            "period_days": days,
+            "period_days": window.days,
             "user_name": user_name,
+            "cacheStatus": _history_cache_status(history_data),
             "summary": {
                 "total_completed_work_items": summary["completedWorkItems"],
                 "bugs_resolved": 0,
@@ -1154,18 +1189,18 @@ def get_my_history():
 def get_my_history_summary():
     """Returns user's contribution metrics and activity heatmap."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         project = request.args.get('project', 'all')
         activity_type = request.args.get('activityType', request.args.get('eventType', 'all'))
         search = request.args.get('search', '')
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        data = _load_all_history(days=days, force_refresh=force_refresh)
+        data = _load_all_history(**_range_kwargs(window), force_refresh=force_refresh)
         summary = history_service.compute_history_summary(
-            data["events"], days=days, project=project, activity_type=activity_type, search=search
+            data["events"], project=project, activity_type=activity_type, search=search, **_range_kwargs(window)
         )
-        return jsonify(summary), 200
+        return jsonify({**summary, "cacheStatus": _history_cache_status(data)}), 200
     except Exception as e:
         app.logger.error(f"Error in get_my_history_summary: {e}", exc_info=True)
         return jsonify({"error": str(e), "totalEvents": 0}), 500
@@ -1174,13 +1209,13 @@ def get_my_history_summary():
 def get_my_history_timeline():
     """Returns paginated and filtered personal timeline events."""
     try:
-        days, days_error = _validated_days()
-        if days_error:
-            return jsonify({"error": days_error}), 400
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        data = _load_all_history(days=days, force_refresh=force_refresh)
-        res = history_service.query_history_events(data["events"], request.args)
-        return jsonify(res), 200
+        data = _load_all_history(**_range_kwargs(window), force_refresh=force_refresh)
+        res = history_service.query_history_events(data["events"], request.args, window=window)
+        return jsonify({**res, "cacheStatus": _history_cache_status(data)}), 200
     except Exception as e:
         app.logger.error(f"Error in get_my_history_timeline: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -1189,7 +1224,10 @@ def get_my_history_timeline():
 def get_my_history_event_by_id(event_id):
     """Retrieves details for a single personal activity event."""
     try:
-        data = _load_all_history(days=30)
+        window, window_error = _request_window()
+        if window_error:
+            return jsonify({"error": window_error}), 400
+        data = _load_all_history(**_range_kwargs(window))
         for e in data["events"]:
             if e["id"] == event_id:
                 return jsonify(e), 200

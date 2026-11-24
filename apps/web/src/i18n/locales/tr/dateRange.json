@@ -1,0 +1,33 @@
+{
+  "title": "Tarih aralığı",
+  "presets": {
+    "last7": "Son 7 gün",
+    "last14": "Son 14 gün",
+    "last30": "Son 30 gün",
+    "last90": "Son 90 gün",
+    "thisMonth": "Bu ay",
+    "lastMonth": "Geçen ay",
+    "custom": "Özel aralık"
+  },
+  "summary": {
+    "rolling": "Son {{count}} gün",
+    "pickStart": "Başlangıç gününü seçin",
+    "spanDays": "{{count}} gün seçildi"
+  },
+  "calendar": {
+    "previousMonth": "Önceki ay",
+    "nextMonth": "Sonraki ay"
+  },
+  "actions": {
+    "apply": "Uygula",
+    "cancel": "İptal"
+  },
+  "errors": {
+    "invalidDate": "Geçerli bir tarih girin.",
+    "endBeforeStart": "Bitiş tarihi başlangıç tarihinden sonra veya aynı gün olmalıdır.",
+    "tooLong": "Aralık en fazla {{max}} gün olabilir.",
+    "future": "Gelecek tarihler kullanılamaz.",
+    "tooOld": "Yalnızca son 90 gün kullanılabilir."
+  },
+  "hintUtc": "Tarihler UTC takvim günleridir."
+}

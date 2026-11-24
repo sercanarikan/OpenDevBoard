@@ -16,6 +16,8 @@ import { useApp } from '../../context/useApp';
 import type { PipelineRun, PipelineSummary } from '../../types/paging';
 import { PipelineInspector } from './PipelineInspector';
 import { getPipelineNotice } from '../../utils/pipelineNotice';
+import { DateRangeFilter } from '../Common/DateRangeFilter';
+import { DEFAULT_DATE_RANGE_PRESET, presetSelection, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
 
 export const PipelineExplorer: React.FC = () => {
   const { t } = useTranslation(['pipelines', 'common', 'dashboard']);
@@ -27,7 +29,8 @@ export const PipelineExplorer: React.FC = () => {
     setSelectedPipelineRun
   } = useApp();
 
-  const [days, setDays] = useState<number>(30);
+  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
+  const rangeQuery = useMemo(() => toApiRange(range), [range]);
   const [resultFilter, setResultFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -59,13 +62,13 @@ export const PipelineExplorer: React.FC = () => {
         project: filters.selectedProject,
         result: resultFilter,
         search: debouncedSearch,
-        days,
+        ...rangeQuery,
         limit: pageSize,
         offset
       },
       signal
     );
-  }, [api, filters.selectedProject, resultFilter, debouncedSearch, days, page]);
+  }, [api, filters.selectedProject, resultFilter, debouncedSearch, rangeQuery, page]);
 
   // A changed request is loading until that specific request settles.
   const request = useMemo(() => ({ fetchPipelines, refreshToken, refreshNonce }), [fetchPipelines, refreshToken, refreshNonce]);
@@ -254,18 +257,11 @@ export const PipelineExplorer: React.FC = () => {
             </button>
           </div>
 
-          {/* Period Selector (7d vs 30d) */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1 bg-slate-50 dark:bg-slate-900">
-            <span className="text-[11px]">{t('filters.periodLabel')}</span>
-            <select
-              value={days}
-              onChange={e => { setDays(Number(e.target.value)); setPage(1); }}
-              className="bg-transparent font-semibold text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
-            >
-              <option value={7}>{t('summary.period7d')}</option>
-              <option value={30}>{t('summary.period30d')}</option>
-            </select>
-          </div>
+          {/* Shared date range filter (presets + calendar range, applied on Apply) */}
+          <DateRangeFilter
+            value={range}
+            onApply={next => { setSelectedPipelineRun(null); setRange(next); setPage(1); }}
+          />
         </div>
 
         {/* Right Search and Refresh */}

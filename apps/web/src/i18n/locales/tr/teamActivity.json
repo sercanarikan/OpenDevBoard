@@ -38,5 +38,8 @@
     "loading": "Ekip aktivite verileri yükleniyor…",
     "loadFailed": "Ekip aktivite verileri yüklenemedi.",
     "retry": "Tekrar Dene"
+  },
+  "partial": {
+    "message": "Bu aralık için bazı Azure DevOps kaynakları tamamen okunamadı. Toplamlar ve grafikler eksik olabilir."
   }
 }

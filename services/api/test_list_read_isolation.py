@@ -156,6 +156,12 @@ class ReadersSeeOneSnapshot(unittest.TestCase):
             t.start()
         for generation in range(1, 9):
             _apply_generation(generation)
+            # Readers are not scheduled deterministically; wait for at least one read to complete after each
+            # generation so the liveness assertion below does not depend on thread timing under load.
+            before = len(reads)
+            deadline = time.monotonic() + 5
+            while len(reads) <= before and time.monotonic() < deadline:
+                time.sleep(0.001)
         time.sleep(0.05)
         stop.set()
         for t in threads:

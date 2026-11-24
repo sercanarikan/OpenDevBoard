@@ -10,11 +10,19 @@ import logging
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
+
+# Calendar fetches page explicitly. A cap or a failed page marks the result partial rather than complete.
+CALENDAR_MAX_PAGES = 20
+CALENDAR_MAX_WORK_ITEMS = 1000
+WORK_ITEM_BATCH = 200  # Azure DevOps work item batch endpoint accepts at most 200 ids
+PR_PAGE_SIZE = 150
+COMMIT_PAGE_SIZE = 50
 from concurrent.futures import ThreadPoolExecutor
 import requests
 
 import feature_context
 import persistence
+from date_window import DateWindow, rolling_window
 
 logger = logging.getLogger("history_service")
 
@@ -321,8 +329,15 @@ def extract_verified_pr_events(pr: Dict[str, Any], user_info: Dict[str, Any], or
 # Live Sync & SQLite Caching
 # -----------------------------------------------------------------------------
 
-def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: int = 30, force_refresh: bool = False) -> Dict[str, Any]:
-    """Synchronizes user's personal activity events from Azure DevOps."""
+def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: int = 30, force_refresh: bool = False,
+                      window: Optional[DateWindow] = None) -> Dict[str, Any]:
+    """Synchronizes user's personal activity events from Azure DevOps.
+
+    A calendar ``window`` bounds every upstream query to ``[window.start, window.end)``. It never uses the
+    cache shortcut and never deletes cached rows; fetched true events are only upserted.
+    """
+    window = window or rolling_window(days)
+    calendar = window.is_calendar
     user_name = (user_info.get("displayName") or "Unknown").strip()
     user_id = (user_info.get("id") or "").lower()
     user_email = (user_info.get("uniqueName") or "").lower()
@@ -333,7 +348,7 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
     now = _utcnow()
     now_iso = now.isoformat()
 
-    if not force_refresh:
+    if not force_refresh and not calendar:
         with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT MAX(last_synced_at) as last_sync, COUNT(*) as count FROM history_events WHERE actor_name = ?", (user_name,))
@@ -350,8 +365,24 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
 
     headers = feature_context.get_devops_headers(pat)
     start_utc = now - timedelta(days=days)
+    commit_range = f"fromDate={start_utc.isoformat()}Z"
+    if calendar:
+        commit_range = f"fromDate={window.iso_start()}&searchCriteria.toDate={window.iso_end()}"
+        # Bounds come from validated datetimes, never from request text.
+        start_lit = window.start.strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_lit = window.end.strftime('%Y-%m-%dT%H:%M:%SZ')
+        # An item closed inside the window and changed afterwards is found through ClosedDate; the exact event
+        # date (ClosedDate, else ChangedDate) is checked again after the fetch.
+        changed_clause = (
+            f"(([System.ChangedDate] >= '{start_lit}' AND [System.ChangedDate] < '{end_lit}') "
+            f"OR ([Microsoft.VSTS.Common.ClosedDate] >= '{start_lit}' AND [Microsoft.VSTS.Common.ClosedDate] < '{end_lit}')) "
+        )
+    else:
+        changed_clause = f"[System.ChangedDate] >= @Today - {days} "
 
     events = []
+    # Calendar fetches record every incomplete source so the result is never presented as complete.
+    coverage_issues: List[str] = []
 
     # 1. Closed / Completed Work Items assigned to @Me
     try:
@@ -362,60 +393,96 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
             f"FROM WorkItems "
             f"WHERE [System.AssignedTo] = @Me "
             f"  AND [System.State] IN ('Closed', 'Completed', 'Resolved', 'Done') "
-            f"  AND [System.ChangedDate] >= @Today - {days} "
+            f"  AND {changed_clause}"
             f"ORDER BY [System.ChangedDate] DESC"
         )
         wiql_res = requests.post(wiql_url, headers=headers, json={"query": query_str}, timeout=15)
         if wiql_res.status_code == 200:
             wi_refs = wiql_res.json().get("workItems", [])
-            wi_ids = [str(w["id"]) for w in wi_refs[:100]]
-            if wi_ids:
+            if calendar:
+                if len(wi_refs) > CALENDAR_MAX_WORK_ITEMS:
+                    coverage_issues.append("work-items-capped")
+                    wi_refs = wi_refs[:CALENDAR_MAX_WORK_ITEMS]
+                all_ids = [str(w["id"]) for w in wi_refs]
+                id_chunks = [all_ids[i:i + WORK_ITEM_BATCH] for i in range(0, len(all_ids), WORK_ITEM_BATCH)]
+            else:
+                id_chunks = [[str(w["id"]) for w in wi_refs[:100]]]
+            for wi_ids in id_chunks:
+                if not wi_ids:
+                    continue
                 d_url = f"{org_url.rstrip('/')}/_apis/wit/workitems?ids={','.join(wi_ids)}&fields=System.Title,System.WorkItemType,System.State,System.TeamProject,Microsoft.VSTS.Common.ClosedDate,System.ChangedDate,Microsoft.VSTS.Common.ClosedBy,System.ChangedBy&api-version=7.1"
                 d_res = requests.get(d_url, headers=headers, timeout=15)
-                if d_res.status_code == 200:
-                    for item in d_res.json().get("value", []):
-                        f = item.get("fields", {})
-                        i_id = item.get("id")
-                        proj = f.get("System.TeamProject", "Unknown")
-                        title = f.get("System.Title", "Work Item")
-                        c_date = f.get("Microsoft.VSTS.Common.ClosedDate") or f.get("System.ChangedDate", "")
-                        closed_by = f.get("Microsoft.VSTS.Common.ClosedBy") or f.get("System.ChangedBy")
+                if d_res.status_code != 200:
+                    if calendar:
+                        coverage_issues.append("work-item-details-failed")
+                    continue
+                for item in d_res.json().get("value", []):
+                    f = item.get("fields", {})
+                    i_id = item.get("id")
+                    proj = f.get("System.TeamProject", "Unknown")
+                    title = f.get("System.Title", "Work Item")
+                    c_date = f.get("Microsoft.VSTS.Common.ClosedDate") or f.get("System.ChangedDate", "")
+                    closed_by = f.get("Microsoft.VSTS.Common.ClosedBy") or f.get("System.ChangedBy")
 
-                        verified_wi = verify_work_item_event(i_id, title, proj, c_date, closed_by, user_info, org_url)
-                        if verified_wi:
-                            events.append(verified_wi)
+                    verified_wi = verify_work_item_event(i_id, title, proj, c_date, closed_by, user_info, org_url)
+                    if verified_wi:
+                        events.append(verified_wi)
+        elif calendar:
+            coverage_issues.append("work-items-query-failed")
     except Exception as e:
         logger.warning("History: work items fetch failed: %s", e)
+        if calendar:
+            coverage_issues.append("work-items-error")
 
-    # 2. Merged PRs authored by user & Reviewed PRs
+    # 2. Merged PRs authored by user & Reviewed PRs (calendar: every page up to the cap, same query otherwise)
     try:
-        pr_url = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=150&api-version=7.1"
-        pr_res = requests.get(pr_url, headers=headers, timeout=12)
-        if pr_res.status_code == 200:
-            for pr in pr_res.json().get("value", []):
-                pr_events = extract_verified_pr_events(pr, user_info, org_url)
-                events.extend(pr_events)
+        pr_base = "{}/_apis/git/pullrequests?searchCriteria.status=all&$top={}&api-version=7.1".format(
+            org_url.rstrip('/'), PR_PAGE_SIZE if calendar else 150)
+        pr_pages = CALENDAR_MAX_PAGES if calendar else 1
+        pr_complete = False
+        for page_index in range(pr_pages):
+            pr_url = pr_base + (f"&$skip={page_index * PR_PAGE_SIZE}" if calendar and page_index else "")
+            pr_res = requests.get(pr_url, headers=headers, timeout=12)
+            if pr_res.status_code != 200:
+                break
+            page = pr_res.json().get("value", [])
+            for pr in page:
+                events.extend(extract_verified_pr_events(pr, user_info, org_url))
+            if not calendar or len(page) < PR_PAGE_SIZE:
+                pr_complete = True
+                break
+        if calendar and not pr_complete:
+            coverage_issues.append("pull-requests-incomplete")
     except Exception as e:
         logger.warning("History: pull requests fetch failed: %s", e)
+        if calendar:
+            coverage_issues.append("pull-requests-error")
 
-    # 3. Commits authored by user
+    # 3. Commits authored by user (calendar: every page per repository up to the cap)
     try:
         repo_res = requests.get(f"{org_url.rstrip('/')}/_apis/git/repositories?api-version=7.1", headers=headers, timeout=10)
         if repo_res.status_code == 200:
             repos = repo_res.json().get("value", [])
 
             def fetch_user_commits(repo):
+                """Returns (events, complete). ``complete`` is False when a page failed or the cap was reached."""
                 p_name = repo.get("project", {}).get("name", "")
                 r_id = repo.get("id")
                 r_name = repo.get("name")
                 if not p_name or not r_id:
-                    return []
+                    return [], not calendar
+                out = []
+                repo_complete = False
                 try:
-                    c_url = f"{org_url.rstrip('/')}/{p_name}/_apis/git/repositories/{r_id}/commits?searchCriteria.fromDate={start_utc.isoformat()}Z&$top=50&api-version=7.1"
-                    res = requests.get(c_url, headers=headers, timeout=6)
-                    if res.status_code == 200:
-                        out = []
-                        for c in res.json().get("value", []):
+                    for page_index in range(CALENDAR_MAX_PAGES if calendar else 1):
+                        page_size = COMMIT_PAGE_SIZE if calendar else 50
+                        skip = f"&$skip={page_index * page_size}" if calendar and page_index else ""
+                        c_url = f"{org_url.rstrip('/')}/{p_name}/_apis/git/repositories/{r_id}/commits?searchCriteria.{commit_range}&$top={page_size}{skip}&api-version=7.1"
+                        res = requests.get(c_url, headers=headers, timeout=6)
+                        if res.status_code != 200:
+                            break
+                        page = res.json().get("value", [])
+                        for c in page:
                             a_obj = c.get("author", {})
                             a_name = (a_obj.get("name") or "").lower()
                             a_email = (a_obj.get("email") or "").lower()
@@ -439,30 +506,42 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
                                     "verificationStatus": "verified",
                                     "actor": {"id": user_id, "displayName": user_name}
                                 })
-                        return out
+                        if not calendar or len(page) < COMMIT_PAGE_SIZE:
+                            repo_complete = True
+                            break
                 except Exception:
                     pass
-                return []
+                if calendar and not repo_complete:
+                    logger.warning("History calendar commit fetch incomplete for %s", p_name)
+                return out, repo_complete
 
             with ThreadPoolExecutor(max_workers=8) as executor:
-                commit_batches = executor.map(fetch_user_commits, repos)
-                for b in commit_batches:
-                    events.extend(b)
+                for batch, repo_complete in executor.map(fetch_user_commits, repos):
+                    events.extend(batch)
+                    if calendar and not repo_complete:
+                        coverage_issues.append("commits-incomplete")
+        elif calendar:
+            coverage_issues.append("repositories-failed")
     except Exception as e:
         logger.warning("History: commits fetch failed: %s", e)
+        if calendar:
+            coverage_issues.append("commits-error")
 
     # Deduplicate events by id
     unique_map = {}
     for ev in events:
         unique_map[ev["id"]] = ev
     final_events = list(unique_map.values())
+    if calendar:
+        final_events = [e for e in final_events if _window_matches(e.get("occurredAt"), window)]
     final_events.sort(key=lambda x: x["occurredAt"], reverse=True)
 
     # Cache in SQLite
     if final_events:
         with persistence.db_lock, persistence.get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM history_events WHERE actor_name = ?", (user_name,))
+            if not calendar:
+                cursor.execute("DELETE FROM history_events WHERE actor_name = ?", (user_name,))
             cursor.executemany('''
                 INSERT OR REPLACE INTO history_events (
                     id, event_type, occurred_at, project, entity_type, entity_id,
@@ -480,7 +559,18 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
             ])
             conn.commit()
 
-    return {"events": final_events}
+    if not calendar:
+        return {"events": final_events}
+    complete = not coverage_issues
+    return {
+        "events": final_events,
+        "cacheStatus": {
+            "outcome": "complete" if complete else "partial",
+            "complete": complete,
+            "stale": not complete,
+            "issues": sorted(set(coverage_issues)),
+        },
+    }
 
 
 def _row_to_event_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -511,17 +601,33 @@ def _row_to_event_dict(row: sqlite3.Row) -> Dict[str, Any]:
 # Summary and Query Aggregations
 # -----------------------------------------------------------------------------
 
-def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, project: str = "all", activity_type: str = "all", search: str = "") -> Dict[str, Any]:
+def _window_matches(date_str: Optional[str], window: DateWindow) -> bool:
+    """Window membership. Rolling keeps the historical lower-bound-only semantics."""
+    if not window.is_calendar:
+        return _is_within_window(date_str, window.start)
+    if not date_str:
+        return False
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return window.contains(dt)
+    except Exception:
+        return False
+
+
+def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, project: str = "all", activity_type: str = "all", search: str = "",
+                            window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Computes personal activity counts, heatmap, and distinct projects touched."""
     now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    window = window or rolling_window(days, now_utc)
 
     project_key = (project or "all").strip().lower()
     activity_key = (activity_type or "all").strip().lower()
     search_key = (search or "").strip().lower()
     filtered = [
         e for e in events
-        if _is_within_window(e.get("occurredAt"), min_date)
+        if _window_matches(e.get("occurredAt"), window)
         and (project_key == "all" or (e.get("project") or "").lower() == project_key)
         and (activity_key == "all" or _matches_history_activity(e, activity_key))
         and (not search_key or search_key in _history_search_text(e))
@@ -535,10 +641,9 @@ def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, projec
     projects_touched = set()
 
     daily_map = {}
-    for i in range(days - 1, -1, -1):
-        d_key = (now_utc - timedelta(days=i)).strftime('%Y-%m-%d')
+    for d_key, d_label in window.day_keys(now_utc):
         daily_map[d_key] = {
-            "date": (now_utc - timedelta(days=i)).strftime('%d %b'),
+            "date": d_label,
             "count": 0,
             "commits": 0,
             "workItems": 0,
@@ -571,7 +676,7 @@ def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, projec
                 daily_map[d_str]["prs"] += 1
 
     return {
-        "periodDays": days,
+        "periodDays": window.days,
         "totalEvents": total_events,
         "totalMatchingEvents": total_events,
         "completedWorkItems": completed_wi,
@@ -584,7 +689,7 @@ def compute_history_summary(events: List[Dict[str, Any]], days: int = 30, projec
     }
 
 
-def query_history_events(events: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
+def query_history_events(events: List[Dict[str, Any]], params: Dict[str, Any], window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Filters, searches, and paginates history events."""
     activity_type = (params.get("activityType") or params.get("eventType") or "all").strip().lower()
     project = (params.get("project") or "all").strip().lower()
@@ -593,12 +698,11 @@ def query_history_events(events: List[Dict[str, Any]], params: Dict[str, Any]) -
     limit = max(1, min(100, int(params.get("limit") or 25)))
     offset = max(0, int(params.get("offset") or 0))
 
-    now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    window = window or rolling_window(days, _utcnow())
 
     filtered = []
     for e in events:
-        if not _is_within_window(e.get("occurredAt"), min_date):
+        if not _window_matches(e.get("occurredAt"), window):
             continue
         if project != "all" and e.get("project", "").lower() != project:
             continue

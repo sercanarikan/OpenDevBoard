@@ -14,6 +14,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { useApp } from '../../context/useApp';
+import { DateRangeFilter } from '../Common/DateRangeFilter';
+import { DEFAULT_DATE_RANGE_PRESET, chartLabelStep, formatDayLabel, presetSelection, selectionDayCount, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
 import type {
   TeamActivitySummary,
   TeamContributor,
@@ -21,14 +23,16 @@ import type {
 } from '../../types/paging';
 
 export const TeamActivityExplorer: React.FC = () => {
-  const { t } = useTranslation(['teamActivity', 'common']);
+  const { t, i18n } = useTranslation(['teamActivity', 'common']);
   const {
     api,
     filters,
     refreshToken
   } = useApp();
 
-  const [days, setDays] = useState<number>(30);
+  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
+  const rangeQuery = useMemo(() => toApiRange(range), [range]);
+  const dayCount = selectionDayCount(range);
   const [activeTab, setActiveTab] = useState<'contributors' | 'repositories' | 'commits'>('contributors');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -60,14 +64,14 @@ export const TeamActivityExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const request = useMemo(() => ({ api, days, project: filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce }),
-    [api, days, filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce]);
+  const request = useMemo(() => ({ api, range: rangeQuery, project: filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce }),
+    [api, rangeQuery, filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce]);
   const loading = settled?.request !== request;
   const error = loading ? null : settled.error;
 
   useEffect(() => {
     const ctrl = new AbortController();
-    request.api.teamActivitySummary(request.days, request.project, ctrl.signal).then(async sum => {
+    request.api.teamActivitySummary(request.range, request.project, ctrl.signal).then(async sum => {
       if (ctrl.signal.aborted) return;
       setSummary(sum);
 
@@ -76,7 +80,7 @@ export const TeamActivityExplorer: React.FC = () => {
         {
           project: request.project,
           search: request.debouncedSearch,
-          days: request.days,
+          ...request.range,
           limit: pageSize,
           offset
         },
@@ -142,10 +146,12 @@ export const TeamActivityExplorer: React.FC = () => {
         <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-700 dark:text-slate-300">
-              {t('summary.scopeLabel', {
-                days,
+              {range.kind === 'rolling'
+                ? t('summary.scopeLabel', {
+                days: range.days,
                 project: filters.selectedProject === 'all' ? t('projects.all', { ns: 'common' }) : filters.selectedProject
-              })}
+              })
+                : `${formatDayLabel(range.startDate, i18n.language)} – ${formatDayLabel(range.endDate, i18n.language)} · ${filters.selectedProject === 'all' ? t('projects.all', { ns: 'common' }) : filters.selectedProject}`}
             </span>
           </div>
         </div>
@@ -175,33 +181,23 @@ export const TeamActivityExplorer: React.FC = () => {
             </div>
           </div>
 
-          {/* Card 4: Daily Period Selector */}
+          {/* Card 4: Shared date range filter */}
           <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 flex flex-col justify-between">
             <div className="text-[11px] font-medium text-slate-500">{t('filters.periodLabel')}</div>
-            <div className="flex items-center gap-1.5 mt-1">
-              <button
-                onClick={() => setDays(7)}
-                className={`px-2.5 py-0.5 rounded text-xs font-semibold border transition-all ${
-                  days === 7
-                    ? 'border-brand-500 bg-white dark:bg-slate-800 text-brand-600 dark:text-brand-400 shadow-xs'
-                    : 'border-transparent text-slate-500 hover:text-slate-900'
-                }`}
-              >
-                {t('summary.period7d')}
-              </button>
-              <button
-                onClick={() => setDays(30)}
-                className={`px-2.5 py-0.5 rounded text-xs font-semibold border transition-all ${
-                  days === 30
-                    ? 'border-brand-500 bg-white dark:bg-slate-800 text-brand-600 dark:text-brand-400 shadow-xs'
-                    : 'border-transparent text-slate-500 hover:text-slate-900'
-                }`}
-              >
-                {t('summary.period30d')}
-              </button>
+            <div className="mt-1">
+              <DateRangeFilter
+                value={range}
+                onApply={next => { setRange(next); setCommitPage(1); }}
+              />
             </div>
           </div>
         </div>
+
+        {summary?.cacheStatus && summary.cacheStatus.complete === false && (
+          <div role="status" data-testid="team-partial-notice" className="px-3 py-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-900 dark:text-amber-200">
+            {t('partial.message')}
+          </div>
+        )}
 
         {/* Daily Activity Trend Bar Chart */}
         {isReady && summary.dailyStats?.length > 0 && (
@@ -209,7 +205,7 @@ export const TeamActivityExplorer: React.FC = () => {
             <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-300">
               <span className="flex items-center gap-1.5">
                 <TrendingUp className="w-3.5 h-3.5 text-brand-500" />
-                <span>{t('sections.activityTrend')} ({days} {days === 7 ? 'gün' : 'gün'})</span>
+                <span>{t('sections.activityTrend')} ({dayCount} gün)</span>
               </span>
               <div className="flex items-center gap-3 text-[11px]">
                 <div className="flex items-center gap-1.5">
@@ -249,7 +245,7 @@ export const TeamActivityExplorer: React.FC = () => {
                         <div className="w-full h-0.5 bg-slate-200 dark:bg-slate-800 rounded-full" />
                       )}
                     </div>
-                    {i % (days === 30 ? 5 : 1) === 0 && (
+                    {i % chartLabelStep(dayCount) === 0 && (
                       <span className="text-[9px] text-slate-400 whitespace-nowrap">{d.date}</span>
                     )}
                   </div>

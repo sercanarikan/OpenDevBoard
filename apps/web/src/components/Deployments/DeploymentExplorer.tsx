@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/useApp';
 import type { DeploymentEnvironmentStat, DeploymentRecord, DeploymentSummary } from '../../types/paging';
+import { DateRangeFilter } from '../Common/DateRangeFilter';
+import { DEFAULT_DATE_RANGE_PRESET, chartLabelStep, presetSelection, selectionDayCount, selectionKey, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
 import { DeploymentInspector } from './DeploymentInspector';
 
 const emptyEnvironments: DeploymentEnvironmentStat[] = [];
@@ -32,7 +34,9 @@ export const DeploymentExplorer: React.FC = () => {
     setSelectedDeployment
   } = useApp();
 
-  const [days, setDays] = useState<number>(30);
+  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
+  const rangeQuery = useMemo(() => toApiRange(range), [range]);
+  const dayCount = selectionDayCount(range);
   const [envFilter, setEnvFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -48,7 +52,7 @@ export const DeploymentExplorer: React.FC = () => {
 
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [selectionScope, setSelectionScope] = useState<string | null>(null);
-  const scope = JSON.stringify([filters.selectedProject, envFilter, statusFilter, debouncedSearch, days, page]);
+  const scope = JSON.stringify([filters.selectedProject, envFilter, statusFilter, debouncedSearch, selectionKey(range), page]);
   // A selection belongs to one continuous visit to a scope, not future visits to the same scope.
   if (selectionScope !== null && selectionScope !== scope) {
     setSelectionScope(null);
@@ -90,7 +94,7 @@ export const DeploymentExplorer: React.FC = () => {
       environment: envFilter,
       status: statusFilter,
       search: debouncedSearch,
-      days,
+      ...rangeQuery,
       limit: pageSize,
       offset
     }, ctrl.signal).then(res => {
@@ -111,7 +115,7 @@ export const DeploymentExplorer: React.FC = () => {
       }));
     });
     return () => ctrl.abort();
-  }, [api, filters.selectedProject, envFilter, statusFilter, debouncedSearch, days, page, request, scope]);
+  }, [api, filters.selectedProject, envFilter, statusFilter, debouncedSearch, rangeQuery, page, request, scope]);
 
   // Local scope controls invalidate the shared selection at the event that changes scope.
   const invalidateSelection = () => {
@@ -282,7 +286,7 @@ export const DeploymentExplorer: React.FC = () => {
         {isReady && analyticsView === 'trend' && summary.dailyStats?.length > 0 && (
           <div data-testid="deployment-trend-chart" className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/40 space-y-2">
             <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-300">
-              <span>{t('sections.trend')} ({days} {days === 7 ? 'gün' : 'gün'})</span>
+              <span>{t('sections.trend')} ({dayCount} {'gün'})</span>
               <div className="flex items-center gap-3 text-[11px]">
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500" />
@@ -321,7 +325,7 @@ export const DeploymentExplorer: React.FC = () => {
                         <div className="w-full h-0.5 bg-slate-200 dark:bg-slate-800 rounded-full" />
                       )}
                     </div>
-                    {i % (days === 30 ? 5 : 1) === 0 && (
+                    {i % chartLabelStep(dayCount) === 0 && (
                       <span className="text-[9px] text-slate-400 whitespace-nowrap">{d.date}</span>
                     )}
                   </div>
@@ -469,18 +473,11 @@ export const DeploymentExplorer: React.FC = () => {
             </button>
           </div>
 
-          {/* Period Selector (7d vs 30d) */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1 bg-slate-50 dark:bg-slate-900">
-            <span className="text-[11px]">{t('filters.periodLabel')}</span>
-            <select
-              value={days}
-              onChange={e => { if (days !== Number(e.target.value) || page !== 1) invalidateSelection(); setDays(Number(e.target.value)); setPage(1); }}
-              className="bg-transparent font-semibold text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
-            >
-              <option value={7}>{t('summary.period7d')}</option>
-              <option value={30}>{t('summary.period30d')}</option>
-            </select>
-          </div>
+          {/* Shared date range filter (presets + calendar range, applied on Apply) */}
+          <DateRangeFilter
+            value={range}
+            onApply={next => { invalidateSelection(); setRange(next); setPage(1); }}
+          />
         </div>
 
         {/* Right Search and Refresh */}

@@ -26,7 +26,7 @@ Sayfalama, arama, proje, ortam ve durum filtreleme destekleyen dağıtım kayıt
 - `environment` (string, opsiyonel): Azure DevOps ortam adı (ör. `Production`, `Staging`, `Test` veya yapılandırılmış özel bir ad).
 - `status` (string, opsiyonel): `succeeded`, `failed`, `inProgress`, `canceled`, `all`.
 - `search` (string, opsiyonel): Release adı, tanım veya ortamda arama.
-- `days` (integer, varsayılan: 30): Zaman aralığı (7 veya 30 gün).
+- `days` (integer, varsayılan: 30): Zaman aralığı (7 veya 30 gün). Alternatif olarak `startDate` ve `endDate` (`YYYY-MM-DD`, UTC takvim günleri, ikisi birlikte) verilebilir; ayrıntılar için [Tarih aralığı filtresi](date-range-filter.md).
 - `limit` (integer, varsayılan: 25, maks: 100): Sayfa boyutu.
 - `offset` (integer, varsayılan: 0): Sayfa ofseti.
 - `refresh` (boolean, opsiyonel): `true` verilirse önbellek atlanır ve VSRM API'den taze veri çekilir.

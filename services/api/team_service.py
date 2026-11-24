@@ -14,10 +14,14 @@ from concurrent.futures import ThreadPoolExecutor
 import azure_http
 import feature_context
 import persistence
+from date_window import DateWindow, rolling_window
 
 logger = logging.getLogger("team_service")
 
 CACHE_TTL_SECONDS = 300  # 5 minutes
+# Calendar fetches page explicitly; a page cap that is reached marks the result partial instead of complete.
+CALENDAR_PAGE_SIZE = 100
+CALENDAR_MAX_PAGES = 20
 
 
 def _utcnow():
@@ -154,8 +158,15 @@ def build_fixture_team_activity() -> Dict[str, Any]:
 # Live Sync & SQLite Caching
 # -----------------------------------------------------------------------------
 
-def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refresh: bool = False) -> Dict[str, Any]:
-    """Synchronizes Git commits and PR activities across all repositories."""
+def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refresh: bool = False,
+                            window: Optional[DateWindow] = None) -> Dict[str, Any]:
+    """Synchronizes Git commits and PR activities across all repositories.
+
+    A calendar ``window`` bounds the upstream queries to ``[window.start, window.end)``. It never uses the rolling
+    cache shortcut, never writes the cache-state row and never deletes cached rows.
+    """
+    if window is not None and window.is_calendar:
+        return _sync_calendar_team_activity(org_url, pat, window)
     if feature_context.is_fixture_mode():
         return {**build_fixture_team_activity(), "cacheStatus": {
             "outcome": "complete", "complete": True, "stale": False,
@@ -367,51 +378,231 @@ def sync_live_team_activity(org_url: str, pat: str, days: int = 30, force_refres
     }
 
 
+def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> Dict[str, Any]:
+    days = window.days
+    if feature_context.is_fixture_mode():
+        return {**build_fixture_team_activity(), "cacheStatus": {
+            "outcome": "complete", "complete": True, "stale": False,
+            "requestedDays": days, "successfulProjects": []
+        }}
+
+    now_iso = _utcnow().isoformat()
+    start_iso = window.iso_start()
+    end_iso = window.iso_end()
+    repos = []
+    repo_fetch_ok = False
+    headers = feature_context.get_devops_headers(pat)
+    try:
+        res = azure_http.get(f"{org_url.rstrip('/')}/_apis/git/repositories?api-version=7.1", headers=headers, timeout=15)
+        if res.status_code == 200:
+            repos = res.json().get("value", [])
+            repo_fetch_ok = True
+        else:
+            logger.warning("Failed to fetch repositories for team activity: HTTP %s", res.status_code)
+    except Exception as e:
+        logger.warning("Failed to fetch repositories for team activity: %s", e)
+
+    repos = [r for r in repos if r.get("isDisabled") is not True]
+    project_names = {r.get("project", {}).get("name", "") for r in repos if r.get("project", {}).get("name", "")}
+    failed_projects = set()
+    results: Dict[str, List[Dict[str, Any]]] = {}
+
+    def fetch_repo_commits(repo):
+        """Returns (project, succeeded, rows). Rows are true records fetched before any failure; ``succeeded`` is
+        True only when every page was read and the last page was short (no page cap, error or timeout)."""
+        project_name = repo.get("project", {}).get("name", "")
+        repo_id = repo.get("id")
+        repo_name = repo.get("name")
+        if not project_name or not repo_id:
+            return project_name, False, []
+        raw: List[Dict[str, Any]] = []
+        pages_complete = False
+        try:
+            for page_index in range(CALENDAR_MAX_PAGES):
+                url = (f"{org_url.rstrip('/')}/{project_name}/_apis/git/repositories/{repo_id}/commits"
+                       f"?searchCriteria.fromDate={start_iso}&searchCriteria.toDate={end_iso}"
+                       f"&$top={CALENDAR_PAGE_SIZE}&$skip={page_index * CALENDAR_PAGE_SIZE}&api-version=7.1")
+                r = azure_http.get(url, headers=headers, timeout=8)
+                if r.status_code != 200:
+                    logger.warning("Failed to fetch team commits for project %s: HTTP %s", project_name, r.status_code)
+                    break
+                page = r.json().get("value", [])
+                raw.extend(page)
+                if len(page) < CALENDAR_PAGE_SIZE:
+                    pages_complete = True
+                    break
+            else:
+                logger.warning("Calendar commit pagination cap reached for project %s; result is partial", project_name)
+        except Exception:
+            logger.warning("Failed to fetch team commits for project %s", project_name)
+        out = []
+        for c in raw:
+            c_id = c.get("commitId", "")
+            author_obj = c.get("author", {})
+            date_str = author_obj.get("date") or ""
+            if not _window_matches(date_str, window):
+                continue
+            out.append({
+                "commitId": c_id,
+                "project": project_name,
+                "repository": repo_name,
+                "author": author_obj.get("name") or "Unknown",
+                "authorEmail": author_obj.get("email") or "",
+                "date": date_str,
+                "comment": (c.get("comment") or "").strip(),
+                "url": f"{org_url.rstrip('/')}/{project_name}/_git/{repo_name}/commit/{c_id}"
+            })
+        return project_name, pages_complete, out
+
+    if repo_fetch_ok:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for project_name, succeeded, rows in executor.map(fetch_repo_commits, repos):
+                results.setdefault(project_name, []).extend(rows)
+                if not succeeded:
+                    failed_projects.add(project_name)
+
+    successful_projects = sorted(p for p in project_names if p not in failed_projects) if repo_fetch_ok else []
+    # Records from failed projects are still true records and are kept; only completeness is affected.
+    fresh_commits = {(c["commitId"], c["repository"]): c
+                     for rows in results.values() for c in rows}.values()
+    complete = repo_fetch_ok and not failed_projects
+    outcome = "complete" if complete else ("partial" if (successful_projects or fresh_commits) else "failed")
+
+    # Upsert only true fetched records. No deletes and no cache-state write: a bounded fetch must not
+    # claim rolling coverage or remove cached rows outside (or inside) its window.
+    with persistence.db_lock, persistence.get_db_connection() as conn:
+        conn.executemany('''
+            INSERT OR REPLACE INTO team_commits (
+                commit_id, project, repository, author_name, author_email,
+                date, comment, change_counts, url, last_synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', [(
+            c["commitId"], c["project"], c["repository"], c["author"], c["authorEmail"],
+            c["date"], c["comment"], "", c["url"], now_iso
+        ) for c in fresh_commits])
+        cached = [_row_to_commit_dict(row) for row in conn.execute(
+            "SELECT * FROM team_commits ORDER BY date DESC"
+        ).fetchall()]
+
+    commits = [c for c in cached if _window_matches(c.get("date"), window)]
+    pr_report: Dict[str, Any] = {}
+    prs = _load_live_prs_summary_only(org_url, pat, days, window=window, report=pr_report)
+    if pr_report.get("incomplete"):
+        complete = False
+        outcome = "partial"
+    return {
+        "commits": commits,
+        "pullRequests": prs,
+        "cacheStatus": {
+            "outcome": outcome,
+            "complete": complete,
+            "stale": not complete,
+            "requestedDays": days,
+            "successfulProjects": successful_projects
+        }
+    }
+
+
+def _window_matches(date_str: Optional[str], window: DateWindow) -> bool:
+    """Window membership for a timestamp string. Rolling keeps the historical lower-bound-only semantics."""
+    if not window.is_calendar:
+        return _is_within_window(date_str, window.start)
+    if not date_str:
+        return False
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return window.contains(dt)
+    except Exception:
+        return False
+
+
 def _filter_commits_to_window(commits: List[Dict[str, Any]], now: datetime, days: int) -> List[Dict[str, Any]]:
     min_date = now - timedelta(days=days)
     return [commit for commit in commits if _is_within_window(commit.get("date"), min_date)]
 
 
-def _load_live_prs_summary_only(org_url: str, pat: str, days: int) -> List[Dict[str, Any]]:
-    """Fetches PRs across projects for team activity aggregation."""
+def _load_live_prs_summary_only(org_url: str, pat: str, days: int, window: Optional[DateWindow] = None,
+                                report: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Fetches PRs across projects for team activity aggregation.
+
+    For calendar windows, ``report["incomplete"]`` is set when the result does not cover the whole window: the
+    page cap was reached, a page request failed or timed out, or the response was not HTTP 200. Records from
+    pages that succeeded are still returned and aggregated.
+    """
     headers = feature_context.get_devops_headers(pat)
     now_utc = _utcnow()
     start_utc = now_utc - timedelta(days=days)
+    calendar = window is not None and window.is_calendar
+
+    base = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=200&api-version=7.1"
+    if calendar:
+        # queryTimeRangeType=created matches the calendar membership rule (creation date).
+        base += (f"&searchCriteria.queryTimeRangeType=created"
+                 f"&searchCriteria.minTime={window.iso_start()}&searchCriteria.maxTime={window.iso_end()}")
+    items: List[Dict[str, Any]] = []
+    max_pages = CALENDAR_MAX_PAGES if calendar else 1
+    pages_complete = False
+    failed = False
+    for page_index in range(max_pages):
+        url = base + (f"&$skip={page_index * 200}" if page_index else "")
+        try:
+            res = azure_http.get(url, headers=headers, timeout=12)
+        except Exception as e:
+            logger.warning("Failed to query live PRs for team activity: %s", e)
+            failed = True
+            break
+        if res.status_code != 200:
+            logger.warning("Failed to query live PRs for team activity: HTTP %s", res.status_code)
+            failed = True
+            break
+        try:
+            page = res.json().get("value", [])
+        except Exception:
+            failed = True
+            break
+        items.extend(page)
+        if len(page) < 200:
+            pages_complete = True
+            break
+    if calendar and report is not None:
+        report["incomplete"] = failed or not pages_complete
+        if report["incomplete"]:
+            logger.warning("Calendar PR fetch incomplete; team activity result is partial")
 
     prs = []
-    try:
-        url = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=200&api-version=7.1"
-        res = azure_http.get(url, headers=headers, timeout=12)
-        if res.status_code == 200:
-            for pr in res.json().get("value", []):
-                c_date = pr.get("creationDate", "")
-                if c_date:
-                    try:
-                        dt = datetime.fromisoformat(c_date.replace("Z", "+00:00")).replace(tzinfo=None)
-                        if dt < start_utc:
-                            continue
-                    except Exception:
-                        pass
-                author = pr.get("createdBy", {}).get("displayName") or "Unknown"
-                reviewers = [
-                    r.get("displayName") for r in pr.get("reviewers", [])
-                    if r.get("displayName") and r.get("vote", 0) != 0
-                ]
-                proj = pr.get("repository", {}).get("project", {}).get("name") or "General"
-                repo = pr.get("repository", {}).get("name") or "repo"
-                prs.append({
-                    "id": pr.get("pullRequestId"),
-                    "project": proj,
-                    "repository": repo,
-                    "title": pr.get("title") or "PR",
-                    "author": author,
-                    "reviewers": reviewers,
-                    "status": pr.get("status") or "active",
-                    "creationDate": c_date,
-                    "url": f"{org_url.rstrip('/')}/{proj}/_git/{repo}/pullrequest/{pr.get('pullRequestId')}"
-                })
-    except Exception as e:
-        logger.warning("Failed to query live PRs for team activity: %s", e)
+    for pr in items:
+        c_date = pr.get("creationDate", "")
+        if calendar and not _window_matches(c_date, window):
+            continue
+        if c_date and not calendar:
+            # Rolling lower bound only. A calendar window applies its own [start, end) membership above;
+            # using now - days here would drop PRs from earlier calendar ranges.
+            try:
+                dt = datetime.fromisoformat(c_date.replace("Z", "+00:00")).replace(tzinfo=None)
+                if dt < start_utc:
+                    continue
+            except Exception:
+                pass
+        author = pr.get("createdBy", {}).get("displayName") or "Unknown"
+        reviewers = [
+            r.get("displayName") for r in pr.get("reviewers", [])
+            if r.get("displayName") and r.get("vote", 0) != 0
+        ]
+        proj = pr.get("repository", {}).get("project", {}).get("name") or "General"
+        repo = pr.get("repository", {}).get("name") or "repo"
+        prs.append({
+            "id": pr.get("pullRequestId"),
+            "project": proj,
+            "repository": repo,
+            "title": pr.get("title") or "PR",
+            "author": author,
+            "reviewers": reviewers,
+            "status": pr.get("status") or "active",
+            "creationDate": c_date,
+            "url": f"{org_url.rstrip('/')}/{proj}/_git/{repo}/pullrequest/{pr.get('pullRequestId')}"
+        })
     return prs
 
 
@@ -432,23 +623,23 @@ def _row_to_commit_dict(row: sqlite3.Row) -> Dict[str, Any]:
 # Metrics and Query Aggregations
 # -----------------------------------------------------------------------------
 
-def compute_team_summary(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]], days: int = 30, project: Optional[str] = None, repository: Optional[str] = None) -> Dict[str, Any]:
+def compute_team_summary(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]], days: int = 30, project: Optional[str] = None, repository: Optional[str] = None, window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Computes overall team metrics, daily activity trend, contributor stats and repository breakdown."""
     now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    window = window or rolling_window(days, now_utc)
 
     proj_clean = (project or "").strip().lower()
     repo_clean = (repository or "").strip().lower()
 
     filtered_commits = [
         c for c in commits
-        if _is_within_window(c.get("date"), min_date)
+        if _window_matches(c.get("date"), window)
         and (not proj_clean or proj_clean == "all" or c.get("project", "").lower() == proj_clean)
         and (not repo_clean or repo_clean == "all" or c.get("repository", "").lower() == repo_clean)
     ]
     filtered_prs = [
         p for p in prs
-        if _is_within_window(p.get("creationDate"), min_date)
+        if _window_matches(p.get("creationDate"), window)
         and (not proj_clean or proj_clean == "all" or p.get("project", "").lower() == proj_clean)
         and (not repo_clean or repo_clean == "all" or p.get("repository", "").lower() == repo_clean)
     ]
@@ -458,10 +649,9 @@ def compute_team_summary(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]
 
     # 1. Daily Activity Trend
     daily_map = {}
-    for i in range(days - 1, -1, -1):
-        d_key = (now_utc - timedelta(days=i)).strftime('%Y-%m-%d')
+    for d_key, d_label in window.day_keys(now_utc):
         daily_map[d_key] = {
-            "date": (now_utc - timedelta(days=i)).strftime('%d %b'),
+            "date": d_label,
             "commits": 0,
             "prs": 0,
             "total": 0
@@ -536,7 +726,7 @@ def compute_team_summary(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]
     repositories = compute_repository_activity(filtered_commits, filtered_prs, project=project)
 
     return {
-        "periodDays": days,
+        "periodDays": window.days,
         "project": project or "all",
         "repository": repository or "all",
         "totalCommits": total_commits,
@@ -593,7 +783,8 @@ def compute_repository_activity(commits: List[Dict[str, Any]], prs: List[Dict[st
     return sorted(repo_map.values(), key=lambda r: (r["commitCount"] + r["prCount"]), reverse=True)
 
 
-def query_contributors(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
+def query_contributors(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]], params: Dict[str, Any],
+                       window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Filters, sorts, and paginates contributors."""
     days = max(1, int(params.get("days") or 30))
     limit = max(1, min(100, int(params.get("limit") or 25)))
@@ -604,7 +795,7 @@ def query_contributors(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]],
     project = params.get("project")
     repository = params.get("repository")
 
-    summary = compute_team_summary(commits, prs, days=days, project=project, repository=repository)
+    summary = compute_team_summary(commits, prs, days=days, project=project, repository=repository, window=window)
     items = summary["contributors"]
 
     if search:
@@ -635,7 +826,7 @@ def query_contributors(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]],
     }
 
 
-def query_commits(commits: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
+def query_commits(commits: List[Dict[str, Any]], params: Dict[str, Any], window: Optional[DateWindow] = None) -> Dict[str, Any]:
     """Filters, searches, and paginates commits."""
     project = (params.get("project") or "").strip().lower()
     repository = (params.get("repository") or "").strip().lower()
@@ -645,12 +836,11 @@ def query_commits(commits: List[Dict[str, Any]], params: Dict[str, Any]) -> Dict
     limit = max(1, min(100, int(params.get("limit") or 25)))
     offset = max(0, int(params.get("offset") or 0))
 
-    now_utc = _utcnow()
-    min_date = now_utc - timedelta(days=days)
+    window = window or rolling_window(days, _utcnow())
 
     filtered = []
     for c in commits:
-        if not _is_within_window(c.get("date"), min_date):
+        if not _window_matches(c.get("date"), window):
             continue
         if project and project != "all" and c["project"].lower() != project:
             continue

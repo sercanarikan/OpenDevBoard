@@ -35,7 +35,7 @@ Sayfalama, arama, proje, durum ve sonuç filtreleme destekleyen pipeline çalı�
 - `result` (string, opsiyonel): `succeeded`, `failed`, `partiallySucceeded`, `canceled`, `all`.
 - `branch` (string, opsiyonel): Kaynak dala göre filtreleme (ör. `main`, `dev`).
 - `search` (string, opsiyonel): Pipeline adı, dal, ID veya tetikleyen kullanıcıda arama.
-- `days` (integer, varsayılan: 30): Zaman aralığı (7 veya 30 gün).
+- `days` (integer, varsayılan: 30): Zaman aralığı (7 veya 30 gün). Alternatif olarak `startDate` ve `endDate` (`YYYY-MM-DD`, UTC takvim günleri, ikisi birlikte) verilebilir; ayrıntılar için [Tarih aralığı filtresi](date-range-filter.md).
 - `limit` (integer, varsayılan: 25, maks: 100): Sayfa boyutu.
 - `offset` (integer, varsayılan: 0): Sayfa ofseti.
 - `refresh` (boolean, opsiyonel): `true` verilirse önbellek atlanır ve canlı API'den taze veri çekilir.
