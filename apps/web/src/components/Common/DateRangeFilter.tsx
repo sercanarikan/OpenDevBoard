@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CalendarDays, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import {
   DATE_RANGE_MAX_AGE_DAYS,
   DATE_RANGE_MAX_SPAN_DAYS,
@@ -51,16 +52,46 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
   const [viewMonth, setViewMonth] = useState(() => monthStart(utcTodayKey()));
   const [showCustom, setShowCustom] = useState(value.kind === 'calendar' && value.preset === 'custom');
   const [focusDay, setFocusDay] = useState<string | null>(null);
-  // Horizontal offset that keeps the panel inside the viewport on narrow screens (measured on open).
-  const [panelLeft, setPanelLeft] = useState(0);
+  // The panel is portalled to document.body (so no ancestor stacking context can hide it) and positioned from the
+  // trigger rectangle. Below 640px it becomes a bottom sheet so the calendar and Apply/Cancel stay reachable.
+  type Placement =
+    | { mode: 'sheet' }
+    | { mode: 'popover'; left: number; width: number; top?: number; bottom?: number; maxHeight: number };
+  const [placement, setPlacement] = useState<Placement>({ mode: 'sheet' });
+
+  const computePlacement = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.visualViewport?.height ?? window.innerHeight;
+    if (vw < 640) {
+      setPlacement({ mode: 'sheet' });
+      return;
+    }
+    const gap = 8;
+    const width = Math.min(vw - 32, 336);
+    const left = Math.min(Math.max(16, rect.left), vw - width - 16);
+    const spaceBelow = vh - rect.bottom - 16 - gap;
+    const spaceAbove = rect.top - 16 - gap;
+    const placeBelow = spaceBelow >= 320 || spaceBelow >= spaceAbove;
+    const maxHeight = Math.max(240, placeBelow ? spaceBelow : spaceAbove);
+    setPlacement(placeBelow
+      ? { mode: 'popover', left, width, top: rect.bottom + gap, maxHeight }
+      : { mode: 'popover', left, width, bottom: vh - rect.top + gap, maxHeight });
+  };
 
   useLayoutEffect(() => {
-    if (!open || !triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const viewport = window.innerWidth;
-    const width = Math.min(viewport - 32, 336);
-    const target = Math.min(Math.max(16, rect.left), viewport - width - 16);
-    setPanelLeft(target - rect.left);
+    if (!open) return;
+    computePlacement();
+    window.addEventListener('resize', computePlacement);
+    window.addEventListener('scroll', computePlacement, true);
+    return () => {
+      window.removeEventListener('resize', computePlacement);
+      window.removeEventListener('scroll', computePlacement, true);
+    };
+    // computePlacement only reads refs and sets state; it is intentionally recreated per open cycle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Move focus into the dialog on open so keyboard users land on the current preset.
@@ -229,7 +260,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
         {rangeText && <span className="text-slate-500 dark:text-slate-400 whitespace-nowrap">{rangeText}</span>}
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
           ref={panelRef}
           id={panelId}
@@ -237,8 +268,17 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
           aria-modal="false"
           aria-labelledby={titleId}
           data-testid="date-range-panel"
-          style={{ left: panelLeft, width: "min(calc(100vw - 2rem), 336px)" }}
-          className="absolute top-full mt-2 z-50 flex flex-col gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-3"
+          data-placement={placement.mode}
+          style={placement.mode === 'sheet' ? undefined : {
+            left: placement.left,
+            width: placement.width,
+            top: placement.top,
+            bottom: placement.bottom,
+            maxHeight: placement.maxHeight,
+          }}
+          className={`fixed z-[100] flex flex-col gap-3 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-3 ${
+            placement.mode === 'sheet' ? 'inset-x-2 bottom-2 max-h-[calc(100dvh-16px)] rounded-t-2xl' : ''
+          }`}
         >
           <h2 id={titleId} className="sr-only">{t('title')}</h2>
 
@@ -363,7 +403,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
               )}
               <p className="text-xs text-slate-500 dark:text-slate-400">{t('hintUtc')}</p>
 
-              <div className="flex justify-end gap-2 pt-1">
+              <div className="sticky bottom-0 -mx-3 -mb-3 mt-1 flex justify-end gap-2 border-t border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
                 <button
                   type="button"
                   onClick={() => closePanel(true)}
@@ -383,7 +423,8 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
               </div>
             </div>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
