@@ -33,6 +33,8 @@ Geçersiz aralıklar HTTP 400 ile reddedilir ve mesaj döner.
 - **Özel aralık:** Takvimde önce başlangıç, sonra bitiş gününe tıklanır. Değişiklik **Uygula** tuşuna basılmadan API'ye gönderilmez; **İptal** taslağı atar.
 - **Seçilemeyen günler:** Bugünden sonraki günler ve 90 gün sınırını aşan günler devre dışıdır. Hata durumunda (ör. geçersiz aralık) Uygula tuşu kapalı kalır ve nedeni bir uyarı olarak gösterilir.
 - **Klavye:** Tetikleyici Enter/Space ile açılır; takvimde ok tuşları gün arasında gezinir; Escape paneli kapatıp odağı tetikleyiciye geri verir. Presetler `radiogroup` / `radio` rolüyle işaretlidir; gün düğmeleri `aria-label` ile tam tarihi ve `aria-pressed` ile seçimi bildirir.
+- **Yerleşim:** Panel `document.body` içine taşınır ve tetikleyicinin konumuna göre yerleşir. Alan fazla olan tarafa açılır ve yüksekliği ekranla sınırlanır; içerik panel içinde kaydırılır. 640 px altında panel alttan açılan bir sheet olur; Apply/Cancel satırı sabittir. Bu, 360 ve 390 px genişliklerde takvimin tamamına ve düğmelere erişimi sağlar.
+- **Partial veri:** Takvim yanıtında `cacheStatus.complete=false` olduğunda hem My History hem Team Activity ekranı üstte bir uyarı gösterir; toplamlar ve grafikler eksik olabilir.
 - **Tema ve yoğunluk:** Mevcut `brand` token'ları ve light/dark sınıfları kullanılır; yeni tema değişkeni eklenmez.
 - **Dil:** Tüm metinler `dateRange` i18n namespace'indedir (tr varsayılan, en desteklenir). Tarih etiketleri aktif dile göre `Intl` ile biçimlenir.
 - **Durum sıfırlama:** Aralık değiştiğinde sayfa 1'e döner ve seçili kayıt (inspector) temizlenir. Önceki istek iptal edilir.
