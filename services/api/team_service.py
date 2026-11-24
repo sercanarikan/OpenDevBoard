@@ -405,71 +405,68 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
     repos = [r for r in repos if r.get("isDisabled") is not True]
     project_names = {r.get("project", {}).get("name", "") for r in repos if r.get("project", {}).get("name", "")}
     failed_projects = set()
-    truncated_projects: set = set()
     results: Dict[str, List[Dict[str, Any]]] = {}
 
     def fetch_repo_commits(repo):
+        """Returns (project, succeeded, rows). Rows are true records fetched before any failure; ``succeeded`` is
+        True only when every page was read and the last page was short (no page cap, error or timeout)."""
         project_name = repo.get("project", {}).get("name", "")
         repo_id = repo.get("id")
         repo_name = repo.get("name")
         if not project_name or not repo_id:
             return project_name, False, []
+        raw: List[Dict[str, Any]] = []
+        pages_complete = False
         try:
-            raw: List[Dict[str, Any]] = []
-            pages_complete = False
-            r = None
             for page_index in range(CALENDAR_MAX_PAGES):
                 url = (f"{org_url.rstrip('/')}/{project_name}/_apis/git/repositories/{repo_id}/commits"
                        f"?searchCriteria.fromDate={start_iso}&searchCriteria.toDate={end_iso}"
                        f"&$top={CALENDAR_PAGE_SIZE}&$skip={page_index * CALENDAR_PAGE_SIZE}&api-version=7.1")
                 r = azure_http.get(url, headers=headers, timeout=8)
                 if r.status_code != 200:
+                    logger.warning("Failed to fetch team commits for project %s: HTTP %s", project_name, r.status_code)
                     break
                 page = r.json().get("value", [])
                 raw.extend(page)
                 if len(page) < CALENDAR_PAGE_SIZE:
                     pages_complete = True
                     break
-            if r.status_code == 200 and not pages_complete:
+            else:
                 logger.warning("Calendar commit pagination cap reached for project %s; result is partial", project_name)
-                truncated_projects.add(project_name)
-            if r.status_code == 200:
-                out = []
-                for c in raw:
-                    c_id = c.get("commitId", "")
-                    author_obj = c.get("author", {})
-                    date_str = author_obj.get("date") or ""
-                    if not _window_matches(date_str, window):
-                        continue
-                    out.append({
-                        "commitId": c_id,
-                        "project": project_name,
-                        "repository": repo_name,
-                        "author": author_obj.get("name") or "Unknown",
-                        "authorEmail": author_obj.get("email") or "",
-                        "date": date_str,
-                        "comment": (c.get("comment") or "").strip(),
-                        "url": f"{org_url.rstrip('/')}/{project_name}/_git/{repo_name}/commit/{c_id}"
-                    })
-                return project_name, True, out
-            logger.warning("Failed to fetch team commits for project %s: HTTP %s", project_name, r.status_code)
         except Exception:
             logger.warning("Failed to fetch team commits for project %s", project_name)
-        return project_name, False, []
+        out = []
+        for c in raw:
+            c_id = c.get("commitId", "")
+            author_obj = c.get("author", {})
+            date_str = author_obj.get("date") or ""
+            if not _window_matches(date_str, window):
+                continue
+            out.append({
+                "commitId": c_id,
+                "project": project_name,
+                "repository": repo_name,
+                "author": author_obj.get("name") or "Unknown",
+                "authorEmail": author_obj.get("email") or "",
+                "date": date_str,
+                "comment": (c.get("comment") or "").strip(),
+                "url": f"{org_url.rstrip('/')}/{project_name}/_git/{repo_name}/commit/{c_id}"
+            })
+        return project_name, pages_complete, out
 
     if repo_fetch_ok:
         with ThreadPoolExecutor(max_workers=10) as executor:
             for project_name, succeeded, rows in executor.map(fetch_repo_commits, repos):
-                if succeeded:
-                    results.setdefault(project_name, []).extend(rows)
-                else:
+                results.setdefault(project_name, []).extend(rows)
+                if not succeeded:
                     failed_projects.add(project_name)
 
     successful_projects = sorted(p for p in project_names if p not in failed_projects) if repo_fetch_ok else []
+    # Records from failed projects are still true records and are kept; only completeness is affected.
     fresh_commits = {(c["commitId"], c["repository"]): c
-                     for project in successful_projects for c in results.get(project, [])}.values()
-    complete = repo_fetch_ok and not failed_projects and not truncated_projects
-    outcome = "complete" if complete else ("partial" if successful_projects else "failed")
+                     for rows in results.values() for c in rows}.values()
+    complete = repo_fetch_ok and not failed_projects
+    outcome = "complete" if complete else ("partial" if (successful_projects or fresh_commits) else "failed")
 
     # Upsert only true fetched records. No deletes and no cache-state write: a bounded fetch must not
     # claim rolling coverage or remove cached rows outside (or inside) its window.
@@ -490,7 +487,7 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
     commits = [c for c in cached if _window_matches(c.get("date"), window)]
     pr_report: Dict[str, Any] = {}
     prs = _load_live_prs_summary_only(org_url, pat, days, window=window, report=pr_report)
-    if pr_report.get("truncated"):
+    if pr_report.get("incomplete"):
         complete = False
         outcome = "partial"
     return {
@@ -530,70 +527,82 @@ def _load_live_prs_summary_only(org_url: str, pat: str, days: int, window: Optio
                                 report: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Fetches PRs across projects for team activity aggregation.
 
-    For calendar windows, ``report["truncated"]`` is set when the page cap was reached before a short page.
+    For calendar windows, ``report["incomplete"]`` is set when the result does not cover the whole window: the
+    page cap was reached, a page request failed or timed out, or the response was not HTTP 200. Records from
+    pages that succeeded are still returned and aggregated.
     """
     headers = feature_context.get_devops_headers(pat)
     now_utc = _utcnow()
     start_utc = now_utc - timedelta(days=days)
     calendar = window is not None and window.is_calendar
 
-    prs = []
-    try:
-        base = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=200&api-version=7.1"
-        if calendar:
-            # queryTimeRangeType=created matches the calendar membership rule (creation date).
-            base += (f"&searchCriteria.queryTimeRangeType=created"
-                     f"&searchCriteria.minTime={window.iso_start()}&searchCriteria.maxTime={window.iso_end()}")
-        items: List[Dict[str, Any]] = []
-        res = None
-        max_pages = CALENDAR_MAX_PAGES if calendar else 1
-        pages_complete = False
-        for page_index in range(max_pages):
-            url = base + (f"&$skip={page_index * 200}" if page_index else "")
+    base = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=200&api-version=7.1"
+    if calendar:
+        # queryTimeRangeType=created matches the calendar membership rule (creation date).
+        base += (f"&searchCriteria.queryTimeRangeType=created"
+                 f"&searchCriteria.minTime={window.iso_start()}&searchCriteria.maxTime={window.iso_end()}")
+    items: List[Dict[str, Any]] = []
+    max_pages = CALENDAR_MAX_PAGES if calendar else 1
+    pages_complete = False
+    failed = False
+    for page_index in range(max_pages):
+        url = base + (f"&$skip={page_index * 200}" if page_index else "")
+        try:
             res = azure_http.get(url, headers=headers, timeout=12)
-            if res.status_code != 200:
-                break
+        except Exception as e:
+            logger.warning("Failed to query live PRs for team activity: %s", e)
+            failed = True
+            break
+        if res.status_code != 200:
+            logger.warning("Failed to query live PRs for team activity: HTTP %s", res.status_code)
+            failed = True
+            break
+        try:
             page = res.json().get("value", [])
-            items.extend(page)
-            if len(page) < 200:
-                pages_complete = True
-                break
-        if calendar and report is not None:
-            report["truncated"] = res is not None and res.status_code == 200 and not pages_complete
-            if report["truncated"]:
-                logger.warning("Calendar PR pagination cap reached; team activity result is partial")
-        if res is not None and res.status_code == 200:
-            for pr in items:
-                c_date = pr.get("creationDate", "")
-                if calendar and not _window_matches(c_date, window):
+        except Exception:
+            failed = True
+            break
+        items.extend(page)
+        if len(page) < 200:
+            pages_complete = True
+            break
+    if calendar and report is not None:
+        report["incomplete"] = failed or not pages_complete
+        if report["incomplete"]:
+            logger.warning("Calendar PR fetch incomplete; team activity result is partial")
+
+    prs = []
+    for pr in items:
+        c_date = pr.get("creationDate", "")
+        if calendar and not _window_matches(c_date, window):
+            continue
+        if c_date and not calendar:
+            # Rolling lower bound only. A calendar window applies its own [start, end) membership above;
+            # using now - days here would drop PRs from earlier calendar ranges.
+            try:
+                dt = datetime.fromisoformat(c_date.replace("Z", "+00:00")).replace(tzinfo=None)
+                if dt < start_utc:
                     continue
-                if c_date:
-                    try:
-                        dt = datetime.fromisoformat(c_date.replace("Z", "+00:00")).replace(tzinfo=None)
-                        if dt < start_utc:
-                            continue
-                    except Exception:
-                        pass
-                author = pr.get("createdBy", {}).get("displayName") or "Unknown"
-                reviewers = [
-                    r.get("displayName") for r in pr.get("reviewers", [])
-                    if r.get("displayName") and r.get("vote", 0) != 0
-                ]
-                proj = pr.get("repository", {}).get("project", {}).get("name") or "General"
-                repo = pr.get("repository", {}).get("name") or "repo"
-                prs.append({
-                    "id": pr.get("pullRequestId"),
-                    "project": proj,
-                    "repository": repo,
-                    "title": pr.get("title") or "PR",
-                    "author": author,
-                    "reviewers": reviewers,
-                    "status": pr.get("status") or "active",
-                    "creationDate": c_date,
-                    "url": f"{org_url.rstrip('/')}/{proj}/_git/{repo}/pullrequest/{pr.get('pullRequestId')}"
-                })
-    except Exception as e:
-        logger.warning("Failed to query live PRs for team activity: %s", e)
+            except Exception:
+                pass
+        author = pr.get("createdBy", {}).get("displayName") or "Unknown"
+        reviewers = [
+            r.get("displayName") for r in pr.get("reviewers", [])
+            if r.get("displayName") and r.get("vote", 0) != 0
+        ]
+        proj = pr.get("repository", {}).get("project", {}).get("name") or "General"
+        repo = pr.get("repository", {}).get("name") or "repo"
+        prs.append({
+            "id": pr.get("pullRequestId"),
+            "project": proj,
+            "repository": repo,
+            "title": pr.get("title") or "PR",
+            "author": author,
+            "reviewers": reviewers,
+            "status": pr.get("status") or "active",
+            "creationDate": c_date,
+            "url": f"{org_url.rstrip('/')}/{proj}/_git/{repo}/pullrequest/{pr.get('pullRequestId')}"
+        })
     return prs
 
 

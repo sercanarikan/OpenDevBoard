@@ -32,6 +32,11 @@ def _team_activity_cache_status(data):
     return data.get("cacheStatus", {"outcome": "complete", "complete": True, "stale": False})
 
 
+def _history_cache_status(data):
+    """Calendar My History fetches report coverage; rolling and fixture results are complete by definition."""
+    return data.get("cacheStatus", {"outcome": "complete", "complete": True, "stale": False, "issues": []})
+
+
 CORS(app)
 
 # Logging ayarları
@@ -1064,6 +1069,7 @@ def get_my_history():
             # Legacy fields
             "period_days": window.days,
             "user_name": user_name,
+            "cacheStatus": _history_cache_status(history_data),
             "summary": {
                 "total_completed_work_items": summary["completedWorkItems"],
                 "bugs_resolved": 0,
@@ -1102,7 +1108,7 @@ def get_my_history_summary():
         summary = history_service.compute_history_summary(
             data["events"], project=project, activity_type=activity_type, search=search, **_range_kwargs(window)
         )
-        return jsonify(summary), 200
+        return jsonify({**summary, "cacheStatus": _history_cache_status(data)}), 200
     except Exception as e:
         app.logger.error(f"Error in get_my_history_summary: {e}", exc_info=True)
         return jsonify({"error": str(e), "totalEvents": 0}), 500
@@ -1117,7 +1123,7 @@ def get_my_history_timeline():
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         data = _load_all_history(**_range_kwargs(window), force_refresh=force_refresh)
         res = history_service.query_history_events(data["events"], request.args, window=window)
-        return jsonify(res), 200
+        return jsonify({**res, "cacheStatus": _history_cache_status(data)}), 200
     except Exception as e:
         app.logger.error(f"Error in get_my_history_timeline: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500

@@ -224,6 +224,79 @@ class TestCalendarSync(unittest.TestCase):
             result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
         self.assertEqual(result["cacheStatus"]["outcome"], "partial")
 
+    def _pr(self, pr_id):
+        return {"pullRequestId": pr_id, "creationDate": "2028-02-01T08:00:00Z", "title": f"PR {pr_id}",
+                "createdBy": {"displayName": "Ada"}, "repository": {"name": "R", "project": {"name": "P"}}}
+
+    def _pr_get(self, second_page):
+        """First PR page is full (200 items); the second page is produced by ``second_page``."""
+        first = [self._pr(i) for i in range(200)]
+
+        def get(url, **kwargs):
+            if url.endswith("/_apis/git/repositories?api-version=7.1"):
+                return _response({"value": []})
+            if "/pullrequests" in url:
+                if "$skip=200" in url:
+                    return second_page()
+                return _response({"value": first})
+            return _response({"value": []})
+        return get
+
+    def test_calendar_pr_second_page_http_error_is_partial_and_keeps_first_page(self):
+        get = self._pr_get(lambda: _response({"message": "boom"}, status=500))
+        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
+        self.assertFalse(result["cacheStatus"]["complete"])
+        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
+        self.assertEqual(len(result["pullRequests"]), 200, "records from the successful first page must be kept")
+
+    def test_calendar_pr_second_page_timeout_is_partial_and_keeps_first_page(self):
+        def timeout():
+            raise TimeoutError("read timed out")
+        get = self._pr_get(timeout)
+        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
+        self.assertFalse(result["cacheStatus"]["complete"])
+        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
+        self.assertEqual(len(result["pullRequests"]), 200)
+
+    def test_calendar_pr_first_page_timeout_is_partial_not_complete(self):
+        def get(url, **kwargs):
+            if url.endswith("/_apis/git/repositories?api-version=7.1"):
+                return _response({"value": []})
+            raise TimeoutError("read timed out")
+        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
+        self.assertFalse(result["cacheStatus"]["complete"])
+        self.assertEqual(result["pullRequests"], [])
+
+    def test_calendar_commit_second_page_failure_is_partial_and_keeps_true_records(self):
+        first = [_commit(f"k{i}", "2028-02-01T08:00:00Z") for i in range(team_service.CALENDAR_PAGE_SIZE)]
+
+        def get(url, **kwargs):
+            if url.endswith("/_apis/git/repositories?api-version=7.1"):
+                return _response({"value": [{"id": 1, "name": "R", "project": {"name": "P"}}]})
+            if "/commits?" in url:
+                if "$skip=0" in url:
+                    return _response({"value": first})
+                return _response({"message": "boom"}, status=503)
+            return _response({"value": []})
+
+        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_load_live_prs_summary_only", return_value=[]), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
+        self.assertFalse(result["cacheStatus"]["complete"])
+        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
+        self.assertEqual(len(result["commits"]), team_service.CALENDAR_PAGE_SIZE)
+
     def test_team_rolling_sync_still_writes_state_row(self):
         get, _ = self._team_get([_commit("r1", (NOW).isoformat() + "Z")])
         with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
@@ -269,6 +342,90 @@ class TestCalendarSync(unittest.TestCase):
         self.assertNotIn("@Today", posted[0])
         self.assertIn("searchCriteria.toDate=2028-02-03T00:00:00Z", commit_urls[0])
         self.assertEqual([e["id"] for e in result["events"]], ["commit-aaaaaaaa"])
+
+    def _history_run_custom(self, pr_pages=None, commit_pages=None, wiql_refs=None, wiql_status=200):
+        """Synthetic upstream: ``pr_pages`` / ``commit_pages`` are callables returning a response for each call."""
+        pr_pages = pr_pages or (lambda index: _response({"value": []}))
+        commit_pages = commit_pages or (lambda repo_index, index: _response({"value": []}))
+        wiql_refs = wiql_refs or []
+        posted = []
+        pr_calls = []
+
+        def post(url, headers=None, json=None, timeout=None):
+            posted.append(json["query"])
+            if wiql_status != 200:
+                return _response({"message": "boom"}, status=wiql_status)
+            return _response({"workItems": wiql_refs})
+
+        def get(url, **kwargs):
+            if "/_apis/git/pullrequests" in url:
+                index = len(pr_calls)
+                pr_calls.append(url)
+                return pr_pages(index)
+            if url.endswith("/_apis/git/repositories?api-version=7.1"):
+                return _response({"value": [{"id": 1, "name": "R", "project": {"name": "P"}}]})
+            if "/commits?" in url:
+                return commit_pages(0, 0 if "$skip" not in url else int(url.split("$skip=")[1].split("&")[0]) // 50)
+            return _response({"value": []})
+
+        user = {"displayName": "Ada", "id": "u1", "uniqueName": "ada@example.test"}
+        with patch.object(history_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(history_service.requests, "post", side_effect=post), \
+                patch.object(history_service.requests, "get", side_effect=get), \
+                patch.object(history_service, "_utcnow", return_value=NOW):
+            result = history_service.sync_live_history("https://dev.azure.com/org", "unused", user, days=2, window=self.window)
+        return result, posted, pr_calls
+
+    def test_history_calendar_complete_when_every_source_succeeds(self):
+        result, _posted, _prs = self._history_run(self.window)
+        self.assertTrue(result["cacheStatus"]["complete"])
+        self.assertEqual(result["cacheStatus"]["issues"], [])
+
+    def test_history_calendar_pr_second_page_failure_is_partial_and_keeps_first_page(self):
+        full = [{"pullRequestId": i, "creationDate": "2028-02-01T08:00:00Z", "status": "completed",
+                 "createdBy": {"displayName": "Ada", "uniqueName": "ada@example.test"}, "title": f"PR {i}",
+                 "repository": {"name": "R", "project": {"name": "P"}}} for i in range(history_service.PR_PAGE_SIZE)]
+        result, _posted, prs = self._history_run_custom(
+            pr_pages=lambda index: _response({"value": full}) if index == 0 else _response({"message": "boom"}, status=500))
+        self.assertFalse(result["cacheStatus"]["complete"])
+        self.assertIn("pull-requests-incomplete", result["cacheStatus"]["issues"])
+        self.assertEqual(len(prs), 2)
+
+    def test_history_calendar_pr_timeout_is_partial(self):
+        full = [{"pullRequestId": 1, "creationDate": "2028-02-01T08:00:00Z", "status": "completed",
+                 "createdBy": {"displayName": "Ada", "uniqueName": "ada@example.test"}, "title": "PR",
+                 "repository": {"name": "R", "project": {"name": "P"}}}] * history_service.PR_PAGE_SIZE
+        def pr_pages_with_timeout(index):
+            if index == 0:
+                return _response({"value": full})
+            raise TimeoutError("read timed out")
+        result, _posted, _prs = self._history_run_custom(pr_pages=pr_pages_with_timeout)
+        self.assertFalse(result["cacheStatus"]["complete"])
+        self.assertIn("pull-requests-error", result["cacheStatus"]["issues"])
+
+    def test_history_calendar_commit_second_page_failure_is_partial_and_keeps_first_page(self):
+        first = [_commit(f"h{i:07d}", "2028-02-02T10:00:00Z") for i in range(history_service.COMMIT_PAGE_SIZE)]
+        def commit_pages(repo_index, index):
+            if index == 0:
+                return _response({"value": first})
+            return _response({"message": "boom"}, status=503)
+        result, _posted, _prs = self._history_run_custom(commit_pages=commit_pages)
+        self.assertFalse(result["cacheStatus"]["complete"])
+        self.assertIn("commits-incomplete", result["cacheStatus"]["issues"])
+        commit_events = [e for e in result["events"] if e["entity"]["type"] == "commit"]
+        self.assertEqual(len(commit_events), history_service.COMMIT_PAGE_SIZE)
+
+    def test_history_calendar_work_item_candidate_cap_is_partial(self):
+        refs = [{"id": i} for i in range(3)]
+        with patch.object(history_service, "CALENDAR_MAX_WORK_ITEMS", 2):
+            result, _posted, _prs = self._history_run_custom(wiql_refs=refs)
+        self.assertIn("work-items-capped", result["cacheStatus"]["issues"])
+        self.assertFalse(result["cacheStatus"]["complete"])
+
+    def test_history_calendar_wiql_also_matches_closed_date_inside_the_window(self):
+        _result, posted, _prs = self._history_run_custom()
+        self.assertIn("[Microsoft.VSTS.Common.ClosedDate] >= '2028-02-01T00:00:00Z'", posted[0])
+        self.assertIn("[Microsoft.VSTS.Common.ClosedDate] < '2028-02-03T00:00:00Z'", posted[0])
 
     def test_history_rolling_wiql_keeps_today_clause(self):
         _, posted, _ = self._history_run(None, days=14)
