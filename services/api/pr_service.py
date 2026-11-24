@@ -7,6 +7,7 @@ and deterministic fixture support for Azure DevOps Pull Requests.
 import json
 import logging
 import sqlite3
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
@@ -17,11 +18,14 @@ import requests
 import project_inventory
 import feature_context
 import persistence
+import observability
 
 logger = logging.getLogger("pr_service")
 _user_group_cache = {}
+_user_group_cache_lock = threading.Lock()
 
 CACHE_TTL_SECONDS = 300  # 5 minutes TTL for PR cache
+PR_FAILURE_RETRY_SECONDS = 30
 PR_PAGE_SIZE = 200
 PR_MAX_REQUESTS = 25
 PR_PROJECT_MAX_PAGES = 50
@@ -54,6 +58,177 @@ VOTE_KEYS = {
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _pr_get(url, stage, **kwargs):
+    """Issue one read-only PR/identity GET and record a low-cardinality outcome."""
+    try:
+        response = requests.get(url, **kwargs)
+    except requests.Timeout:
+        observability.observe_pr_upstream(stage, 'timeout')
+        raise
+    except requests.ConnectionError:
+        observability.observe_pr_upstream(stage, 'connection_error')
+        raise
+    except Exception:
+        observability.observe_pr_upstream(stage, 'transport_error')
+        raise
+    status = response.status_code
+    result = ('ok' if 200 <= status < 300 else 'rate_limited' if status == 429 else
+              'server_error' if status >= 500 else 'http_error')
+    observability.observe_pr_upstream(stage, result)
+    return response
+
+
+def _read_pr_cache_snapshot(now=None):
+    """Read PR rows and their metadata from one SQLite snapshot."""
+    now = now or _utcnow()
+    started = time.monotonic()
+    result = 'ok'
+    try:
+        with persistence.db_lock, persistence.get_db_connection() as conn:
+            conn.execute('BEGIN')
+            state = conn.execute("SELECT * FROM pr_cache_state WHERE id=1").fetchone()
+            cached = [_row_to_pr_dict(row) for row in conn.execute(
+                "SELECT * FROM pull_requests ORDER BY creation_date DESC"
+            ).fetchall()]
+            last_row_sync = conn.execute("SELECT MAX(last_synced_at) FROM pull_requests").fetchone()[0]
+        if not state:
+            return {
+                'items': cached,
+                'fresh': False,
+                'attemptedRecently': False,
+                'cacheStatus': {
+                    'outcome': 'failed', 'complete': False, 'stale': False,
+                    'paginationBounded': True, 'dateScope': 'all',
+                    'completenessScope': PROJECT_SCOPE, 'projectDiscoveryComplete': False,
+                    'organizationSnapshotComplete': False, 'successfulProjects': [],
+                    'lastSyncedAt': last_row_sync, 'hasSnapshot': bool(cached), 'errors': [],
+                },
+            }
+
+        outcome = state['outcome'] or 'failed'
+        completed_at = state['completed_at']
+        last_complete_at = state['last_complete_at'] if 'last_complete_at' in state.keys() else None
+        try:
+            errors = json.loads(state['errors_json'] or '[]')
+        except (KeyError, TypeError, ValueError):
+            errors = []
+        scope = state['scope'] if 'scope' in state.keys() else 'organization-pr-query'
+        last_synced = max((stamp for stamp in (last_row_sync, last_complete_at) if stamp), default=None)
+        fresh = False
+        if outcome in {'complete', 'partial'} and completed_at:
+            try:
+                age = (now - datetime.fromisoformat(completed_at)).total_seconds()
+                fresh = 0 <= age < CACHE_TTL_SECONDS
+            except (TypeError, ValueError):
+                pass
+        attempted_recently = False
+        attempted_at = state['attempted_at']
+        if outcome == 'failed' and attempted_at:
+            try:
+                age = (now - datetime.fromisoformat(attempted_at)).total_seconds()
+                attempted_recently = 0 <= age < PR_FAILURE_RETRY_SECONDS
+            except (TypeError, ValueError):
+                pass
+        return {
+            'items': cached,
+            'fresh': fresh,
+            'attemptedRecently': attempted_recently,
+            'cacheStatus': {
+                'outcome': outcome,
+                'complete': outcome == 'complete',
+                'stale': outcome != 'complete' or not fresh,
+                'paginationBounded': outcome != 'complete',
+                'dateScope': 'all',
+                'completenessScope': scope,
+                'projectDiscoveryComplete': scope == PROJECT_SCOPE and outcome == 'complete',
+                'organizationSnapshotComplete': False,
+                'successfulProjects': json.loads(state['successful_projects'] or '[]'),
+                'lastSyncedAt': last_synced,
+                'hasSnapshot': bool(cached) or bool(last_complete_at),
+                'errors': errors,
+            },
+        }
+    except Exception:
+        result = 'error'
+        raise
+    finally:
+        observability.observe_pr_stage('sqlite_cache_read', started, result)
+
+
+def _record_pr_refresh_failure():
+    """Record an opaque failed attempt without changing PR rows or successful timestamps."""
+    attempted_at = _utcnow().isoformat()
+    errors_json = json.dumps([{"kind": "upstream_error"}])
+    with persistence.db_lock, persistence.get_db_connection() as conn:
+        state = conn.execute("SELECT id FROM pr_cache_state WHERE id=1").fetchone()
+        if state:
+            conn.execute("UPDATE pr_cache_state SET attempted_at=?, outcome='failed', errors_json=? WHERE id=1",
+                         (attempted_at, errors_json))
+        else:
+            conn.execute('''INSERT INTO pr_cache_state
+                (id, attempted_at, completed_at, outcome, successful_projects, errors_json, last_complete_at, scope)
+                VALUES (1, ?, NULL, 'failed', '[]', ?, NULL, ?)''',
+                (attempted_at, errors_json, PROJECT_SCOPE))
+        conn.commit()
+
+
+def load_live_pull_requests(org_url: str, pat: str, refresh_flights, now=None, force_refresh=False):
+    """Serve a bounded PR cache read and share at most one refresh flight per process."""
+    if feature_context.is_fixture_mode():
+        return build_fixture_prs()
+
+    key = ('pull-requests',)
+    def compute():
+        started = time.monotonic()
+        result = 'error'
+        try:
+            data = sync_live_pull_requests(org_url, pat, force_refresh=force_refresh, include_cache_status=True)
+            outcome = data.get('cacheStatus', {}).get('outcome') if isinstance(data, dict) else None
+            result = 'ok' if outcome == 'complete' else 'partial' if outcome == 'partial' else 'failed'
+            return data
+        except Exception as error:
+            try:
+                _record_pr_refresh_failure()
+            except Exception as state_error:
+                logger.error("Could not record PR refresh failure (%s)", type(state_error).__name__)
+            logger.error("PR refresh raised unexpectedly (%s)", type(error).__name__)
+            raise
+        finally:
+            observability.observe_pr_stage('cache_refresh', started, result)
+
+    if force_refresh:
+        return refresh_flights.run(key, compute)
+
+    snapshot = _read_pr_cache_snapshot(now)
+    status = snapshot['cacheStatus']
+    if snapshot['fresh']:
+        return {'items': snapshot['items'], 'cacheStatus': status}
+
+    if snapshot['attemptedRecently']:
+        status['retryAfterSeconds'] = PR_FAILURE_RETRY_SECONDS
+        status['refreshing'] = False
+        return {'items': snapshot['items'], 'cacheStatus': status}
+
+    refresh_flights.start(key, compute)
+    refreshing = refresh_flights.in_flight(key)
+    if status['hasSnapshot']:
+        status['stale'] = True
+        status['refreshing'] = refreshing
+        return {'items': snapshot['items'], 'cacheStatus': status}
+
+    if not refreshing:
+        # A very fast flight may have completed between the first read and status check.
+        refreshed = _read_pr_cache_snapshot(now)
+        if refreshed['fresh'] or refreshed['cacheStatus']['hasSnapshot']:
+            refreshed['cacheStatus']['stale'] = not refreshed['fresh']
+            return {'items': refreshed['items'], 'cacheStatus': refreshed['cacheStatus']}
+        return {'items': [], 'cacheStatus': refreshed['cacheStatus']}
+
+    status.update({'outcome': 'loading', 'complete': False, 'stale': False,
+                   'hasSnapshot': False, 'refreshing': True, 'retryAfterSeconds': 2})
+    return {'items': [], 'cacheStatus': status}
 
 
 def init_pr_db():
@@ -146,14 +321,16 @@ def is_user_match(identity: Dict[str, Any], current_user: Optional[Dict[str, Any
 def fetch_user_group_ids(org_name: str, subject_descriptor: str, headers: Dict[str, str]) -> Dict[str, Any]:
     """Resolves the current user's Azure DevOps group origin IDs using read-only Graph GETs."""
     cache_key = (org_name.lower(), subject_descriptor)
-    cached = _user_group_cache.get(cache_key)
     now = time.monotonic()
+    with _user_group_cache_lock:
+        cached = _user_group_cache.get(cache_key)
     if cached and now - cached[0] < CACHE_TTL_SECONDS:
         return cached[1]
 
     memberships_url = f"https://vssps.dev.azure.com/{org_name}/_apis/graph/memberships/{quote(subject_descriptor, safe='')}"
+    started = time.monotonic()
     try:
-        response = requests.get(memberships_url, headers=headers, params={"direction": "up", "api-version": "7.1-preview.1"}, timeout=8)
+        response = _pr_get(memberships_url, 'group_membership', headers=headers, params={"direction": "up", "api-version": "7.1-preview.1"}, timeout=8)
         if response.status_code != 200:
             status = response.status_code
             kind = "auth" if status in (401, 403) else ("rate_limited" if status == 429 else "upstream_http")
@@ -167,7 +344,7 @@ def fetch_user_group_ids(org_name: str, subject_descriptor: str, headers: Dict[s
             group_lookup_failed = len(all_descriptors) > len(descriptors)
             for descriptor in descriptors:
                 group_url = f"https://vssps.dev.azure.com/{org_name}/_apis/graph/groups/{quote(descriptor, safe='')}"
-                group_response = requests.get(group_url, headers=headers, params={"api-version": "7.1-preview.1"}, timeout=8)
+                group_response = _pr_get(group_url, 'group_membership', headers=headers, params={"api-version": "7.1-preview.1"}, timeout=8)
                 if group_response.status_code == 200:
                     origin_id = group_response.json().get("originId")
                     if origin_id:
@@ -183,8 +360,20 @@ def fetch_user_group_ids(org_name: str, subject_descriptor: str, headers: Dict[s
         result = {"groupIds": [], "status": "unavailable", "error": {"kind": "connection_refused"}}
     except Exception:
         result = {"groupIds": [], "status": "unavailable", "error": {"kind": "upstream_error"}}
-    _user_group_cache[cache_key] = (now, result)
+    with _user_group_cache_lock:
+        _user_group_cache[cache_key] = (time.monotonic(), result)
+    observability.observe_pr_stage('group_lookup', started, 'ok' if result['status'] == 'available' else 'unavailable')
     return result
+
+
+def cached_user_group_ids(org_name: str, subject_descriptor: str):
+    """Return the last group result, if any, plus whether its five-minute TTL is fresh."""
+    key = (org_name.lower(), subject_descriptor)
+    with _user_group_cache_lock:
+        cached = _user_group_cache.get(key)
+    if not cached:
+        return None, False
+    return cached[1], 0 <= time.monotonic() - cached[0] < CACHE_TTL_SECONDS
 
 
 def parse_azure_pr(raw_pr: Dict[str, Any], org_url: str) -> Dict[str, Any]:
@@ -597,18 +786,24 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
     # truncates the result; a short page is only trusted at project level, and even there the scan runs
     # until an empty page. Do not filter by creation date: active PRs can await review long after the
     # recent-history window.
+    discovery_started = time.monotonic()
     projects, project_discovery_complete = project_inventory.discover_projects(org_url, headers)
+    observability.observe_pr_stage('project_discovery', discovery_started,
+                                   'ok' if project_discovery_complete else 'partial')
     scoped = project_discovery_complete
     scoped_all_complete = False
     if scoped:
         def fetch_project_prs(proj):
             records, errors, offset = [], [], 0
             url = f"{org_url.rstrip('/')}/{quote(proj, safe='')}/_apis/git/pullrequests"
+            fetch_started = time.monotonic()
+            fetch_result = 'ok'
             try:
                 for _ in range(PR_PROJECT_MAX_PAGES):
                     params = {"searchCriteria.status": "all", "$skip": offset, "$top": PR_PAGE_SIZE, "api-version": "7.1"}
-                    r = requests.get(url, headers=headers, params=params, timeout=15)
+                    r = _pr_get(url, 'project_fetch', headers=headers, params=params, timeout=15)
                     if r.status_code != 200:
+                        fetch_result = 'error'
                         errors.append((r.status_code, None))
                         return proj, records, False, errors
                     page = r.json().get("value", [])
@@ -617,17 +812,28 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                     records.extend(page)
                     offset += len(page)
             except Exception as ex:
+                fetch_result = 'error'
                 errors.append((None, ex))
+            finally:
+                observability.observe_pr_stage('project_fetch', fetch_started, fetch_result)
             return proj, records, False, errors
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            for proj, records, complete, errors in executor.map(fetch_project_prs, projects):
-                all_raw_prs.extend(records)
-                project_fetch_outcomes[proj] = complete
-                if not complete:
-                    fetch_incomplete = True
-                for status, error in errors:
-                    record_error(status=status, error=error)
+        wait_started = time.monotonic()
+        wait_result = 'ok'
+        try:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                for proj, records, complete, errors in executor.map(fetch_project_prs, projects):
+                    all_raw_prs.extend(records)
+                    project_fetch_outcomes[proj] = complete
+                    if not complete:
+                        fetch_incomplete = True
+                    for status, error in errors:
+                        record_error(status=status, error=error)
+        except Exception:
+            wait_result = 'error'
+            raise
+        finally:
+            observability.observe_pr_stage('project_fetch_wait', wait_started, wait_result)
         scoped_all_complete = not fetch_incomplete
 
     # 1. Degraded mode (project inventory unavailable): organization-level query, then work-item projects.
@@ -642,7 +848,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                     "api-version": "7.1",
                 }
                 url = f"{org_url.rstrip('/')}/_apis/git/pullrequests"
-                res = requests.get(url, headers=headers, params=params, timeout=15)
+                res = _pr_get(url, 'org_fallback', headers=headers, params=params, timeout=15)
                 if res.status_code != 200:
                     fetch_incomplete = True
                     record_error(status=res.status_code)
@@ -658,7 +864,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                 fetch_incomplete = True
         except Exception as e:
             record_error(error=e)
-            logger.warning("Org-level PR query failed, falling back to per-project: %s", e)
+            logger.warning("Org-level PR query failed, falling back to per-project (%s)", type(e).__name__)
 
     # 2. Per-project fallback if org query returns empty or fails
     if not org_fetch_succeeded and not scoped:
@@ -676,7 +882,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                     for _ in range(PR_MAX_REQUESTS):
                         params = {"searchCriteria.status": "all", "$skip": offset, "$top": PR_PAGE_SIZE, "api-version": "7.1"}
                         url = f"{org_url.rstrip('/')}/{proj}/_apis/git/pullrequests"
-                        r = requests.get(url, headers=headers, params=params, timeout=10)
+                        r = _pr_get(url, 'project_fallback', headers=headers, params=params, timeout=10)
                         if r.status_code != 200:
                             record_error(status=r.status_code)
                             break
@@ -692,9 +898,9 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
                 except Exception as ex:
                     project_fetch_outcomes[proj] = False
                     record_error(error=ex)
-                    logger.debug("Project %s PR fetch error: %s", proj, ex)
+                    logger.debug("Project PR fetch failed (%s)", type(ex).__name__)
         except Exception as e:
-            logger.error("Fallback PR fetch error: %s", e)
+            logger.error("Fallback PR fetch failed (%s)", type(e).__name__)
 
     # Normalize records
     normalized = []
@@ -703,7 +909,7 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
             parsed = parse_azure_pr(raw, org_url)
             normalized.append(parsed)
         except Exception as ex:
-            logger.warning("Failed to parse PR record: %s", ex)
+            logger.warning("Failed to parse a PR record (%s)", type(ex).__name__)
 
     # Deduplicate by (id, project, repository)
     unique_map = {}
@@ -718,35 +924,43 @@ def sync_live_pull_requests(org_url: str, pat: str, force_refresh: bool = False,
     # inventory, so a successful fallback can provide rows but cannot certify
     # a complete organization snapshot or delete older cached rows.
     fetch_complete = scoped_all_complete if scoped else (org_fetch_complete and not fetch_incomplete)
-    if fetch_succeeded:
-        with persistence.db_lock, persistence.get_db_connection() as conn:
-            if fetch_complete:
-                # This query is the full organization snapshot; remove rows that
-                # disappeared (including on a valid empty result) atomically.
-                conn.execute("DELETE FROM pull_requests")
-            if final_prs:
-                conn.executemany('''INSERT OR REPLACE INTO pull_requests (
-                id, project, repository, title, description, status, is_draft,
-                author_id, author_name, author_avatar, source_branch, target_branch,
-                merge_status, creation_date, closed_date, url, reviewers_json,
-                work_items_json, last_synced_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', [(
-                p["id"], p["project"], p["repository"], p["title"], p["description"], p["status"],
-                p["isDraft"], p["authorId"], p["authorName"], p["authorAvatar"], p["sourceBranch"],
-                p["targetBranch"], p["mergeStatus"], p["creationDate"], p["closedDate"], p["url"],
-                json.dumps(p["reviewers"]), json.dumps(p["workItems"]), now_iso
-                ) for p in final_prs])
-            conn.commit()
+    publish_started = time.monotonic()
+    publish_result = 'ok'
+    try:
+        if fetch_succeeded:
+            with persistence.db_lock, persistence.get_db_connection() as conn:
+                if fetch_complete:
+                    # This query is the full organization snapshot; remove rows that
+                    # disappeared (including on a valid empty result) atomically.
+                    conn.execute("DELETE FROM pull_requests")
+                if final_prs:
+                    conn.executemany('''INSERT OR REPLACE INTO pull_requests (
+                    id, project, repository, title, description, status, is_draft,
+                    author_id, author_name, author_avatar, source_branch, target_branch,
+                    merge_status, creation_date, closed_date, url, reviewers_json,
+                    work_items_json, last_synced_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', [(
+                    p["id"], p["project"], p["repository"], p["title"], p["description"], p["status"],
+                    p["isDraft"], p["authorId"], p["authorName"], p["authorAvatar"], p["sourceBranch"],
+                    p["targetBranch"], p["mergeStatus"], p["creationDate"], p["closedDate"], p["url"],
+                    json.dumps(p["reviewers"]), json.dumps(p["workItems"]), now_iso
+                    ) for p in final_prs])
+                conn.commit()
 
-    with persistence.db_lock, persistence.get_db_connection() as conn:
-        outcome = 'complete' if fetch_complete else ('partial' if fetch_succeeded else 'failed')
-        completed_at = now_iso if fetch_succeeded else None
-        conn.execute('''INSERT INTO pr_cache_state (id, attempted_at, completed_at, outcome, successful_projects, errors_json, last_complete_at, scope)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope, attempted_at=excluded.attempted_at,
-            completed_at=COALESCE(excluded.completed_at, pr_cache_state.completed_at), outcome=excluded.outcome, successful_projects=excluded.successful_projects,
-            errors_json=excluded.errors_json, last_complete_at=COALESCE(excluded.last_complete_at, pr_cache_state.last_complete_at)''',
-            (now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_fetch_outcomes.items() if ok)), json.dumps(upstream_errors), now_iso if fetch_complete else None, PROJECT_SCOPE if scoped else "organization-pr-query"))
-        conn.commit()
+        with persistence.db_lock, persistence.get_db_connection() as conn:
+            outcome = 'complete' if fetch_complete else ('partial' if fetch_succeeded else 'failed')
+            completed_at = now_iso if fetch_succeeded else None
+            conn.execute('''INSERT INTO pr_cache_state (id, attempted_at, completed_at, outcome, successful_projects, errors_json, last_complete_at, scope)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope, attempted_at=excluded.attempted_at,
+                completed_at=COALESCE(excluded.completed_at, pr_cache_state.completed_at), outcome=excluded.outcome, successful_projects=excluded.successful_projects,
+                errors_json=excluded.errors_json, last_complete_at=COALESCE(excluded.last_complete_at, pr_cache_state.last_complete_at)''',
+                (now_iso, completed_at, outcome, json.dumps(sorted(p for p, ok in project_fetch_outcomes.items() if ok)), json.dumps(upstream_errors), now_iso if fetch_complete else None, PROJECT_SCOPE if scoped else "organization-pr-query"))
+            conn.commit()
+    except Exception:
+        publish_result = 'error'
+        raise
+    finally:
+        observability.observe_pr_stage('cache_publish', publish_started, publish_result)
 
     if not fetch_succeeded:
         with persistence.db_lock, persistence.get_db_connection() as conn:

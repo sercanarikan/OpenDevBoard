@@ -37,6 +37,7 @@ import {
 
 const API_BASE: string = import.meta.env?.VITE_API_BASE_URL || '/api';
 const DEFAULT_TIMEOUT_MS = 20000;
+const PR_LOADING_MAX_WAIT_MS = 8000;
 
 function buildUrl(path: string, query?: URLSearchParams): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
@@ -109,13 +110,20 @@ export async function getJson<T>(path: string, query?: URLSearchParams, signal?:
     });
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
+      let payload: any;
       try {
-        const body = await res.json();
-        if (body && typeof body.error === 'string') message = body.error;
+        payload = await res.json();
+        if (payload && typeof payload.error === 'string') message = payload.error;
       } catch {
         /* non-JSON error body */
       }
-      throw new ApiError(message, res.status);
+      const isLoading = payload?.cacheStatus?.outcome === 'loading';
+      const retryAfterSeconds = Number(res.headers.get('Retry-After'));
+      throw new ApiError(isLoading ? 'pullRequestsLoading' : message, res.status, {
+        isLoading,
+        payload,
+        retryAfterMs: Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : undefined
+      });
     }
     const body = (await res.json()) as T;
     lastResponseAt = Date.now();
@@ -123,8 +131,11 @@ export async function getJson<T>(path: string, query?: URLSearchParams, signal?:
     return body;
   } catch (err: any) {
     if (err instanceof ApiError) {
-      // An HTTP answer (even 4xx/5xx) proves the server is reachable; only gateway errors mean "backend gone".
-      if (err.status === 502 || err.status === 503 || err.status === 504) emitNetwork({ ok: false, error: err });
+      // A cold PR snapshot is an intentional loading response; a 503 otherwise still means the backend is unavailable.
+      if (err.isLoading) {
+        lastResponseAt = Date.now();
+        emitNetwork({ ok: true });
+      } else if (err.status === 502 || err.status === 503 || err.status === 504) emitNetwork({ ok: false, error: err });
       else {
         lastResponseAt = Date.now();
         emitNetwork({ ok: true });
@@ -141,6 +152,46 @@ export async function getJson<T>(path: string, query?: URLSearchParams, signal?:
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+function waitForPrRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new ApiError('aborted', 0, { isAbort: true }));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new ApiError('aborted', 0, { isAbort: true }));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function getPullRequestsJson<T extends { reviewerIdentityStatus?: { refreshing?: boolean } }>(
+  path: string, query?: URLSearchParams, signal?: AbortSignal
+): Promise<T> {
+  const deadline = Date.now() + PR_LOADING_MAX_WAIT_MS;
+  let lastIdentityPending: T | null = null;
+  while (true) {
+    if (signal?.aborted) throw new ApiError('aborted', 0, { isAbort: true });
+    try {
+      const body = await getJson<T>(path, query, signal);
+      if (!body.reviewerIdentityStatus?.refreshing) return body;
+      lastIdentityPending = body;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return lastIdentityPending;
+      await waitForPrRetry(Math.min(1000, remaining), signal);
+    } catch (error) {
+      if (!(error instanceof ApiError) || !error.isLoading) throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw error;
+      const delayMs = Math.min(error.retryAfterMs ?? 1000, remaining);
+      await waitForPrRetry(delayMs, signal);
+      if (Date.now() >= deadline) throw error;
+    }
   }
 }
 
@@ -341,12 +392,12 @@ export const liveApi: WorkItemsApi = {
     }
   },
 
-  pullRequests: (params, signal) => getJson<PullRequestsResponse>('/pull-requests', prQuery(params), signal),
+  pullRequests: (params, signal) => getPullRequestsJson<PullRequestsResponse>('/pull-requests', prQuery(params), signal),
 
   pullRequestsSummary: (project, signal) => {
     const q = new URLSearchParams();
     if (project && project !== 'all') q.set('project', project);
-    return getJson<PullRequestsSummary>('/pull-requests/summary', q, signal);
+    return getPullRequestsJson<PullRequestsSummary>('/pull-requests/summary', q, signal);
   },
 
   async pullRequest(id, signal) {

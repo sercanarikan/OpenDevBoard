@@ -141,13 +141,19 @@ export class ApiError extends Error {
   status: number;
   isNetwork: boolean;
   isAbort: boolean;
+  isLoading: boolean;
+  payload?: unknown;
+  retryAfterMs?: number;
 
-  constructor(message: string, status = 0, opts: { isNetwork?: boolean; isAbort?: boolean } = {}) {
+  constructor(message: string, status = 0, opts: { isNetwork?: boolean; isAbort?: boolean; isLoading?: boolean; payload?: unknown; retryAfterMs?: number } = {}) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.isNetwork = !!opts.isNetwork;
     this.isAbort = !!opts.isAbort;
+    this.isLoading = !!opts.isLoading;
+    this.payload = opts.payload;
+    this.retryAfterMs = opts.retryAfterMs;
   }
 }
 
@@ -239,7 +245,7 @@ export interface PullRequestsSummary {
   involved: number;
   totalActive: number;
   lastSyncedAt?: string;
-  reviewerIdentityStatus?: { groupMembership: 'available' | 'unavailable' | 'not_requested'; error?: { kind: string; status?: number } };
+  reviewerIdentityStatus?: { groupMembership: 'available' | 'unavailable' | 'not_requested'; error?: { kind: string; status?: number }; refreshing?: boolean };
   cacheStatus?: { outcome: string; complete: boolean; stale: boolean; lastSyncedAt?: string | null; hasSnapshot?: boolean; errors?: { kind: string; status?: number }[] };
 }
 

@@ -11,4 +11,12 @@ describe('API error messages', () => {
   it('keeps server responses available for their original error message', () => {
     expect(apiErrorTranslationKey(new ApiError('HTTP 403', 403))).toBeNull();
   });
+
+  it('maps the bounded PR loading response to its own translated state', () => {
+    expect(apiErrorTranslationKey(new ApiError('pullRequestsLoading', 503, {
+      isLoading: true,
+      payload: { cacheStatus: { outcome: 'loading' } },
+      retryAfterMs: 2000
+    }))).toBe('api.pullRequestsLoading');
+  });
 });

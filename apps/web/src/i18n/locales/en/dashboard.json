@@ -30,6 +30,7 @@
     "blockedTasksDesc": "Tasks blocked by pending predecessors",
     "pendingPRs": "Pending My Review",
     "pendingPRsDesc": "Pull requests awaiting your review",
+    "reviewerIdentityLoading": "Checking your team review assignments…",
     "reviewerIdentityUnavailable": "Team or group reviewer assignments could not be checked; this count may be incomplete",
     "cachedPRs": "Last successful PR data: {{when}}",
     "myOpenPRs": "My Open PRs",
