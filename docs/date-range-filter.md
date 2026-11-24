@@ -55,7 +55,7 @@ Etkilenen endpoint'ler: `/api/pipeline-health`, `/api/pipelines`, `/api/pipeline
 - Summary ve liste yanıtları aynı pencereyi kullanır: filtre, özet, grafik ve pagination aynı `[start, end)` aralığından beslenir.
 - Detay endpoint'leri (`/<id>`) aynı parametreleri kabul eder; böylece 30 günden eski bir kayıt, o kaydı içeren aralık seçiliyse açılabilir. UI detayı liste satırından açtığı için ek bir istek gerekmez.
 
-Demo/fixture modunda (`demoApi`) aralık yalnızca gün sayısına indirgenir; sentetik veri takvim filtrelemesi yapmaz.
+Demo/fixture modu (`demoApi`) aynı aralığı gerçek tarih alanlarıyla uygular; ayrıntı için [Demo ve fixture modu](#demo-ve-fixture-modu) bölümüne bakın.
 
 ## Cache stratejisi
 
@@ -69,22 +69,33 @@ Demo/fixture modunda (`demoApi`) aralık yalnızca gün sayısına indirgenir; s
   - Pull Requests `searchCriteria.minTime`/`maxTime` yalnızca `queryTimeRangeType` ile seçilen tarihe uygulanır; varsayılan `created`tir. Takvim sorgusu bu nedenle `queryTimeRangeType=created` gönderir ve aynı tarih kuralıyla filtreler. `status=all` belirtilmezse varsayılan `active` olur; bu yüzden durum her zaman `all` gönderilir.
   - Commits `searchCriteria.fromDate`/`toDate` için dahil/hariç ve author/committer ayrımı belgelenmemiştir; sınır kenarındaki kayıtlar için kesin filtre bellekte yapılır.
   - WIQL tarih literalleri, zaman dilimi belirtilmezse **sunucunun yerel saatine** göre yorumlanır. Bu yüzden takvim sorgusu `'YYYY-MM-DDThh:mm:ssZ'` (UTC) biçimini kullanır. Kayan pencere `@Today - N` kullanmaya devam eder (değişmedi).
-  - Sayfa boyutları: commit ve PR için `$top` ile `$skip` kullanılır; takvim sorguları en fazla 20 sayfa okur. Sayfa sınırına ulaşılırsa sonuç **partial** olarak işaretlenir ve `complete` değeri `false` döner; eksik veri tam kabul edilmez.
+  - Sayfa boyutları ve sınırları: takvim sorguları commit (`$top=50`) ve PR (`$top=150`/`200`) için `$skip` ile en fazla 20 sayfa okur. Sayfa sınırı, HTTP hatası, timeout veya sonraki sayfanın başarısızlığı sonucu **partial** yapar ve `complete=false` döner. Başarıyla alınmış kayıtlar korunur ve sonuca dahil edilir; eksik veri tam kabul edilmez.
   - Bellek içi filtreleme eksik upstream verisini geri getiremez; yalnızca yanlış dönemdeki kayıtları ayıklar.
 - **Coalescing ve cache izolasyonu:** Canlı istek anahtarı `window.key` ile üretilir (`rolling`+gün sayısı veya `calendar`+başlangıç+bitiş). Farklı aralıklar birbirinin sonucunu paylaşmaz.
 - **Maliyet:** Takvim aralığına her geçişte upstream isteği yapılır (Apply sonrası). Bu, cache'ten okumaya göre daha pahalıdır; bu kasıtlı bir dengedir ve gelecekteki iyileştirme adayıdır (tam kapsama sahip satır aralığını DB'den okuma).
 - **Boş veri ≠ kayıt yok:** Cache'te veri bulunmaması, dönemde kayıt olmadığı anlamına gelmez. Sonuç `cacheStatus` ile (`stale`, `complete`, `paginationBounded`) ayrılır.
 
+## My History kapsamı (takvim)
+
+- Olay adayları WIQL'de `ChangedDate` **veya** `ClosedDate` alanının pencere içinde olmasıyla seçilir. Pencere içinde kapatılıp sonradan değiştirilmiş iş öğesi bu sayede kaçmaz. Gerçek olay tarihi (`ClosedDate`, yoksa `ChangedDate`) fetch sonrasında yeniden kontrol edilir.
+- Work item adayları en fazla 1000 kayıt; detaylar 200'lük gruplarla alınır. Sınır aşılırsa `work-items-capped` bildirilir.
+- Commit ve PR çekimleri sayfalanır (yukarıdaki sınırlar). Hata durumunda şu nedenler bildirilir: `work-items-query-failed`, `work-items-error`, `work-item-details-failed`, `pull-requests-incomplete`, `pull-requests-error`, `commits-incomplete`, `repositories-failed`, `commits-error`.
+- Yanıtlar `cacheStatus` taşır: `{outcome, complete, stale, issues}`. `complete=false` olduğunda My History ekranı üstte bir uyarı gösterir; toplamlar ve liste eksik olabilir olarak işaretlenir.
+- Kayan pencere (rolling) yolu bu kapsam takibini kullanmaz; yanıtı önceki davranışla aynıdır ve `cacheStatus` varsayılan olarak `complete` döner.
+
 ## Demo ve fixture modu
 
 - Demo verisi sabit tarihlidir (2026-11-05/06). Demo kayan pencereleri bu referans güne (2026-11-07 00:00 UTC) sabitlenir; böylece gerçek saatten bağımsız olarak veri görünür kalır.
-- Demo listeleri ve özetleri takvim aralığını gerçekten filtreler: aralığın dışındaki kayıt, o aralıkta olmayan kayıt olarak dönmez. Tarih alanı olmayan kayıtlar takvim aralığında dışarıda kalır.
+- Demo listeleri ve özetleri takvim aralığını gerçekten filtreler: pipelines `finishTime`/`queueTime`, deployments `startedOn`, commits `date`, PR `creationDate`, history `occurredAt` alanlarına göre. Aralık dışındaki kayıt dönmez. Tarih alanı olmayan kayıtlar takvim aralığında dışarıda kalır.
+- Aynı uzunluktaki farklı takvim aralıkları farklı kayıt kümeleri üretir; bu regresyon testiyle korunur.
 - Demo özetlerindeki `dailyStats` boştur (bu, değişiklikten önce de öyleydi); demo grafikleri bu nedenle boş kalır. Bu bir sınırlamadır.
 
 ## Doğrulama
 
 - `services/api/test_date_window_api.py`: ayrıştırma sınırları, artık yıl, yıl sonu, 90/89 gün sınırları, gün kovaları, cache anahtarı izolasyonu, route sözleşmesi.
-- `services/api/test_date_window_services.py` ve `test_date_window_team_history.py`: servis düzeyinde takvim sınırları, cache kısayolunun ve durum yazımının atlanması, WIQL sınırları (`@Today` yok), silme davranışı.
+- `services/api/test_date_window_services.py` ve `test_date_window_team_history.py`: takvim sınırları, cache kısayolunun ve durum yazımının atlanması, silme davranışı, WIQL sınırları (`@Today` yok, UTC literalleri, ClosedDate kapsamı), commit/PR sayfalaması ve sayfa hatalarında `complete=false` ile kayıtların korunması, My History kapsam bildirimleri.
+- `services/api/test_list_read_isolation.py`: eşzamanlı okuma izolasyonu; okuyucu ilerlemesini bekleyen zamanlamadan bağımsız sürüm.
 - `apps/web/src/services/dateRange.test.ts`: preset hesapları, ay/yıl ve artık yıl sınırları, doğrulama kuralları, takvim ızgarası, grafik etiket adımı.
+- `apps/web/src/services/demoApi.dateRange.test.ts`: demo listelerinin ve özetlerinin gerçek tarih aralığına göre seçim yapması; eşit uzunluklu farklı aralıkların farklı kayıt kümeleri üretmesi.
 - `apps/web/src/components/Common/DateRangeFilter.test.tsx`: tetikleyici etiketi, dil bağımlı tarih biçimi, devre dışı durum.
-- i18n anahtar testleri (`dateRange` namespace'i dahil) her iki dilde çözümlenmeyi doğrular.
+- i18n anahtar testleri (`dateRange` ve `myHistory` namespace'leri dahil) her iki dilde çözümlenmeyi doğrular.
