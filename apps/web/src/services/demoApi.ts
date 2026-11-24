@@ -1,5 +1,39 @@
 import type { WorkItem } from '../types';
 import { analyticsRangeDays, type AnalyticsRange } from './dateRange';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * Demo fixture data is pinned to 2026-11-05/06, so demo rolling windows are anchored to that reference day
+ * instead of the wall clock; otherwise every preset would be empty when the demo is opened later.
+ */
+export const DEMO_REFERENCE_END_MS = Date.parse('2026-11-07T00:00:00Z');
+
+/** Half-open [startMs, endMs) bounds for a range, using the demo reference clock. */
+function demoRangeBounds(range: AnalyticsRange): [number, number] {
+  if (typeof range === 'number') return [DEMO_REFERENCE_END_MS - range * DAY_MS, DEMO_REFERENCE_END_MS];
+  if ('days' in range) return [DEMO_REFERENCE_END_MS - range.days * DAY_MS, DEMO_REFERENCE_END_MS];
+  return [Date.parse(`${range.startDate}T00:00:00Z`), Date.parse(`${range.endDate}T00:00:00Z`) + DAY_MS];
+}
+
+/**
+ * Keeps items whose timestamp falls inside the range. Records without a timestamp are excluded, matching the
+ * calendar rule of the live API. Equal-length ranges therefore select different records when the dates differ.
+ */
+export function filterDemoByRange<T>(items: T[], range: AnalyticsRange, dateOf: (item: T) => string | undefined): T[] {
+  const [startMs, endMs] = demoRangeBounds(range);
+  return items.filter(item => {
+    const raw = dateOf(item);
+    if (!raw) return false;
+    const ms = Date.parse(raw);
+    return !Number.isNaN(ms) && ms >= startMs && ms < endMs;
+  });
+}
+
+/** Range implied by list parameters: calendar bounds win over the legacy day count. */
+export function rangeFromParams(p: { days?: number; startDate?: string; endDate?: string }): AnalyticsRange {
+  if (p.startDate && p.endDate) return { startDate: p.startDate, endDate: p.endDate };
+  return p.days ?? 30;
+}
 import { mockFlatItems, CURRENT_USER_NAME } from './mockData';
 import { buildHierarchyTree } from '../utils/hierarchy';
 import { computeCanonicalProgressMap } from '../utils/progress';
@@ -351,7 +385,8 @@ export const demoApi: WorkItemsApi = {
   },
 
   async pipelines(params: PipelineParams): Promise<PipelineRunsResponse> {
-    let items = DEMO_PIPELINES;
+    const range = rangeFromParams(params);
+    let items = filterDemoByRange(DEMO_PIPELINES, range, r => r.finishTime ?? r.queueTime);
     if (params.project && params.project !== 'all') {
       items = items.filter(r => r.project === params.project);
     }
@@ -367,7 +402,7 @@ export const demoApi: WorkItemsApi = {
     }
     const limit = params.limit ?? 25;
     const offset = params.offset ?? 0;
-    const summary = computeDemoPipelineSummary(items, params.days ?? 30);
+    const summary = computeDemoPipelineSummary(items, analyticsRangeDays(range));
     return {
       items: items.slice(offset, offset + limit),
       total: items.length,
@@ -381,7 +416,7 @@ export const demoApi: WorkItemsApi = {
   },
 
   async pipelinesSummary(range: AnalyticsRange = 30, project): Promise<PipelineSummary> {
-    let items = DEMO_PIPELINES;
+    let items = filterDemoByRange(DEMO_PIPELINES, range, r => r.finishTime ?? r.queueTime);
     if (project && project !== 'all') items = items.filter(r => r.project === project);
     return computeDemoPipelineSummary(items, analyticsRangeDays(range));
   },
@@ -391,7 +426,8 @@ export const demoApi: WorkItemsApi = {
   },
 
   async deployments(params: DeploymentParams): Promise<DeploymentsResponse> {
-    let items = DEMO_DEPLOYMENTS;
+    const range = rangeFromParams(params);
+    let items = filterDemoByRange(DEMO_DEPLOYMENTS, range, d => d.startedOn);
     if (params.project && params.project !== 'all') {
       items = items.filter(d => d.project === params.project);
     }
@@ -407,7 +443,7 @@ export const demoApi: WorkItemsApi = {
     }
     const limit = params.limit ?? 25;
     const offset = params.offset ?? 0;
-    const summary = computeDemoDeploymentSummary(items, params.days ?? 30);
+    const summary = computeDemoDeploymentSummary(items, analyticsRangeDays(range));
     return {
       items: items.slice(offset, offset + limit),
       total: items.length,
@@ -422,7 +458,7 @@ export const demoApi: WorkItemsApi = {
   },
 
   async deploymentsSummary(range: AnalyticsRange = 30, project): Promise<DeploymentSummary> {
-    let items = DEMO_DEPLOYMENTS;
+    let items = filterDemoByRange(DEMO_DEPLOYMENTS, range, d => d.startedOn);
     if (project && project !== 'all') items = items.filter(d => d.project === project);
     return computeDemoDeploymentSummary(items, analyticsRangeDays(range));
   },
@@ -432,8 +468,8 @@ export const demoApi: WorkItemsApi = {
   },
 
   async teamActivitySummary(range: AnalyticsRange = 30, project): Promise<TeamActivitySummary> {
-    let commits = DEMO_COMMITS;
-    let prs = DEMO_PRS;
+    let commits = filterDemoByRange(DEMO_COMMITS, range, c => c.date);
+    let prs = filterDemoByRange(DEMO_PRS, range, p => p.creationDate);
     if (project && project !== 'all') {
       commits = commits.filter(c => c.project === project);
       prs = prs.filter(p => p.project === project);
@@ -442,7 +478,7 @@ export const demoApi: WorkItemsApi = {
   },
 
   async teamContributors(params: TeamActivityParams): Promise<TeamContributorsResponse> {
-    const summary = await this.teamActivitySummary(params.days ?? 30, params.project);
+    const summary = await this.teamActivitySummary(rangeFromParams(params), params.project);
     let items = summary.contributors;
     if (params.search) {
       const q = params.search.toLowerCase();
@@ -461,7 +497,7 @@ export const demoApi: WorkItemsApi = {
   },
 
   async teamCommits(params: TeamActivityParams): Promise<TeamCommitsResponse> {
-    let items = DEMO_COMMITS;
+    let items = filterDemoByRange(DEMO_COMMITS, rangeFromParams(params), c => c.date);
     if (params.project && params.project !== 'all') {
       items = items.filter(c => c.project === params.project);
     }
@@ -488,7 +524,8 @@ export const demoApi: WorkItemsApi = {
   },
 
   async myHistorySummary(range: AnalyticsRange = 30, project = 'all', _signal?: AbortSignal, filters: Pick<HistoryParams, 'activityType' | 'search'> = {}): Promise<HistorySummary> {
-    let events = project === 'all' ? DEMO_HISTORY_EVENTS : DEMO_HISTORY_EVENTS.filter(e => e.project.toLowerCase() === project.toLowerCase());
+    const inRange = filterDemoByRange(DEMO_HISTORY_EVENTS, range, e => e.occurredAt);
+    let events = project === 'all' ? inRange : inRange.filter(e => e.project.toLowerCase() === project.toLowerCase());
     if (filters.activityType && filters.activityType !== 'all') {
       events = events.filter(e => e.entity.type.toLowerCase() === filters.activityType!.toLowerCase() || e.eventType.toLowerCase().includes(filters.activityType!.toLowerCase()));
     }
@@ -500,7 +537,7 @@ export const demoApi: WorkItemsApi = {
   },
 
   async myHistoryTimeline(params: HistoryParams): Promise<HistoryTimelineResponse> {
-    let items = DEMO_HISTORY_EVENTS;
+    let items = filterDemoByRange(DEMO_HISTORY_EVENTS, rangeFromParams(params), e => e.occurredAt);
     if (params.project && params.project !== 'all') {
       items = items.filter(e => e.project === params.project);
     }

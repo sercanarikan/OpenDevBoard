@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CalendarDays, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import {
@@ -51,6 +51,23 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
   const [viewMonth, setViewMonth] = useState(() => monthStart(utcTodayKey()));
   const [showCustom, setShowCustom] = useState(value.kind === 'calendar' && value.preset === 'custom');
   const [focusDay, setFocusDay] = useState<string | null>(null);
+  // Horizontal offset that keeps the panel inside the viewport on narrow screens (measured on open).
+  const [panelLeft, setPanelLeft] = useState(0);
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const viewport = window.innerWidth;
+    const width = Math.min(viewport - 32, 336);
+    const target = Math.min(Math.max(16, rect.left), viewport - width - 16);
+    setPanelLeft(target - rect.left);
+  }, [open]);
+
+  // Move focus into the dialog on open so keyboard users land on the current preset.
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus();
+  }, [open]);
 
   const triggerLabel = useMemo(() => {
     if (value.kind === 'rolling') return t(`presets.${value.preset}`);
@@ -220,7 +237,8 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
           aria-modal="false"
           aria-labelledby={titleId}
           data-testid="date-range-panel"
-          className="absolute left-0 top-full mt-2 z-50 w-[min(92vw,320px)] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-3 space-y-3"
+          style={{ left: panelLeft, width: "min(calc(100vw - 2rem), 336px)" }}
+          className="absolute top-full mt-2 z-50 flex flex-col gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg p-3"
         >
           <h2 id={titleId} className="sr-only">{t('title')}</h2>
 
@@ -228,13 +246,16 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
             {[...ROLLING_ORDER, ...CALENDAR_ORDER].map(preset => {
               const checked = value.preset === preset && !showCustom;
               return (
+                <Fragment key={preset}>
+                {preset === 'thisMonth' && (
+                  <div className="col-span-2 h-px my-0.5 bg-slate-200 dark:bg-slate-800" aria-hidden="true" />
+                )}
                 <button
-                  key={preset}
                   type="button"
                   role="radio"
                   aria-checked={checked}
                   onClick={() => choosePreset(preset)}
-                  className={`flex items-center justify-between px-2 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                  className={`flex items-center justify-between px-2 py-1.5 rounded-md text-xs font-medium border transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500 ${
                     checked
                       ? 'border-brand-500 text-brand-600 dark:text-brand-400 bg-brand-50 dark:bg-slate-800'
                       : 'border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -243,6 +264,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
                   {t(`presets.${preset}`)}
                   {checked && <Check className="w-3 h-3" aria-hidden="true" />}
                 </button>
+                </Fragment>
               );
             })}
             <button
@@ -250,7 +272,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
               role="radio"
               aria-checked={showCustom}
               onClick={() => choosePreset('custom')}
-              className={`col-span-2 flex items-center justify-between px-2 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+              className={`col-span-2 flex items-center justify-between px-2 py-1.5 rounded-md text-xs font-medium border transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500 ${
                 showCustom
                   ? 'border-brand-500 text-brand-600 dark:text-brand-400 bg-brand-50 dark:bg-slate-800'
                   : 'border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -269,7 +291,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
                   aria-label={t('calendar.previousMonth')}
                   disabled={!canGoPrev}
                   onClick={() => moveMonth(-1)}
-                  className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30"
+                  className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500"
                 >
                   <ChevronLeft className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -279,7 +301,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
                   aria-label={t('calendar.nextMonth')}
                   disabled={!canGoNext}
                   onClick={() => moveMonth(1)}
-                  className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30"
+                  className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500"
                 >
                   <ChevronRight className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -289,7 +311,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
                 <thead>
                   <tr>
                     {weekdayLabels.map(label => (
-                      <th key={label} scope="col" className="text-[10px] font-medium text-slate-500 pb-1">{label}</th>
+                      <th key={label} scope="col" className="text-xs font-medium text-slate-500 pb-1">{label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -312,7 +334,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
                                 aria-pressed={selected}
                                 disabled={!pickable}
                                 onClick={() => onDayPick(day)}
-                                className={`w-full h-7 rounded text-[11px] tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-brand-500 ${
+                                className={`w-full h-8 rounded text-xs tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500 ${
                                   selected
                                     ? 'bg-brand-600 text-white font-semibold'
                                     : ranged
@@ -331,21 +353,21 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
                 </tbody>
               </table>
 
-              <div className="text-[11px] text-slate-500 dark:text-slate-400" data-testid="date-range-draft">
+              <div className="text-xs text-slate-500 dark:text-slate-400" data-testid="date-range-draft">
                 {draftStart && draftEnd
                   ? `${formatDayLabel(draftStart, locale)} – ${formatDayLabel(draftEnd, locale)} · ${spanText}`
                   : spanText}
               </div>
               {customError && (
-                <p role="alert" className="text-[11px] text-rose-600 dark:text-rose-400">{t(errorKey(customError), { max: DATE_RANGE_MAX_SPAN_DAYS })}</p>
+                <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{t(errorKey(customError), { max: DATE_RANGE_MAX_SPAN_DAYS })}</p>
               )}
-              <p className="text-[10px] text-slate-400">{t('hintUtc')}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{t('hintUtc')}</p>
 
               <div className="flex justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => closePanel(true)}
-                  className="px-2.5 py-1 rounded-md text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  className="px-2.5 py-1 rounded-md text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500"
                 >
                   {t('actions.cancel')}
                 </button>
@@ -354,7 +376,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
                   onClick={applyCustom}
                   disabled={!canApply}
                   data-testid="date-range-apply"
-                  className="px-2.5 py-1 rounded-md text-xs font-semibold bg-brand-600 text-white disabled:opacity-40"
+                  className="px-2.5 py-1 rounded-md text-xs font-semibold bg-brand-600 text-white disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500"
                 >
                   {t('actions.apply')}
                 </button>
