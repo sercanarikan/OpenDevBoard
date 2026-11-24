@@ -17,6 +17,18 @@ REGISTRY = CollectorRegistry()
 SYNC_RUNS = Counter('opendevboard_sync_runs_total', 'Sync runs by mode and outcome.', ('mode', 'status'), registry=REGISTRY)
 SYNC_DURATION = Histogram('opendevboard_sync_duration_seconds', 'End-to-end work-item sync duration.', ('mode',), registry=REGISTRY)
 PHASE_DURATION = Histogram('opendevboard_sync_phase_duration_seconds', 'Sync phase duration.', ('phase',), registry=REGISTRY)
+PR_STAGE_DURATION = Histogram(
+    'opendevboard_pr_stage_duration_seconds',
+    'Dashboard pull request stage duration by fixed stage and outcome.',
+    ('stage', 'result'),
+    registry=REGISTRY,
+)
+PR_UPSTREAM_RESULTS = Counter(
+    'opendevboard_pr_upstream_requests_total',
+    'Azure DevOps PR and identity GET outcomes by fixed request stage and result.',
+    ('stage', 'result'),
+    registry=REGISTRY,
+)
 HTTP_ATTEMPTS = Counter('opendevboard_http_attempts_total', 'Actual Azure DevOps HTTP network attempts.', ('method',), registry=REGISTRY)
 HTTP_RETRIES = Counter('opendevboard_http_retries_total', 'Azure DevOps HTTP retries.', registry=REGISTRY)
 HTTP_RESULTS = Counter('opendevboard_http_results_total', 'Azure DevOps HTTP results and transport errors.', ('result',), registry=REGISTRY)
@@ -51,6 +63,16 @@ def best_effort(fn, *args, **kwargs):
 
 def observe_phase(phase, started):
     best_effort(lambda: PHASE_DURATION.labels(phase=phase).observe(max(0.0, time.monotonic() - started)))
+
+
+def observe_pr_stage(stage, started, result='ok'):
+    best_effort(lambda: PR_STAGE_DURATION.labels(stage=stage, result=result).observe(
+        max(0.0, time.monotonic() - started)
+    ))
+
+
+def observe_pr_upstream(stage, result):
+    best_effort(lambda: PR_UPSTREAM_RESULTS.labels(stage=stage, result=result).inc())
 
 
 @contextmanager

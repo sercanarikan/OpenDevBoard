@@ -94,6 +94,71 @@ describe('backend reachability probe', () => {
 });
 
 describe('getJson network reporting', () => {
+  it('keeps backend reachability true for a cold-cache loading response', async () => {
+    listen();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: 'Pull requests are loading',
+      cacheStatus: { outcome: 'loading', hasSnapshot: false, refreshing: true }
+    }), { status: 503, headers: { 'Retry-After': '2' } })));
+
+    await expect(getJson('/pull-requests/summary')).rejects.toMatchObject({ isLoading: true });
+    expect(events).toEqual([{ ok: true }]);
+  });
+
+  it('keeps real gateway failures offline and normal HTTP errors reachable', async () => {
+    listen();
+    for (const status of [502, 503, 504]) {
+      events.length = 0;
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'unavailable' }), { status })));
+      await expect(getJson('/pull-requests/summary')).rejects.toMatchObject({ status, isLoading: false });
+      expect(events).toEqual([{ ok: false, error: expect.any(ApiError) }]);
+    }
+
+    events.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'invalid request' }), { status: 400 })));
+    await expect(getJson('/pull-requests/summary')).rejects.toMatchObject({ status: 400 });
+    expect(events).toEqual([{ ok: true }]);
+  });
+
+  it('emits a reachable network event for successful JSON responses', async () => {
+    listen();
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    await expect(getJson('/pull-requests/summary')).resolves.toEqual({ ok: true });
+    expect(events).toEqual([{ ok: true }]);
+  });
+
+  it('retries a bounded cold-cache loading response until the PR snapshot is ready', async () => {
+    vi.useFakeTimers();
+    const loading = () => new Response(JSON.stringify({
+      error: 'Pull requests are loading',
+      cacheStatus: { outcome: 'loading', refreshing: true, hasSnapshot: false }
+    }), { status: 503, headers: { 'Retry-After': '2' } });
+    const ready = new Response(JSON.stringify({
+      needsMyReview: 3, createdByMe: 1, involved: 4, totalActive: 5,
+      reviewerIdentityStatus: { groupMembership: 'available', refreshing: false }
+    }), { status: 200 });
+    const fetchMock = vi.fn().mockImplementationOnce(loading).mockImplementationOnce(loading).mockResolvedValueOnce(ready);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = liveApi.pullRequestsSummary();
+    const result = expect(request).resolves.toMatchObject({ needsMyReview: 3 });
+    await vi.advanceTimersByTimeAsync(4000);
+    await result;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops polling cold PR loading after the bounded wait without reporting a network timeout', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: 'Pull requests are loading',
+      cacheStatus: { outcome: 'loading', refreshing: true, hasSnapshot: false }
+    }), { status: 503, headers: { 'Retry-After': '2' } })));
+    const request = liveApi.pullRequestsSummary();
+    const result = expect(request).rejects.toMatchObject({ isLoading: true, message: 'pullRequestsLoading' });
+    await vi.advanceTimersByTimeAsync(9000);
+    await result;
+  });
+
   it('allows deployment summaries more than 20 seconds and still times out', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn((_u: string, init?: RequestInit) => new Promise((_resolve, reject) => {

@@ -135,6 +135,14 @@ export const DashboardOverview: React.FC = () => {
     api.pullRequests({ project, quickFilter: 'needs-my-review', status: 'active', limit: 5 }, ctrl.signal)
       .then(res => {
         if (ctrl.signal.aborted) return;
+        if (res.reviewerIdentityStatus?.refreshing || res.reviewerIdentityStatus?.groupMembership === 'unavailable') {
+          setPrsState(prev => ({
+            request,
+            error: res.reviewerIdentityStatus?.refreshing ? t('cards.reviewerIdentityLoading') : t('cards.reviewerIdentityUnavailable'),
+            successfulScope: prev?.successfulScope
+          }));
+          return;
+        }
         setPendingPRs(res.items);
         feeds.prs = { scope: project, items: res.items };
         setPrsState({ request, error: null, successfulScope: project });
@@ -165,12 +173,13 @@ export const DashboardOverview: React.FC = () => {
         setTeamState(prev => ({ request, error: 'failed', successfulScope: prev?.successfulScope }));
       });
     return () => ctrl.abort();
-  }, [request, feeds]);
+  }, [request, feeds, t]);
 
   const scope = summary?.scope;
   const isScopeReady = !booting && !!currentUserName && (!loadingTasks || tasksAvailable) && typeof scope?.myTasks === 'number';
   const isPRReady = !booting && !prSummaryLoading && !prSummaryError && prSummary !== null;
-  const prIdentityUnavailable = !!prSummary?.reviewerIdentityStatus && prSummary.reviewerIdentityStatus.groupMembership !== 'available';
+  const prIdentityRefreshing = !!prSummary?.reviewerIdentityStatus?.refreshing;
+  const prIdentityUnavailable = !!prSummary?.reviewerIdentityStatus && prSummary.reviewerIdentityStatus.groupMembership !== 'available' && !prIdentityRefreshing;
   const prCacheStale = !!prSummary?.cacheStatus?.stale;
   const pipelineNotice = getPipelineNotice(pipelineSummary?.cacheStatus);
   const pipelineUnavailable = pipelineSummary?.cacheStatus?.outcome === 'failed' && !pipelineSummary.cacheStatus.lastSyncedAt;
@@ -331,8 +340,10 @@ export const DashboardOverview: React.FC = () => {
                 {t('cards.pendingPRs')}
               </div>
               <div role={prSummaryError ? 'alert' : undefined} className="text-[11px] text-slate-400 truncate">
-                {prSummaryError || (prIdentityUnavailable
-                  ? t('cards.reviewerIdentityUnavailable')
+                {prSummaryError || (prIdentityRefreshing
+                  ? t('cards.reviewerIdentityLoading')
+                  : prIdentityUnavailable
+                    ? t('cards.reviewerIdentityUnavailable')
                   : prCacheStale
                     ? t('cards.cachedPRs', { when: prSummary?.cacheStatus?.lastSyncedAt ? formatCacheTime(prSummary.cacheStatus.lastSyncedAt) : t('cache.unknownTime') })
                     : t('cards.pendingPRsDesc'))}

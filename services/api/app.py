@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask import Response
 from datetime import datetime, timedelta, timezone
+import atexit
 from dateutil import parser as dtparser
 from base64 import b64encode
 from flask_cors import CORS
@@ -11,6 +12,7 @@ import requests
 import json
 import sqlite3
 import re
+import time
 from urllib.parse import urlparse
 from threading import Lock
 from functools import lru_cache
@@ -104,6 +106,8 @@ def get_projects_data():
 
 def get_current_user_info():
     """Gets authenticated user ID and name from Azure DevOps connectionData."""
+    started = time.monotonic()
+    result = 'error'
     try:
         org_url = get_devops_org_url()
         url = f"{org_url}/_apis/connectionData"
@@ -111,6 +115,7 @@ def get_current_user_info():
         if res.status_code == 200:
             data = res.json()
             auth_user = data.get("authenticatedUser", {})
+            result = 'ok'
             return {
                 "id": auth_user.get("id", ""),
                 "displayName": auth_user.get("providerDisplayName") or auth_user.get("customDisplayName", ""),
@@ -118,7 +123,9 @@ def get_current_user_info():
                 "subjectDescriptor": auth_user.get("subjectDescriptor", "")
             }
     except Exception as e:
-        app.logger.warning(f"Could not fetch authenticated user info: {e}")
+        app.logger.warning("Could not fetch authenticated user info (%s)", type(e).__name__)
+    finally:
+        observability.observe_pr_stage('identity_lookup', started, result)
     return {}
 
 # ------------------------------------------------------------------------------
@@ -313,40 +320,116 @@ def get_my_work_items():
         app.logger.error(f"Error fetching work items: {e}", exc_info=True)
         return jsonify({"error": str(e), "work_items": [], "count": 0}), 500
 
-def _get_pr_current_user():
-    if sync_service.is_fixture_mode():
-        return {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "displayName": "Fixture User",
-            "uniqueName": "fixture.user@devopsflow.local"
-        }
+PR_IDENTITY_TTL_SECONDS = 300
+PR_IDENTITY_FAILURE_RETRY_SECONDS = 5
+_pr_current_user_cache = None
+_pr_current_user_lock = Lock()
+_pr_background_flights = request_coalescing.Coalescer()
+atexit.register(_pr_background_flights.shutdown, timeout=2.0)
+
+
+def _refresh_pr_current_user():
+    global _pr_current_user_cache
     user = get_current_user_info() or {}
+    with _pr_current_user_lock:
+        _pr_current_user_cache = (time.monotonic(), user)
     subject_descriptor = user.get("subjectDescriptor")
     if subject_descriptor:
-        groups = pr_service.fetch_user_group_ids(get_devops_org_name(), subject_descriptor, get_headers())
-        user["groupIds"] = groups["groupIds"]
-        user["groupMembershipStatus"] = groups["status"]
-        if groups.get("error"):
-            user["groupMembershipError"] = groups["error"]
-    else:
-        user["groupIds"] = []
-        user["groupMembershipStatus"] = "unavailable"
-        user["groupMembershipError"] = {"kind": "identity_unavailable"}
+        org_name = get_devops_org_name()
+        _pr_background_flights.start(
+            ('pr-group-membership',),
+            lambda: pr_service.fetch_user_group_ids(org_name, subject_descriptor, get_headers()),
+        )
     return user
+
+
+def _get_pr_current_user():
+    started = time.monotonic()
+    outcome = 'ok'
+    try:
+        if sync_service.is_fixture_mode():
+            return {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "displayName": "Fixture User",
+                "uniqueName": "fixture.user@devopsflow.local"
+            }
+
+        with _pr_current_user_lock:
+            cached = _pr_current_user_cache
+        identity_ttl = PR_IDENTITY_TTL_SECONDS if cached and cached[1].get("id") else PR_IDENTITY_FAILURE_RETRY_SECONDS
+        if cached and 0 <= time.monotonic() - cached[0] < identity_ttl:
+            user = dict(cached[1])
+        elif cached:
+            _pr_background_flights.start(('pr-current-user',), _refresh_pr_current_user)
+            user = dict(cached[1])
+        else:
+            _pr_background_flights.start(('pr-current-user',), _refresh_pr_current_user)
+            user = {}
+        identity_refreshing = _pr_background_flights.in_flight(('pr-current-user',))
+
+        subject_descriptor = user.get("subjectDescriptor")
+        if subject_descriptor:
+            org_name = get_devops_org_name()
+            groups, fresh = pr_service.cached_user_group_ids(org_name, subject_descriptor)
+            if not fresh:
+                _pr_background_flights.start(
+                    ('pr-group-membership',),
+                    lambda: pr_service.fetch_user_group_ids(org_name, subject_descriptor, get_headers()),
+                )
+            if groups:
+                user["groupIds"] = list(groups["groupIds"])
+                user["groupMembershipStatus"] = groups["status"]
+                if groups.get("error"):
+                    user["groupMembershipError"] = groups["error"]
+                if not fresh:
+                    user["groupMembershipStale"] = True
+                user["groupMembershipRefreshing"] = _pr_background_flights.in_flight(('pr-group-membership',))
+            else:
+                user["groupIds"] = []
+                user["groupMembershipStatus"] = "unavailable"
+                group_refreshing = _pr_background_flights.in_flight(('pr-group-membership',))
+                user["groupMembershipError"] = {"kind": "loading" if group_refreshing else "identity_unavailable"}
+                user["groupMembershipRefreshing"] = group_refreshing
+        else:
+            user["groupIds"] = []
+            user["groupMembershipStatus"] = "unavailable"
+            user["groupMembershipError"] = {"kind": "loading" if identity_refreshing else "identity_unavailable"}
+            user["groupMembershipRefreshing"] = identity_refreshing
+        return user
+    except Exception:
+        outcome = 'error'
+        raise
+    finally:
+        observability.observe_pr_stage('current_user', started, outcome)
 
 def _load_all_prs(force_refresh=False):
     if sync_service.is_fixture_mode():
         return pr_service.build_fixture_prs()
     org_url = get_devops_org_url()
     pat = get_devops_pat()
-    return pr_service.sync_live_pull_requests(org_url, pat, force_refresh=force_refresh, include_cache_status=True)
+    return pr_service.load_live_pull_requests(org_url, pat, _pr_background_flights, force_refresh=force_refresh)
 
 
 def _pr_sync_failed_without_cache(sync_data):
     if not isinstance(sync_data, dict):
         return False
     status = sync_data.get("cacheStatus", {})
-    return status.get("outcome") in {"failed", "partial"} and not sync_data.get("items") and not status.get("hasSnapshot", False)
+    return (status.get("outcome") == "loading" or status.get("outcome") in {"failed", "partial"}) and not sync_data.get("items") and not status.get("hasSnapshot", False)
+
+
+def _pr_unavailable_response(sync_data, empty_fields):
+    status = sync_data.get("cacheStatus", {}) if isinstance(sync_data, dict) else {}
+    loading = status.get("outcome") == "loading"
+    response = jsonify({
+        "error": "Pull requests are loading" if loading else "Pull requests could not be refreshed",
+        **empty_fields,
+        "cacheStatus": status,
+    })
+    response.status_code = 503
+    retry_after = status.get("retryAfterSeconds")
+    if retry_after:
+        response.headers["Retry-After"] = str(max(1, int(retry_after)))
+    return response
 
 @app.route('/api/my-pull-requests', methods=['GET'])
 def get_my_pull_requests():
@@ -356,10 +439,11 @@ def get_my_pull_requests():
         current_user = _get_pr_current_user()
         sync_data = _load_all_prs(force_refresh=force_refresh)
         if _pr_sync_failed_without_cache(sync_data):
-            return jsonify({"error": "Pull requests could not be refreshed", "items": [], "total": 0, "cacheStatus": sync_data.get("cacheStatus")}), 503
+            return _pr_unavailable_response(sync_data, {"items": [], "total": 0})
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
 
         # Annotate with personal flags
+        prepare_started = time.monotonic()
         annotated = [pr_service.evaluate_pr_personal_flags(p, current_user) for p in all_prs]
         active_prs = [p for p in annotated if p.get("status") == "active"]
 
@@ -368,7 +452,7 @@ def get_my_pull_requests():
         assigned_to_me = [p for p in active_prs if p["isReviewer"]]
         created_by_me = [p for p in active_prs if p["isAuthor"]]
 
-        return jsonify({
+        response = jsonify({
             "all_prs": active_prs,
             "pending_my_review": pending_my_review,
             "reviewed_by_me": reviewed_by_me,
@@ -383,10 +467,12 @@ def get_my_pull_requests():
             },
             "current_user": current_user,
             "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None
-        }), 200
+        })
+        observability.observe_pr_stage('response_prepare', prepare_started)
+        return response, 200
     except Exception as e:
-        app.logger.error(f"Error in get_my_pull_requests: {e}", exc_info=True)
-        return jsonify({"error": str(e), "all_prs": [], "assigned_to_me": [], "created_by_me": []}), 500
+        app.logger.error("Error in get_my_pull_requests (%s)", type(e).__name__)
+        return jsonify({"error": "Pull requests could not be loaded", "all_prs": [], "assigned_to_me": [], "created_by_me": []}), 500
 
 @app.route('/api/pull-requests', methods=['GET'])
 def get_pull_requests():
@@ -396,20 +482,23 @@ def get_pull_requests():
         current_user = _get_pr_current_user()
         sync_data = _load_all_prs(force_refresh=force_refresh)
         if _pr_sync_failed_without_cache(sync_data):
-            return jsonify({"error": "Pull requests could not be refreshed", "items": [], "total": 0, "cacheStatus": sync_data.get("cacheStatus")}), 503
+            return _pr_unavailable_response(sync_data, {"items": [], "total": 0})
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
+        prepare_started = time.monotonic()
         result = pr_service.query_pull_requests(all_prs, request.args, current_user=current_user)
         result["reviewerIdentityStatus"] = {
             "groupMembership": current_user.get("groupMembershipStatus", "unavailable"),
-            "error": current_user.get("groupMembershipError")
+            "error": current_user.get("groupMembershipError"),
+            "refreshing": current_user.get("groupMembershipRefreshing", False),
         }
         if isinstance(sync_data, dict):
             result["cacheStatus"] = sync_data.get("cacheStatus")
             result["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
+        observability.observe_pr_stage('response_prepare', prepare_started)
         return jsonify(result), 200
     except Exception as e:
-        app.logger.error(f"Error in get_pull_requests: {e}", exc_info=True)
-        return jsonify({"error": str(e), "items": [], "total": 0}), 500
+        app.logger.error("Error in get_pull_requests (%s)", type(e).__name__)
+        return jsonify({"error": "Pull requests could not be loaded", "items": [], "total": 0}), 500
 
 @app.route('/api/pull-requests/summary', methods=['GET'])
 def get_pull_requests_summary():
@@ -419,21 +508,24 @@ def get_pull_requests_summary():
         current_user = _get_pr_current_user()
         sync_data = _load_all_prs()
         if _pr_sync_failed_without_cache(sync_data):
-            return jsonify({"error": "Pull requests could not be refreshed", "needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0, "cacheStatus": sync_data.get("cacheStatus")}), 503
+            return _pr_unavailable_response(sync_data, {"needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0})
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
+        prepare_started = time.monotonic()
         summary = pr_service.get_pr_summary(all_prs, project=project, current_user=current_user)
         summary["reviewerIdentityStatus"] = {
             "groupMembership": current_user.get("groupMembershipStatus", "unavailable"),
-            "error": current_user.get("groupMembershipError")
+            "error": current_user.get("groupMembershipError"),
+            "refreshing": current_user.get("groupMembershipRefreshing", False),
         }
         if isinstance(sync_data, dict):
             summary["cacheStatus"] = sync_data.get("cacheStatus")
             summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
             summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt") or summary.get("lastSyncedAt")
+        observability.observe_pr_stage('response_prepare', prepare_started)
         return jsonify(summary), 200
     except Exception as e:
-        app.logger.error(f"Error in get_pull_requests_summary: {e}", exc_info=True)
-        return jsonify({"error": str(e), "needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0}), 500
+        app.logger.error("Error in get_pull_requests_summary (%s)", type(e).__name__)
+        return jsonify({"error": "Pull requests could not be loaded", "needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0}), 500
 
 @app.route('/api/pull-requests/<int:pr_id>', methods=['GET'])
 def get_pull_request_by_id(pr_id):

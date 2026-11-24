@@ -292,6 +292,7 @@
     "serverHttp": "Server returned HTTP {{status}}",
     "connectionRefused": "Connection refused",
     "timeout": "The request timed out.",
+    "pullRequestsLoading": "Pull request data is still loading. Try again shortly.",
     "networkError": "A network error occurred while making the request.",
     "connectFailed": "Failed to connect to backend server at {{endpoint}}",
     "myItemsFailed": "Failed to load My Work Items from live API",

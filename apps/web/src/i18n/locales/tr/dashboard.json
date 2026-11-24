@@ -30,6 +30,7 @@
     "blockedTasksDesc": "Öncül bir işi bekleyen görevleriniz",
     "pendingPRs": "İncelememi Bekleyenler",
     "pendingPRsDesc": "İncelemeniz gereken açık PR'lar",
+    "reviewerIdentityLoading": "Ekip inceleme atamalarınız kontrol ediliyor…",
     "reviewerIdentityUnavailable": "Ekip/grup inceleme atamaları doğrulanamadı; sayı eksik olabilir",
     "cachedPRs": "Son başarılı PR verisi: {{when}}",
     "myOpenPRs": "Açık PR'larım",

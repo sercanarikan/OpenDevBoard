@@ -292,6 +292,7 @@
     "serverHttp": "Sunucu HTTP {{status}} döndürdü",
     "connectionRefused": "Bağlantı reddedildi",
     "timeout": "İstek zaman aşımına uğradı.",
+    "pullRequestsLoading": "PR verisi hâlâ yükleniyor. Biraz sonra yeniden deneyin.",
     "networkError": "İstek sırasında ağ hatası oluştu.",
     "connectFailed": "{{endpoint}} adresindeki backend sunucusuna bağlanılamadı",
     "myItemsFailed": "Canlı API'den Work Item'lar yüklenemedi",
