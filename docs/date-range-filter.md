@@ -63,10 +63,23 @@ Demo/fixture modunda (`demoApi`) aralık yalnızca gün sayısına indirgenir; s
 
 - **Kayan pencere:** Değişmedi. Kısa süreli cache kısayolu (`requested_days` eşleşmesi + TTL) ve durum satırı yazımı aynen çalışır.
 - **Takvim aralığı:** Cache kısayolu **kullanılmaz** ve durum satırı **yazılmaz**. Gerekçe: takvim fetch'i zaman çizelgesinin yalnızca bir parçasını kapsar; yazılırsa sonraki kayan istek eksik veriyi tam kapsam sanır. Takvim fetch'i yalnızca gerçek kayıtları upsert eder ve kendi penceresi dışındaki satırları silmez.
-- **Upstream sınırı:** Azure DevOps çağrıları pencereye göre sınırlandırılır ve sonuç bellekte de `[start, end)` ile filtrelenir. Pipeline/deployment için `maxTime`/`maxStartedTime`, team PR'ları için `searchCriteria.minTime/maxTime` kullanılır; bu parametreler desteklenmese bile bellek içi filtre doğru sonuç verir.
+- **Upstream sınırı:** Azure DevOps çağrıları pencereye göre sınırlandırılır ve sonuç bellekte de `[start, end)` ile filtrelenir. Azure DevOps REST 7.1 belgelerine göre (Build List, Deployments List, Pull Requests, Commits, WIQL):
+  - Build `minTime`/`maxTime`, `queryOrder` ile birlikte çalışır; yalnızca `queryOrder` ile belirtilen zaman alanına uygulanır. Sıralama garantisi belgelenmemiştir.
+  - Deployments `minStartedTime`/`maxStartedTime` için belgede açıklama yoktur; sınırların dahil/hariç olduğu belirtilmemiştir.
+  - Pull Requests `searchCriteria.minTime`/`maxTime` yalnızca `queryTimeRangeType` ile seçilen tarihe uygulanır; varsayılan `created`tir. Takvim sorgusu bu nedenle `queryTimeRangeType=created` gönderir ve aynı tarih kuralıyla filtreler. `status=all` belirtilmezse varsayılan `active` olur; bu yüzden durum her zaman `all` gönderilir.
+  - Commits `searchCriteria.fromDate`/`toDate` için dahil/hariç ve author/committer ayrımı belgelenmemiştir; sınır kenarındaki kayıtlar için kesin filtre bellekte yapılır.
+  - WIQL tarih literalleri, zaman dilimi belirtilmezse **sunucunun yerel saatine** göre yorumlanır. Bu yüzden takvim sorgusu `'YYYY-MM-DDThh:mm:ssZ'` (UTC) biçimini kullanır. Kayan pencere `@Today - N` kullanmaya devam eder (değişmedi).
+  - Sayfa boyutları: commit ve PR için `$top` ile `$skip` kullanılır; takvim sorguları en fazla 20 sayfa okur. Sayfa sınırına ulaşılırsa sonuç **partial** olarak işaretlenir ve `complete` değeri `false` döner; eksik veri tam kabul edilmez.
+  - Bellek içi filtreleme eksik upstream verisini geri getiremez; yalnızca yanlış dönemdeki kayıtları ayıklar.
 - **Coalescing ve cache izolasyonu:** Canlı istek anahtarı `window.key` ile üretilir (`rolling`+gün sayısı veya `calendar`+başlangıç+bitiş). Farklı aralıklar birbirinin sonucunu paylaşmaz.
 - **Maliyet:** Takvim aralığına her geçişte upstream isteği yapılır (Apply sonrası). Bu, cache'ten okumaya göre daha pahalıdır; bu kasıtlı bir dengedir ve gelecekteki iyileştirme adayıdır (tam kapsama sahip satır aralığını DB'den okuma).
 - **Boş veri ≠ kayıt yok:** Cache'te veri bulunmaması, dönemde kayıt olmadığı anlamına gelmez. Sonuç `cacheStatus` ile (`stale`, `complete`, `paginationBounded`) ayrılır.
+
+## Demo ve fixture modu
+
+- Demo verisi sabit tarihlidir (2026-11-05/06). Demo kayan pencereleri bu referans güne (2026-11-07 00:00 UTC) sabitlenir; böylece gerçek saatten bağımsız olarak veri görünür kalır.
+- Demo listeleri ve özetleri takvim aralığını gerçekten filtreler: aralığın dışındaki kayıt, o aralıkta olmayan kayıt olarak dönmez. Tarih alanı olmayan kayıtlar takvim aralığında dışarıda kalır.
+- Demo özetlerindeki `dailyStats` boştur (bu, değişiklikten önce de öyleydi); demo grafikleri bu nedenle boş kalır. Bu bir sınırlamadır.
 
 ## Doğrulama
 
