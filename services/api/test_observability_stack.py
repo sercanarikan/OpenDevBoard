@@ -62,14 +62,15 @@ class OptionalObservabilityStackTests(unittest.TestCase):
                      'SyncContinuouslyPartial', 'AzureHttp429Increasing', 'HighProcessMemory'):
             self.assertIn(f'alertname: {name}', rule_tests)
 
-    def test_grafana_provisions_three_dashboards_and_private_prometheus_source(self):
+    def test_grafana_provisions_one_unified_dashboard_and_private_prometheus_source(self):
         datasource = (OBS / 'grafana' / 'provisioning' / 'datasources' / 'prometheus.yml').read_text(encoding='utf-8')
         self.assertIn('http://prometheus:9090', datasource)
         provisioner = (OBS / 'grafana' / 'provisioning' / 'dashboards' / 'dashboards.yml').read_text(encoding='utf-8')
         self.assertIn('/var/lib/grafana/dashboards', provisioner)
+        self.assertRegex(provisioner, r'(?m)^\s+disableDeletion: false$')
         dashboard_dir = OBS / 'grafana' / 'dashboards'
         dashboards = sorted(dashboard_dir.glob('*.json'))
-        self.assertEqual({path.stem for path in dashboards}, {'sync-overview', 'azure-devops-http', 'performance'})
+        self.assertEqual({path.stem for path in dashboards}, {'main-overview'})
         allowed_metrics = {
             'opendevboard_sync_runs_total', 'opendevboard_sync_duration_seconds',
             'opendevboard_sync_duration_seconds_bucket', 'opendevboard_sync_phase_duration_seconds_bucket',
@@ -83,6 +84,12 @@ class OptionalObservabilityStackTests(unittest.TestCase):
         }
         for path in dashboards:
             data = json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual(data['uid'], 'opendev-main-overview')
+            self.assertEqual(len(data['panels']), 31)
+            self.assertEqual(
+                [panel['title'] for panel in data['panels'] if panel['type'] == 'row'],
+                ['Sync & data', 'Performance', 'Azure DevOps HTTP'],
+            )
             serialized = json.dumps(data)
             self.assertFalse(re.search(r'(?i)(?:https://dev\.azure\.com|PAT\s*=|work item id|assignedTo)', serialized))
             queries = re.findall(r'"expr"\s*:\s*"((?:[^"\\]|\\.)*)"', serialized)
@@ -92,9 +99,12 @@ class OptionalObservabilityStackTests(unittest.TestCase):
                     self.assertIn(metric, allowed_metrics, (path.name, metric))
 
     def test_http_error_rate_covers_failure_labels_and_matches_result_fixture(self):
-        dashboard = json.loads((OBS / 'grafana' / 'dashboards' / 'azure-devops-http.json').read_text(encoding='utf-8'))
-        panel = next(panel for panel in dashboard['panels'] if panel['title'] == 'HTTP error rate / attempt')
-        dashboard_expr = panel['targets'][0]['expr'].replace('$__rate_interval', '5m')
+        dashboard = json.loads((OBS / 'grafana' / 'dashboards' / 'main-overview.json').read_text(encoding='utf-8'))
+        panels = [panel for panel in dashboard['panels']
+                  if panel['title'] in {'HTTP error rate', 'HTTP error / attempt ratio'}]
+        self.assertEqual(len(panels), 3)
+        dashboard_expr = panels[0]['targets'][0]['expr']
+        self.assertTrue(all(panel['targets'][0]['expr'] == dashboard_expr for panel in panels))
         rule_test = (OBS / 'prometheus' / 'dashboard-http-error-rate.test.yml').read_text(encoding='utf-8')
         match = re.search(r"(?m)^\s*- expr: '(.+)'$", rule_test)
         self.assertIsNotNone(match)
@@ -103,7 +113,21 @@ class OptionalObservabilityStackTests(unittest.TestCase):
             self.assertIn(category, dashboard_expr)
         self.assertNotIn('result="2xx"', dashboard_expr)
         self.assertIn('opendevboard_http_attempts_total', dashboard_expr)
+        self.assertIn('and (sum(increase(opendevboard_http_attempts_total[5m])) > 0)', dashboard_expr)
+        self.assertEqual(next(panel for panel in panels if panel['type'] == 'stat')['fieldConfig']['defaults']['noValue'], 'No traffic')
         self.assertRegex(rule_test, r'(?m)^\s*value: 0\.04$')
+
+    def test_sync_age_panels_suppress_zero_timestamp_and_show_empty_state(self):
+        dashboard = json.loads((OBS / 'grafana' / 'dashboards' / 'main-overview.json').read_text(encoding='utf-8'))
+        panels = [panel for panel in dashboard['panels']
+                  if panel['title'] in {'Last successful sync', 'Since last successful sync'}]
+        self.assertEqual(len(panels), 2)
+        for panel in panels:
+            self.assertEqual(
+                panel['targets'][0]['expr'],
+                'time() - (opendevboard_last_successful_sync_timestamp_seconds > 0)',
+            )
+            self.assertEqual(panel['fieldConfig']['defaults']['noValue'], 'No successful sync yet')
 
 
 if __name__ == '__main__':

@@ -64,11 +64,7 @@ Grafana is available at `http://127.0.0.1:3000` by default; `GRAFANA_PORT` chang
 
 The secret is read from the environment of the `docker compose` process. Supply it through a secret manager or a protected shell/session; do not save it in `.env`, command history, or a tracked file. Missing and empty values let normal Compose configuration run, but starting Grafana fails closed.
 
-The three provisioned dashboards appear automatically under the **OpenDevBoard** folder:
-
-- **OpenDevBoard Sync Overview**
-- **OpenDevBoard Azure DevOps HTTP**
-- **OpenDevBoard Performance**
+The provisioned **OpenDevBoard Overview** dashboard appears automatically under the **OpenDevBoard** folder. It puts API availability, last successful sync, process memory, and HTTP error rate at the top, followed by Sync & data, Performance, and Azure DevOps HTTP sections. Dashboard JSON files are version-controlled in `observability/grafana/dashboards`; removing a file also removes its provisioned dashboard on the next provisioning scan.
 
 The provisioned Prometheus datasource uses the private `http://prometheus:9090` address. Prometheus does not publish a host port; Grafana is bound to `127.0.0.1`, and the API port remains private. The existing nginx `/metrics` denial remains in place. Prometheus uses a dedicated private Compose bridge shared only with Grafana and also joins the existing API network to scrape `api:5000/metrics`.
 
