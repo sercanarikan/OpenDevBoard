@@ -540,12 +540,22 @@ export interface HistorySummary {
   projectsTouched: string[];
   dailyHeatmap: HistoryDailyStat[];
   lastSyncedAt?: string;
+  cacheStatus?: HistoryCoverage;
+}
+
+/** Coverage of a calendar fetch. `complete=false` means at least one upstream source was incomplete. */
+export interface HistoryCoverage {
+  outcome: 'complete' | 'partial';
+  complete: boolean;
+  stale: boolean;
+  issues?: string[];
 }
 
 export interface HistoryTimelineResponse {
   items: HistoryEvent[];
   total: number;
   limit: number;
+  cacheStatus?: HistoryCoverage;
   offset: number;
   hasMore: boolean;
   lastSyncedAt?: string;

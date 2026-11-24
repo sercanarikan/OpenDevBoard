@@ -29,5 +29,8 @@
     "loading": "Kişisel aktivite geçmişiniz yükleniyor…",
     "loadFailed": "Aktivite geçmişi yüklenemedi.",
     "retry": "Tekrar Dene"
+  },
+  "partial": {
+    "message": "Bu aralık için bazı Azure DevOps kaynakları tamamen okunamadı. Toplamlar ve liste eksik olabilir."
   }
 }

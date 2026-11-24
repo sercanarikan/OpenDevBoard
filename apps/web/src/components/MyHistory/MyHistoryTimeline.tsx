@@ -293,6 +293,11 @@ export const MyHistoryTimeline: React.FC = () => {
       {/* 3. Main Timeline Body */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+          {summary?.cacheStatus && summary.cacheStatus.complete === false && (
+            <div role="status" data-testid="history-partial-notice" className="mx-4 sm:mx-6 mt-3 px-3 py-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-900 dark:text-amber-200">
+              {t('partial.message')}
+            </div>
+          )}
           {loading && events.length === 0 ? (
             <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-3" data-testid="history-loading">
               <div className="w-7 h-7 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />

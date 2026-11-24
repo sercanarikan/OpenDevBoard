@@ -29,5 +29,8 @@
     "loading": "Loading your personal activity history…",
     "loadFailed": "Failed to load activity history.",
     "retry": "Retry"
+  },
+  "partial": {
+    "message": "Some Azure DevOps sources could not be read completely for this range. Totals and the list may be incomplete."
   }
 }
