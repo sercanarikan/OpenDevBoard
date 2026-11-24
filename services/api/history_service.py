@@ -363,8 +363,9 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
         commit_range = f"fromDate={window.iso_start()}&searchCriteria.toDate={window.iso_end()}"
         # Bounds come from validated datetimes, never from request text.
         changed_clause = (
-            f"[System.ChangedDate] >= '{window.start.strftime('%Y-%m-%d')}' "
-            f"AND [System.ChangedDate] < '{window.end.strftime('%Y-%m-%d')}' "
+            # WIQL date-only literals use the server's local time zone; explicit UTC timestamps keep the bounds exact.
+            f"[System.ChangedDate] >= '{window.start.strftime('%Y-%m-%dT%H:%M:%SZ')}' "
+            f"AND [System.ChangedDate] < '{window.end.strftime('%Y-%m-%dT%H:%M:%SZ')}' "
         )
     else:
         changed_clause = f"[System.ChangedDate] >= @Today - {days} "

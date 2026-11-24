@@ -19,6 +19,9 @@ from date_window import DateWindow, rolling_window
 logger = logging.getLogger("team_service")
 
 CACHE_TTL_SECONDS = 300  # 5 minutes
+# Calendar fetches page explicitly; a page cap that is reached marks the result partial instead of complete.
+CALENDAR_PAGE_SIZE = 100
+CALENDAR_MAX_PAGES = 20
 
 
 def _utcnow():
@@ -402,6 +405,7 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
     repos = [r for r in repos if r.get("isDisabled") is not True]
     project_names = {r.get("project", {}).get("name", "") for r in repos if r.get("project", {}).get("name", "")}
     failed_projects = set()
+    truncated_projects: set = set()
     results: Dict[str, List[Dict[str, Any]]] = {}
 
     def fetch_repo_commits(repo):
@@ -411,12 +415,27 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
         if not project_name or not repo_id:
             return project_name, False, []
         try:
-            url = (f"{org_url.rstrip('/')}/{project_name}/_apis/git/repositories/{repo_id}/commits"
-                   f"?searchCriteria.fromDate={start_iso}&searchCriteria.toDate={end_iso}&$top=100&api-version=7.1")
-            r = azure_http.get(url, headers=headers, timeout=8)
+            raw: List[Dict[str, Any]] = []
+            pages_complete = False
+            r = None
+            for page_index in range(CALENDAR_MAX_PAGES):
+                url = (f"{org_url.rstrip('/')}/{project_name}/_apis/git/repositories/{repo_id}/commits"
+                       f"?searchCriteria.fromDate={start_iso}&searchCriteria.toDate={end_iso}"
+                       f"&$top={CALENDAR_PAGE_SIZE}&$skip={page_index * CALENDAR_PAGE_SIZE}&api-version=7.1")
+                r = azure_http.get(url, headers=headers, timeout=8)
+                if r.status_code != 200:
+                    break
+                page = r.json().get("value", [])
+                raw.extend(page)
+                if len(page) < CALENDAR_PAGE_SIZE:
+                    pages_complete = True
+                    break
+            if r.status_code == 200 and not pages_complete:
+                logger.warning("Calendar commit pagination cap reached for project %s; result is partial", project_name)
+                truncated_projects.add(project_name)
             if r.status_code == 200:
                 out = []
-                for c in r.json().get("value", []):
+                for c in raw:
                     c_id = c.get("commitId", "")
                     author_obj = c.get("author", {})
                     date_str = author_obj.get("date") or ""
@@ -449,7 +468,7 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
     successful_projects = sorted(p for p in project_names if p not in failed_projects) if repo_fetch_ok else []
     fresh_commits = {(c["commitId"], c["repository"]): c
                      for project in successful_projects for c in results.get(project, [])}.values()
-    complete = repo_fetch_ok and not failed_projects
+    complete = repo_fetch_ok and not failed_projects and not truncated_projects
     outcome = "complete" if complete else ("partial" if successful_projects else "failed")
 
     # Upsert only true fetched records. No deletes and no cache-state write: a bounded fetch must not
@@ -469,7 +488,11 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
         ).fetchall()]
 
     commits = [c for c in cached if _window_matches(c.get("date"), window)]
-    prs = _load_live_prs_summary_only(org_url, pat, days, window=window)
+    pr_report: Dict[str, Any] = {}
+    prs = _load_live_prs_summary_only(org_url, pat, days, window=window, report=pr_report)
+    if pr_report.get("truncated"):
+        complete = False
+        outcome = "partial"
     return {
         "commits": commits,
         "pullRequests": prs,
@@ -503,8 +526,12 @@ def _filter_commits_to_window(commits: List[Dict[str, Any]], now: datetime, days
     return [commit for commit in commits if _is_within_window(commit.get("date"), min_date)]
 
 
-def _load_live_prs_summary_only(org_url: str, pat: str, days: int, window: Optional[DateWindow] = None) -> List[Dict[str, Any]]:
-    """Fetches PRs across projects for team activity aggregation."""
+def _load_live_prs_summary_only(org_url: str, pat: str, days: int, window: Optional[DateWindow] = None,
+                                report: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Fetches PRs across projects for team activity aggregation.
+
+    For calendar windows, ``report["truncated"]`` is set when the page cap was reached before a short page.
+    """
     headers = feature_context.get_devops_headers(pat)
     now_utc = _utcnow()
     start_utc = now_utc - timedelta(days=days)
@@ -512,12 +539,31 @@ def _load_live_prs_summary_only(org_url: str, pat: str, days: int, window: Optio
 
     prs = []
     try:
-        url = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=200&api-version=7.1"
+        base = f"{org_url.rstrip('/')}/_apis/git/pullrequests?searchCriteria.status=all&$top=200&api-version=7.1"
         if calendar:
-            url += f"&searchCriteria.minTime={window.iso_start()}&searchCriteria.maxTime={window.iso_end()}"
-        res = azure_http.get(url, headers=headers, timeout=12)
-        if res.status_code == 200:
-            for pr in res.json().get("value", []):
+            # queryTimeRangeType=created matches the calendar membership rule (creation date).
+            base += (f"&searchCriteria.queryTimeRangeType=created"
+                     f"&searchCriteria.minTime={window.iso_start()}&searchCriteria.maxTime={window.iso_end()}")
+        items: List[Dict[str, Any]] = []
+        res = None
+        max_pages = CALENDAR_MAX_PAGES if calendar else 1
+        pages_complete = False
+        for page_index in range(max_pages):
+            url = base + (f"&$skip={page_index * 200}" if page_index else "")
+            res = azure_http.get(url, headers=headers, timeout=12)
+            if res.status_code != 200:
+                break
+            page = res.json().get("value", [])
+            items.extend(page)
+            if len(page) < 200:
+                pages_complete = True
+                break
+        if calendar and report is not None:
+            report["truncated"] = res is not None and res.status_code == 200 and not pages_complete
+            if report["truncated"]:
+                logger.warning("Calendar PR pagination cap reached; team activity result is partial")
+        if res is not None and res.status_code == 200:
+            for pr in items:
                 c_date = pr.get("creationDate", "")
                 if calendar and not _window_matches(c_date, window):
                     continue

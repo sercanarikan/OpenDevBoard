@@ -166,6 +166,64 @@ class TestCalendarSync(unittest.TestCase):
         self.assertIn("later", ids)
         self.assertIn("in1", ids)
 
+    def test_calendar_commit_pages_are_followed_until_a_short_page(self):
+        first = [_commit(f"c{i}", "2028-02-01T08:00:00Z") for i in range(2)]
+        second = [_commit("c2", "2028-02-01T09:00:00Z")]
+        pages = [first, second]
+        urls = []
+
+        def get(url, **kwargs):
+            urls.append(url)
+            if url.endswith("/_apis/git/repositories?api-version=7.1"):
+                return _response({"value": [{"id": 1, "name": "R", "project": {"name": "P"}}]})
+            if "/commits?" in url:
+                return _response({"value": pages.pop(0) if pages else []})
+            return _response({"value": []})
+
+        with patch.object(team_service, "CALENDAR_PAGE_SIZE", 2), \
+                patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_load_live_prs_summary_only", return_value=[]), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
+        self.assertEqual({c["commitId"] for c in result["commits"]}, {"c0", "c1", "c2"})
+        self.assertEqual(result["cacheStatus"]["outcome"], "complete")
+        self.assertTrue(any("$skip=2" in u for u in urls))
+
+    def test_calendar_commit_page_cap_marks_the_result_partial(self):
+        full_page = [_commit(f"x{i}", "2028-02-01T08:00:00Z") for i in range(2)]
+
+        def get(url, **kwargs):
+            if url.endswith("/_apis/git/repositories?api-version=7.1"):
+                return _response({"value": [{"id": 1, "name": "R", "project": {"name": "P"}}]})
+            if "/commits?" in url:
+                return _response({"value": full_page})
+            return _response({"value": []})
+
+        with patch.object(team_service, "CALENDAR_PAGE_SIZE", 2), patch.object(team_service, "CALENDAR_MAX_PAGES", 3), \
+                patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_load_live_prs_summary_only", return_value=[]), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
+        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
+        self.assertFalse(result["cacheStatus"]["complete"])
+
+    def test_calendar_pr_page_cap_marks_the_result_partial(self):
+        def get(url, **kwargs):
+            if url.endswith("/_apis/git/repositories?api-version=7.1"):
+                return _response({"value": []})
+            return _response({"value": [{"pullRequestId": i, "creationDate": "2028-02-01T08:00:00Z",
+                                         "repository": {"name": "R", "project": {"name": "P"}}}
+                                        for i in range(200)]})
+
+        with patch.object(team_service, "CALENDAR_MAX_PAGES", 2), \
+                patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
+        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
+
     def test_team_rolling_sync_still_writes_state_row(self):
         get, _ = self._team_get([_commit("r1", (NOW).isoformat() + "Z")])
         with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
@@ -205,8 +263,9 @@ class TestCalendarSync(unittest.TestCase):
     def test_history_calendar_wiql_uses_explicit_bounds(self):
         result, posted, commit_urls = self._history_run(self.window)
         self.assertEqual(len(posted), 1)
-        self.assertIn("[System.ChangedDate] >= '2028-02-01'", posted[0])
-        self.assertIn("[System.ChangedDate] < '2028-02-03'", posted[0])
+        # Contract: explicit UTC timestamps, because date-only WIQL literals use the server's local time zone.
+        self.assertIn("[System.ChangedDate] >= '2028-02-01T00:00:00Z'", posted[0])
+        self.assertIn("[System.ChangedDate] < '2028-02-03T00:00:00Z'", posted[0])
         self.assertNotIn("@Today", posted[0])
         self.assertIn("searchCriteria.toDate=2028-02-03T00:00:00Z", commit_urls[0])
         self.assertEqual([e["id"] for e in result["events"]], ["commit-aaaaaaaa"])
