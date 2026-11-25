@@ -469,6 +469,22 @@ def _row_to_pipeline_dict(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
+def load_local_pipeline_runs(conn: sqlite3.Connection, projects: List[str], window: DateWindow) -> List[Dict[str, Any]]:
+    """Cache-only read: runs in the window for the given project set. Never touches upstream."""
+    projects = [p for p in projects if p]
+    if not projects:
+        return []
+    conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" for _ in projects)
+    rows = conn.execute(
+        f"""SELECT * FROM pipeline_runs WHERE project IN ({placeholders})
+            ORDER BY COALESCE(NULLIF(finish_time, ''), queue_time) DESC, id DESC""",
+        projects,
+    ).fetchall()
+    runs = [_row_to_pipeline_dict(row) for row in rows]
+    return [run for run in runs if _run_in_window(run, window)]
+
+
 # -----------------------------------------------------------------------------
 # Query and Metrics Calculation
 # -----------------------------------------------------------------------------

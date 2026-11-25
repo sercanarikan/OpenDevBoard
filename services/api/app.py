@@ -728,10 +728,58 @@ def get_team_activity_repositories():
         app.logger.error(f"Error in get_team_activity_repositories: {e}", exc_info=True)
         return jsonify({"error": str(e), "repositories": []}), 500
 
+def _pipeline_cache_first(window, refresh=True):
+    """Calendar pipeline data: local rows plus coverage and job state; upstream work only via chunk jobs."""
+    chunks = activity_chunks.plan_month_chunks(window)
+    org_url = get_devops_org_url()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    runner = _get_activity_runner()
+    busy_refusals = 0
+    conn = persistence.get_db_connection()
+    try:
+        project_scope.init_project_scope_db(conn)
+        projects = project_scope.load_project_set(conn, org_url) or []
+        scope = coverage_ledger.scope_key(org_url, projects)
+        keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+        coverage = coverage_ledger.read_coverage(conn, scope, 'pipelines', keys)
+        if refresh:
+            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat())
+            for chunk in chunks:
+                row = coverage.get(activity_chunks.chunk_key(chunk))
+                needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
+                    coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
+                )
+                if needs_fetch and runner.submit(scope, 'pipelines', chunk, fetchers['pipelines']) == activity_jobs.BUSY:
+                    busy_refusals += 1
+        job = {**runner.status(scope, 'pipelines', keys), "busy": busy_refusals}
+        runs = pipeline_service.load_local_pipeline_runs(conn, projects, window)
+    finally:
+        conn.close()
+    counts = {"complete": 0, "partial": 0, "missing": 0}
+    for key in keys:
+        row = coverage.get(key)
+        if row is None:
+            counts["missing"] += 1
+        elif row['coverage'] == coverage_ledger.COVERAGE_COMPLETE:
+            counts["complete"] += 1
+        else:
+            counts["partial"] += 1
+    cache_status = {
+        "complete": counts["partial"] == 0 and counts["missing"] == 0,
+        "coverage": counts,
+        "source": "local-cache",
+    }
+    return {"items": runs, "cacheStatus": cache_status, "job": job}
+
+
 def _load_all_pipelines(days=30, force_refresh=False, window=None):
     window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return pipeline_service.build_fixture_pipelines()
+    if window.is_calendar:
+        # Calendar windows never wait for upstream: local rows now, missing chunks fetched in the background.
+        mode = (request.args.get('mode') or 'refresh').strip().lower()
+        return _pipeline_cache_first(window, refresh=(mode != 'cache'))
     org_url = get_devops_org_url()
     pat = get_devops_pat()
     return _live_flights.run(('pipelines',) + window.key + (force_refresh,), lambda: pipeline_service.sync_live_pipeline_runs(org_url, pat, days=window.days, force_refresh=force_refresh, include_cache_status=True, project_scoped=True, **_window_kw(window)))
@@ -861,6 +909,7 @@ def get_pipeline_health():
     try:
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
+        job = sync_data.get("job") if isinstance(sync_data, dict) else None
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         summary = pipeline_service.compute_pipeline_summary(all_runs, **_range_kwargs(window))
 
@@ -908,7 +957,8 @@ def get_pipeline_health():
             "failed_builds": failed_builds,
             "recent_builds": recent_builds,
             "daily_stats": summary["dailyStats"],
-            "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None
+            "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None,
+            **({"job": job} if job else {})
         }), 200
     except Exception as e:
         app.logger.error(f"Error in get_pipeline_health: {e}", exc_info=True)
@@ -923,10 +973,13 @@ def get_pipelines():
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
+        job = sync_data.get("job") if isinstance(sync_data, dict) else None
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         res = pipeline_service.query_pipeline_runs(all_runs, request.args, window=window)
         if isinstance(sync_data, dict):
             res["cacheStatus"] = sync_data.get("cacheStatus")
+        if job:
+            res["job"] = job
         return jsonify(res), 200
     except Exception as e:
         app.logger.error(f"Error in get_pipelines: {e}", exc_info=True)
@@ -941,6 +994,7 @@ def get_pipelines_summary():
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
+        job = sync_data.get("job") if isinstance(sync_data, dict) else None
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         project = request.args.get('project')
         if project and project != 'all':
@@ -948,6 +1002,8 @@ def get_pipelines_summary():
         summary = pipeline_service.compute_pipeline_summary(all_runs, **_range_kwargs(window))
         if isinstance(sync_data, dict):
             summary["cacheStatus"] = sync_data.get("cacheStatus")
+        if job:
+            summary["job"] = job
         return jsonify(summary), 200
     except Exception as e:
         app.logger.error(f"Error in get_pipelines_summary: {e}", exc_info=True)
@@ -962,10 +1018,13 @@ def get_pipeline_runs():
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         sync_data = _load_all_pipelines(**_range_kwargs(window), force_refresh=force_refresh)
+        job = sync_data.get("job") if isinstance(sync_data, dict) else None
         all_runs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         res = pipeline_service.query_pipeline_runs(all_runs, request.args, window=window)
         if isinstance(sync_data, dict):
             res["cacheStatus"] = sync_data.get("cacheStatus")
+        if job:
+            res["job"] = job
         return jsonify(res), 200
     except Exception as e:
         app.logger.error(f"Error in get_pipeline_runs: {e}", exc_info=True)
@@ -979,6 +1038,7 @@ def get_pipeline_run_by_id(run_id):
         if window_error:
             return jsonify({"error": window_error}), 400
         all_runs = _load_all_pipelines(**_range_kwargs(window))
+        all_runs = all_runs["items"] if isinstance(all_runs, dict) else all_runs
         project = request.args.get('project')
         run = pipeline_service.get_single_run_details(all_runs, run_id, project=project)
         if not run:
@@ -1045,7 +1105,8 @@ def get_deployment_metrics():
             "deployment_frequency": round(summary["totalDeployments"] / max(1, window.days), 2),
             "chart_data": chart_data,
             "recent_deployments": recent_deployments,
-            "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None
+            "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None,
+            **({"job": job} if job else {})
         }), 200
     except Exception as e:
         app.logger.error(f"Error in get_deployment_metrics: {e}", exc_info=True)
