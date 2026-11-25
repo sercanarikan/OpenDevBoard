@@ -340,7 +340,8 @@ export function DateRangeFilter({ value, onApply, disabled = false, activityMetr
     >
       <h2 id={titleId} className="sr-only">{t('title')}</h2>
 
-      <div className="grid gap-4 sm:grid-cols-[minmax(0,160px)_minmax(0,1fr)]">
+      {/* pb keeps the last legend row above the sticky action bar on phones */}
+      <div className="grid gap-4 pb-20 sm:grid-cols-[minmax(0,160px)_minmax(0,1fr)] sm:pb-0">
         <div className="space-y-3">
           <div role="group" aria-label={t('groups.rolling')} className="flex flex-wrap gap-1.5">
             {ROLLING_ORDER.map(preset => (

@@ -112,7 +112,7 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
         ref={trackRef}
         role="img"
         aria-label={`${t('activity.timelineLabel')}: ${formatDayLabel(draftStart, locale)} – ${formatDayLabel(draftEnd, locale)}`}
-        className="relative h-16 flex items-end gap-px select-none"
+        className="relative h-16 select-none"
       >
         {bins.map(b => {
           const first = b.start;
@@ -122,20 +122,29 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
           const coveredBin = b.state === 'covered_active' || b.state === 'covered_zero';
           const heightPct = !coveredBin ? 100 : b.count && maxBinCount > 0 ? Math.min(100, Math.max(8, (b.count / maxBinCount) * 100)) : 4;
           const inRange = index + size > startIndex && index <= endIndex;
+          // Absolute geometry on the day axis: bars line up exactly with the drag handles (no flex gaps).
           const style = {
+            left: `${pct(index)}%`,
             width: `${(size / dayCount) * 100}%`,
             height: `${heightPct}%`,
             backgroundImage: visual.pattern === 'hatch' ? HATCH : undefined,
           };
+          const uncoveredShare = b.days > 0 ? b.uncoveredDays / b.days : 0;
           const barClass = [
-            'min-w-[2px] rounded-t-sm transition-colors',
+            'absolute bottom-0 min-w-[2px] rounded-t-sm transition-colors',
             b.state === 'covered_active' ? 'bg-brand-500 dark:bg-brand-400' : '',
             b.state === 'covered_zero' ? 'bg-slate-200 dark:bg-slate-700' : '',
             visual.pattern === 'dashed' ? 'border border-dashed border-slate-400 bg-transparent' : '',
             b.state === 'partial' ? 'bg-slate-300 dark:bg-slate-600' : '',
             inRange ? '' : 'opacity-50',
           ].join(' ');
-          return <div key={b.start} className={barClass} style={style} title={`${b.start}${b.end !== b.start ? ` – ${b.end}` : ''}`} />;
+          return (
+            <div key={b.start} className={barClass} style={style} title={`${b.start}${b.end !== b.start ? ` – ${b.end}` : ''} · ${b.coveredDays}/${b.days} ${t('activity.coveredOf')}`}>
+              {uncoveredShare > 0 && b.coveredDays > 0 ? (
+                <div aria-hidden="true" className="absolute left-0 right-0 top-0 rounded-t-sm" style={{ height: `${uncoveredShare * 100}%`, backgroundImage: HATCH }} />
+              ) : null}
+            </div>
+          );
         })}
         <div
           aria-hidden="true"
@@ -144,14 +153,18 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
         />
         <div
           {...handleProps('start', draftStart, startIndex)}
-          className="absolute -top-1 bottom-0 w-3 -ml-1.5 cursor-ew-resize rounded-sm bg-amber-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 touch-none"
+          className="absolute -top-2 bottom-0 flex w-11 -ml-[22px] cursor-ew-resize justify-center touch-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
           style={{ left: handleLeft(startIndex) }}
-        />
+        >
+          <span aria-hidden="true" className="my-1 w-1 rounded-sm bg-slate-900 dark:bg-slate-100" />
+        </div>
         <div
           {...handleProps('end', draftEnd, endIndex)}
-          className="absolute -top-1 bottom-0 w-3 -ml-1.5 cursor-ew-resize rounded-sm bg-amber-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 touch-none"
+          className="absolute -top-2 bottom-0 flex w-11 -ml-[22px] cursor-ew-resize justify-center touch-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
           style={{ left: handleLeft(endIndex + 1) }}
-        />
+        >
+          <span aria-hidden="true" className="my-1 w-1 rounded-sm bg-slate-900 dark:bg-slate-100" />
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-2 text-[11px]">
         <div className="flex items-center justify-between gap-1">

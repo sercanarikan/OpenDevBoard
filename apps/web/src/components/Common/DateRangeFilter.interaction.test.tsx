@@ -109,6 +109,17 @@ describe('DateRangeFilter interactions', () => {
     expect(onApply).toHaveBeenCalledWith(periodSelection('year', { year }, utcTodayKey()));
   });
 
+  it('does not limit year navigation to a fixed list (T5)', async () => {
+    await render(presetSelection('last30', utcTodayKey()));
+    await open();
+    await act(async () => tab('Year').click());
+    const current = Number(utcTodayKey().slice(0, 4));
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => findButton('Previous year')!.click());
+    }
+    expect(find('[data-testid="date-range-period"]')?.textContent).toContain(String(current - 6));
+  });
+
   it('applies a quarter selection through the quarter tab', async () => {
     await render(presetSelection('last30', utcTodayKey()));
     await open();

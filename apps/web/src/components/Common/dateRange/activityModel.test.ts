@@ -88,3 +88,45 @@ describe('range handles', () => {
     expect(stepHandle('2026-01-01', 'ArrowLeft', true, '2026-01-01', '2026-12-31')).toBe('2026-01-01');
   });
 });
+
+describe('timeline buckets share the day axis (T3)', () => {
+  it('reports how many days each bucket spans, so bar widths follow the drag axis', () => {
+    // 2 Nov 2026 is a Monday: three full Monday-to-Sunday weeks.
+    const days = Array.from({ length: 21 }, (_, i) => day(`2026-11-${String(i + 2).padStart(2, '0')}`, 'covered_active', 1));
+    const bins = bin(days, 'week');
+    expect(bins.map(b => b.days)).toEqual([7, 7, 7]);
+    expect(bins.reduce((sum, b) => sum + b.days, 0)).toBe(21);
+  });
+
+  it('keeps a partial first week proportional to its real length', () => {
+    // Weeks run Monday to Sunday: 25-29 Nov is a partial week of 5 days, 30 Nov-2 Dec is 3 days.
+    const dates = ['2026-11-25', '2026-11-26', '2026-11-27', '2026-11-28', '2026-11-29', '2026-11-30', '2026-12-01', '2026-12-02'];
+    const bins = bin(dates.map(d => day(d, 'covered_active', 1)), 'week');
+    expect(bins).toHaveLength(2);
+    expect(bins[0].days).toBe(5);
+    expect(bins[1].days).toBe(3);
+  });
+});
+
+describe('mixed buckets keep known activity visible (T4)', () => {
+  it('shows the covered count and reports uncovered days separately', () => {
+    const days = [
+      day('2026-11-02', 'covered_active', 4),
+      day('2026-11-03', 'covered_active', 6),
+      day('2026-11-04', 'covered_zero', 0),
+      day('2026-11-05', 'not_collected'),
+    ];
+    const [b] = bin(days, 'week');
+    expect(b.count).toBe(10);
+    expect(b.coveredDays).toBe(3);
+    expect(b.uncoveredDays).toBe(1);
+    expect(b.state).toBe('not_collected');
+  });
+
+  it('reports no count and no covered days for a bucket with only uncollected days', () => {
+    const [b] = bin([day('2026-11-05', 'not_collected'), day('2026-11-06', 'partial')], 'week');
+    expect(b.count).toBeNull();
+    expect(b.coveredDays).toBe(0);
+    expect(b.uncoveredDays).toBe(2);
+  });
+});

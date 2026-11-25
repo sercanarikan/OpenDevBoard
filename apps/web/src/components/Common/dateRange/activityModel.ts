@@ -48,7 +48,13 @@ export function timelineGranularity(dayCount: number): TimelineGranularity {
 export interface TimelineBin {
   start: string;
   end: string;
+  /** Records summed over covered days only; null when the bucket has no covered day. */
   count: number | null;
+  /** Number of calendar days the bucket spans; bar widths are proportional to this. */
+  days: number;
+  coveredDays: number;
+  /** Days in the bucket with no scan (partial, not collected, unavailable). Known activity is never hidden by these. */
+  uncoveredDays: number;
   state: ActivityDayState;
 }
 
@@ -75,25 +81,28 @@ function binKey(date: string, granularity: TimelineGranularity): string {
  * day. `state` is the worst state in the bin, so a partly uncollected bar is never shown as complete.
  */
 export function bin(days: ActivityDay[], granularity: TimelineGranularity): TimelineBin[] {
-  const bins = new Map<string, { bin: TimelineBin; covered: number; coveredDays: number }>();
+  const bins = new Map<string, TimelineBin & { covered: number }>();
   for (const day of days) {
     const key = binKey(day.date, granularity);
     const covered = day.state === 'covered_active' || day.state === 'covered_zero';
     let entry = bins.get(key);
     if (!entry) {
-      entry = { bin: { start: day.date, end: day.date, count: null, state: day.state }, covered: 0, coveredDays: 0 };
+      entry = { start: day.date, end: day.date, count: null, days: 0, coveredDays: 0, uncoveredDays: 0, state: day.state, covered: 0 };
       bins.set(key, entry);
     }
-    entry.bin.end = day.date;
+    entry.end = day.date;
+    entry.days += 1;
     if (covered) {
       entry.covered += day.count ?? 0;
       entry.coveredDays += 1;
+    } else {
+      entry.uncoveredDays += 1;
     }
-    if (STATE_RANK[day.state] > STATE_RANK[entry.bin.state]) entry.bin.state = day.state;
+    if (STATE_RANK[day.state] > STATE_RANK[entry.state]) entry.state = day.state;
   }
-  return Array.from(bins.values()).map(({ bin: b, covered, coveredDays }) => ({
+  return Array.from(bins.values()).map(({ covered, ...b }) => ({
     ...b,
-    count: coveredDays > 0 ? covered : null,
+    count: b.coveredDays > 0 ? covered : null,
   }));
 }
 

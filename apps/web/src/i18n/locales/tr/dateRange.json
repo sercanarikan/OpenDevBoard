@@ -95,7 +95,8 @@
     "loadFailed": "Aktivite yüklenemedi.",
     "timeout": "Yükleme çok uzun sürdü. Tekrar deneyin.",
     "fixture": "Örnek veri, canlı değil",
-    "loading": "Aktivite yükleniyor…"
+    "loading": "Aktivite yükleniyor…",
+    "coveredOf": "kapsanan gün"
   },
   "actions": {
     "apply": "Uygula",

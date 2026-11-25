@@ -95,7 +95,8 @@
     "loadFailed": "Activity could not be loaded.",
     "timeout": "Loading took too long. Try again.",
     "fixture": "Fixture data, not live",
-    "loading": "Loading activity…"
+    "loading": "Loading activity…",
+    "coveredOf": "covered"
   },
   "actions": {
     "apply": "Apply",
