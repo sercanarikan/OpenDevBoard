@@ -1164,6 +1164,120 @@ def get_activity_daily():
     return jsonify(body), 200
 
 
+WORK_ITEM_WINDOW_DEFAULT_LIMIT = 50
+WORK_ITEM_WINDOW_MAX_LIMIT = 200
+
+
+def _parse_page_arg(name, default, minimum, maximum=None):
+    raw = request.args.get(name)
+    if raw is None or raw.strip() == '':
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer")
+    if value < minimum or (maximum is not None and value > maximum):
+        bound = f"between {minimum} and {maximum}" if maximum is not None else f"at least {minimum}"
+        raise ValueError(f"{name} must be {bound}")
+    return value
+
+
+@app.route('/api/work-items/window', methods=['GET'])
+def get_work_items_window():
+    """Windowed Work Item rows: kind=completed (ClosedDate) or kind=created (CreatedDate).
+
+    Rows come only from work_items_window; the active work_items cache is never read or written.
+    Refresh and cache semantics match /api/activity/daily (mode=cache never calls upstream).
+    """
+    kind = (request.args.get('kind') or '').strip()
+    if kind not in work_item_window.KINDS:
+        return jsonify({"error": f"kind must be one of: {', '.join(sorted(work_item_window.KINDS))}"}), 400
+    metric = f"workitems-{kind}"
+    mode = (request.args.get('mode') or 'refresh').strip().lower()
+    if mode not in ('cache', 'refresh'):
+        return jsonify({"error": "mode must be cache or refresh"}), 400
+    if not (request.args.get('startDate') and request.args.get('endDate')):
+        return jsonify({"error": "startDate and endDate are required"}), 400
+    try:
+        limit = _parse_page_arg('limit', WORK_ITEM_WINDOW_DEFAULT_LIMIT, 1, WORK_ITEM_WINDOW_MAX_LIMIT)
+        offset = _parse_page_arg('offset', 0, 0)
+        window = date_window.parse_request_window(request.args)
+        chunks = activity_chunks.plan_month_chunks(window)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+    fixture = sync_service.is_fixture_mode()
+    if fixture:
+        mode = 'cache'
+    org_url = get_devops_org_url()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    runner = _get_activity_runner()
+    busy_refusals = 0
+
+    conn = persistence.get_db_connection()
+    try:
+        project_scope.init_project_scope_db(conn)
+        work_item_window.init_window_db(conn)
+        if mode == 'refresh' and not fixture:
+            try:
+                discovered = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+            except Exception:
+                return jsonify({"error": "project list is unavailable"}), 503
+            project_scope.save_project_set(conn, org_url, discovered, now.isoformat(timespec="seconds") + "Z")
+            projects = discovered
+            project_scope_state = "discovered"
+        else:
+            stored = project_scope.load_project_set(conn, org_url)
+            projects = stored or []
+            project_scope_state = "stored" if stored is not None else "unknown"
+        scope = coverage_ledger.scope_key(org_url, projects)
+        keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+        coverage = coverage_ledger.read_coverage(conn, scope, metric, keys)
+        if mode == 'refresh':
+            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat(), projects=projects)
+            for chunk in chunks:
+                row = coverage.get(activity_chunks.chunk_key(chunk))
+                needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
+                    coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
+                )
+                if needs_fetch:
+                    if runner.submit(scope, metric, chunk, fetchers[metric]) == activity_jobs.BUSY:
+                        busy_refusals += 1
+        job = {**runner.status(scope, metric, keys), "busy": busy_refusals}
+        # Sorted by the kind's date descending, id as tie-break (see load_local_work_items_window): stable pages.
+        rows = work_item_window.load_local_work_items_window(conn, projects, window, kind)
+    finally:
+        conn.close()
+
+    counts = {"complete": 0, "partial": 0, "missing": 0}
+    for key in keys:
+        row = coverage.get(key)
+        if row is None:
+            counts["missing"] += 1
+        elif row['coverage'] == coverage_ledger.COVERAGE_COMPLETE:
+            counts["complete"] += 1
+        else:
+            counts["partial"] += 1
+    items = [{k: v for k, v in r.items() if k != 'kind'} for r in rows[offset:offset + limit]]
+    body = {
+        "items": items,
+        "total": len(rows),
+        "limit": limit,
+        "offset": offset,
+        "window": window.to_meta(),
+        "cacheStatus": {
+            "complete": counts["partial"] == 0 and counts["missing"] == 0,
+            "coverage": counts,
+            "source": "local-cache",
+        },
+        "job": job,
+        "projectScope": project_scope_state,
+    }
+    if fixture:
+        body["fixture"] = True
+    return jsonify(body), 200
+
+
 @app.route('/api/pipeline-health', methods=['GET'])
 def get_pipeline_health():
     """Fetches recent build pipeline runs (legacy UI backward compatibility)."""
