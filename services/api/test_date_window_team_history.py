@@ -129,7 +129,6 @@ class TestCalendarSync(unittest.TestCase):
                                     _commit("out", "2028-02-03T00:00:00Z")])
         with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
                 patch.object(team_service.azure_http, "get", side_effect=get), \
-                patch.object(team_service, "_load_live_prs_summary_only", return_value=[]) as prs, \
                 patch.object(team_service, "_utcnow", return_value=NOW):
             result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
             result2 = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
@@ -139,7 +138,6 @@ class TestCalendarSync(unittest.TestCase):
         self.assertEqual(len(commit_urls), 2, "calendar sync must not shortcut from cache")
         self.assertIn("searchCriteria.fromDate=2028-02-01T00:00:00Z", commit_urls[0])
         self.assertIn("searchCriteria.toDate=2028-02-03T00:00:00Z", commit_urls[0])
-        self.assertIs(prs.call_args.kwargs["window"], self.window)
         with persistence.get_db_connection() as conn:
             self.assertIsNone(conn.execute("SELECT * FROM team_activity_cache_state").fetchone())
             ids = {r["commit_id"] for r in conn.execute("SELECT commit_id FROM team_commits")}
@@ -208,73 +206,6 @@ class TestCalendarSync(unittest.TestCase):
             result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
         self.assertEqual(result["cacheStatus"]["outcome"], "partial")
         self.assertFalse(result["cacheStatus"]["complete"])
-
-    def test_calendar_pr_page_cap_marks_the_result_partial(self):
-        def get(url, **kwargs):
-            if url.endswith("/_apis/git/repositories?api-version=7.1"):
-                return _response({"value": []})
-            return _response({"value": [{"pullRequestId": i, "creationDate": "2028-02-01T08:00:00Z",
-                                         "repository": {"name": "R", "project": {"name": "P"}}}
-                                        for i in range(200)]})
-
-        with patch.object(team_service, "CALENDAR_MAX_PAGES", 2), \
-                patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
-                patch.object(team_service.azure_http, "get", side_effect=get), \
-                patch.object(team_service, "_utcnow", return_value=NOW):
-            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
-        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
-
-    def _pr(self, pr_id):
-        return {"pullRequestId": pr_id, "creationDate": "2028-02-01T08:00:00Z", "title": f"PR {pr_id}",
-                "createdBy": {"displayName": "Ada"}, "repository": {"name": "R", "project": {"name": "P"}}}
-
-    def _pr_get(self, second_page):
-        """First PR page is full (200 items); the second page is produced by ``second_page``."""
-        first = [self._pr(i) for i in range(200)]
-
-        def get(url, **kwargs):
-            if url.endswith("/_apis/git/repositories?api-version=7.1"):
-                return _response({"value": []})
-            if "/pullrequests" in url:
-                if "$skip=200" in url:
-                    return second_page()
-                return _response({"value": first})
-            return _response({"value": []})
-        return get
-
-    def test_calendar_pr_second_page_http_error_is_partial_and_keeps_first_page(self):
-        get = self._pr_get(lambda: _response({"message": "boom"}, status=500))
-        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
-                patch.object(team_service.azure_http, "get", side_effect=get), \
-                patch.object(team_service, "_utcnow", return_value=NOW):
-            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
-        self.assertFalse(result["cacheStatus"]["complete"])
-        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
-        self.assertEqual(len(result["pullRequests"]), 200, "records from the successful first page must be kept")
-
-    def test_calendar_pr_second_page_timeout_is_partial_and_keeps_first_page(self):
-        def timeout():
-            raise TimeoutError("read timed out")
-        get = self._pr_get(timeout)
-        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
-                patch.object(team_service.azure_http, "get", side_effect=get), \
-                patch.object(team_service, "_utcnow", return_value=NOW):
-            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
-        self.assertFalse(result["cacheStatus"]["complete"])
-        self.assertEqual(result["cacheStatus"]["outcome"], "partial")
-        self.assertEqual(len(result["pullRequests"]), 200)
-
-    def test_calendar_pr_first_page_timeout_is_partial_not_complete(self):
-        def get(url, **kwargs):
-            if url.endswith("/_apis/git/repositories?api-version=7.1"):
-                return _response({"value": []})
-            raise TimeoutError("read timed out")
-        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
-                patch.object(team_service.azure_http, "get", side_effect=get), \
-                patch.object(team_service, "_utcnow", return_value=NOW):
-            result = team_service.sync_live_team_activity("https://dev.azure.com/org", "unused", window=self.window)
-        self.assertFalse(result["cacheStatus"]["complete"])
-        self.assertEqual(result["pullRequests"], [])
 
     def test_calendar_commit_second_page_failure_is_partial_and_keeps_true_records(self):
         first = [_commit(f"k{i}", "2028-02-01T08:00:00Z") for i in range(team_service.CALENDAR_PAGE_SIZE)]

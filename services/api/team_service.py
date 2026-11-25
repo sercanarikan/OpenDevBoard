@@ -485,14 +485,10 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
         ).fetchall()]
 
     commits = [c for c in cached if _window_matches(c.get("date"), window)]
-    pr_report: Dict[str, Any] = {}
-    prs = _load_live_prs_summary_only(org_url, pat, days, window=window, report=pr_report)
-    if pr_report.get("incomplete"):
-        complete = False
-        outcome = "partial"
+    # Commit chunks persist commits only; PRs are served from the pull_requests table by the PR-window sync.
     return {
         "commits": commits,
-        "pullRequests": prs,
+        "pullRequests": [],
         "cacheStatus": {
             "outcome": outcome,
             "complete": complete,
