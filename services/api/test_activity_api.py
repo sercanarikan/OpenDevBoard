@@ -19,6 +19,14 @@ def rel(days_ago: int) -> str:
 
 
 class ActivityDailyRouteTests(unittest.TestCase):
+    def test_unavailable_retention_days_never_report_the_window_as_complete(self):
+        with patch.dict(os.environ, {"ACTIVITY_RETENTION_DAYS": "30"}):
+            body = self.get(f"metric=pipelines&startDate={rel(60)}&endDate={rel(50)}&mode=cache").get_json()
+        states = {d["state"] for d in body["days"]}
+        self.assertEqual(states, {"unavailable_retention"})
+        self.assertFalse(body["cacheStatus"]["complete"])
+        self.assertEqual(body["cacheStatus"]["unavailableRetentionDays"], len(body["days"]))
+
     def setUp(self):
         import app as api_app
         self.api_app = api_app

@@ -1147,15 +1147,18 @@ def get_activity_daily():
     days = activity_service.classify_days(window, coverage, counts, now, _activity_retention_days())
     partial_days = sum(1 for d in days if d['state'] == activity_service.PARTIAL)
     not_collected_days = sum(1 for d in days if d['state'] == activity_service.NOT_COLLECTED)
+    unavailable_retention_days = sum(1 for d in days if d['state'] == activity_service.UNAVAILABLE_RETENTION)
     body = {
         "metric": metric,
         "window": window.to_meta(),
         "days": days,
         "job": job,
         "cacheStatus": {
-            "complete": partial_days == 0 and not_collected_days == 0,
+            # Days beyond the retention horizon are never reported as collected, so they block completeness too.
+            "complete": partial_days == 0 and not_collected_days == 0 and unavailable_retention_days == 0,
             "partialDays": partial_days,
             "notCollectedDays": not_collected_days,
+            "unavailableRetentionDays": unavailable_retention_days,
         },
     }
     body["projectScope"] = project_scope_state
