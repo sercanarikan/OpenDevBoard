@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AlertTriangle, X } from 'lucide-react';
 import { AppProvider } from './context/AppContext';
+import { DateRangeProvider } from './context/DateRangeContext';
 import { useApp } from './context/useApp';
 import { Sidebar } from './components/Layout/Sidebar';
 import { Header } from './components/Layout/Header';
@@ -149,7 +150,9 @@ export function App() {
   return (
     <BrowserRouter>
       <AppProvider>
-        <MainContent />
+        <DateRangeProvider>
+          <MainContent />
+        </DateRangeProvider>
       </AppProvider>
     </BrowserRouter>
   );

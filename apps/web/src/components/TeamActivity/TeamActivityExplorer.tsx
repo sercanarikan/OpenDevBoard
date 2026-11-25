@@ -14,8 +14,9 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { useApp } from '../../context/useApp';
-import { DateRangeFilter } from '../Common/DateRangeFilter';
-import { DEFAULT_DATE_RANGE_PRESET, chartLabelStep, formatDayLabel, presetSelection, selectionDayCount, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
+import { useDateRange } from '../../context/useDateRange';
+import { useRangeScopedPage } from '../../hooks/useRangeScopedPage';
+import { chartLabelStep, formatDayLabel, selectionDayCount } from '../../services/dateRange';
 import type {
   TeamActivitySummary,
   TeamContributor,
@@ -30,8 +31,8 @@ export const TeamActivityExplorer: React.FC = () => {
     refreshToken
   } = useApp();
 
-  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
-  const rangeQuery = useMemo(() => toApiRange(range), [range]);
+  // The date range is global (header); this screen only reads it and fetches for its own metrics.
+  const { range, query: rangeQuery, selectionKey: rangeKey } = useDateRange();
   const dayCount = selectionDayCount(range);
   const [activeTab, setActiveTab] = useState<'contributors' | 'repositories' | 'commits'>('contributors');
   const [searchQuery, setSearchQuery] = useState('');
@@ -45,7 +46,7 @@ export const TeamActivityExplorer: React.FC = () => {
   const [selectedContributor, setSelectedContributor] = useState<TeamContributor | null>(null);
 
   // Pagination for commits
-  const [commitPage, setCommitPage] = useState(1);
+  const [commitPage, setCommitPage] = useRangeScopedPage(rangeKey);
   const pageSize = 25;
 
   const [summary, setSummary] = useState<TeamActivitySummary | null>(null);
@@ -62,7 +63,7 @@ export const TeamActivityExplorer: React.FC = () => {
       setCommitPage(1);
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, setCommitPage]);
 
   const request = useMemo(() => ({ api, range: rangeQuery, project: filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce }),
     [api, rangeQuery, filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce]);
@@ -156,7 +157,7 @@ export const TeamActivityExplorer: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {/* Card 1: Total Commits */}
           <div className="p-3 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40">
             <div className="text-[11px] font-medium text-slate-500 truncate">{t('summary.totalCommits')}</div>
@@ -178,18 +179,6 @@ export const TeamActivityExplorer: React.FC = () => {
             <div className="text-[11px] font-medium text-indigo-700 dark:text-indigo-400 truncate">{t('summary.totalPRs')}</div>
             <div className="text-xl font-bold text-indigo-700 dark:text-indigo-300 mt-1">
               {isReady ? summary.totalPRs : '—'}
-            </div>
-          </div>
-
-          {/* Card 4: Shared date range filter */}
-          <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 flex flex-col justify-between">
-            <div className="text-[11px] font-medium text-slate-500">{t('filters.periodLabel')}</div>
-            <div className="mt-1">
-              <DateRangeFilter
-                value={range}
-                maxSpanDays={90}
-                onApply={next => { setRange(next); setCommitPage(1); }}
-              />
             </div>
           </div>
         </div>

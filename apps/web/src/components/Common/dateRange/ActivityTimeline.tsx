@@ -2,7 +2,7 @@ import { useMemo, useRef, type KeyboardEvent, type PointerEvent as ReactPointerE
 import { useTranslation } from 'react-i18next';
 import { addDaysToKey, dayCountInclusive, formatDayLabel } from '../../../services/dateRange';
 import type { ActivityDay } from '../../../services/activityDaily';
-import { bin, dayVisual, stepHandle, timelineGranularity, type HandleKey } from './activityModel';
+import { bin, dayVisual, effectiveGranularity, stepHandle, timelineGranularity, type HandleKey, type TimelineGranularity } from './activityModel';
 
 export interface ActivityTimelineProps {
   days: ActivityDay[];
@@ -10,6 +10,10 @@ export interface ActivityTimelineProps {
   draftEnd: string;
   onDraftChange: (start: string, end: string) => void;
   locale: string;
+  /** Preferred bar size; made coarser automatically for long spans. Without it the size follows the span alone. */
+  granularity?: TimelineGranularity;
+  /** Compact track and no one-day nudge buttons (the picker offers manual inputs as the drag alternative). */
+  compact?: boolean;
 }
 
 type Which = 'start' | 'end';
@@ -20,13 +24,13 @@ const HATCH = 'repeating-linear-gradient(135deg, rgb(148 163 184 / 0.6) 0 2px, t
  * Interactive activity timeline. Dragging and keyboard changes only update the draft range; nothing here starts a
  * request. The parent applies the draft when the user presses Apply.
  */
-export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, locale }: ActivityTimelineProps) {
+export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, locale, granularity: preferred, compact = false }: ActivityTimelineProps) {
   const { t } = useTranslation('dateRange');
   const trackRef = useRef<HTMLDivElement>(null);
   const minKey = days[0]?.date ?? draftStart;
   const maxKey = days[days.length - 1]?.date ?? draftEnd;
   const dayCount = days.length || 1;
-  const granularity = timelineGranularity(dayCount);
+  const granularity = preferred ? effectiveGranularity(preferred, dayCount) : timelineGranularity(dayCount);
   const bins = useMemo(() => bin(days, granularity), [days, granularity]);
   // Bars are scaled against the largest bin total, so weekly and monthly sums never exceed the track.
   const maxBinCount = useMemo(() => bins.reduce((max, b) => Math.max(max, b.count ?? 0), 0), [bins]);
@@ -112,7 +116,7 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
         ref={trackRef}
         role="img"
         aria-label={`${t('activity.timelineLabel')}: ${formatDayLabel(draftStart, locale)} – ${formatDayLabel(draftEnd, locale)}`}
-        className="relative h-16 select-none"
+        className={`relative select-none ${compact ? 'h-[52px] sm:h-11' : 'h-16'}`}
       >
         {bins.map(b => {
           const first = b.start;
@@ -148,7 +152,7 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
         })}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-0 top-0 border-x-2 border-amber-500 bg-amber-500/10"
+          className="pointer-events-none absolute bottom-0 top-0 border-x-2 border-slate-900 dark:border-slate-100 bg-slate-900/5 dark:bg-white/5"
           style={{ left: `${pct(startIndex)}%`, width: `${pct(endIndex + 1) - pct(startIndex)}%` }}
         />
         <div
@@ -166,18 +170,25 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
           <span aria-hidden="true" className="my-1 w-1 rounded-sm bg-slate-900 dark:bg-slate-100" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
-        <div className="flex items-center justify-between gap-1">
-          <button type="button" aria-label={t('activity.nudgeStartEarlier')} onClick={() => nudge('start', -1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">−</button>
-          <span className="truncate text-slate-600 dark:text-slate-300">{handleLabel('start')}: {formatDayLabel(draftStart, locale)}</span>
-          <button type="button" aria-label={t('activity.nudgeStartLater')} onClick={() => nudge('start', 1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">+</button>
+      {compact ? (
+        <div className="flex justify-between text-[11px] tabular-nums text-slate-500 dark:text-slate-400 sm:text-[11px]" aria-hidden="true">
+          <span>{formatDayLabel(minKey, locale)}</span>
+          <span>{formatDayLabel(maxKey, locale)}</span>
         </div>
-        <div className="flex items-center justify-between gap-1">
-          <button type="button" aria-label={t('activity.nudgeEndEarlier')} onClick={() => nudge('end', -1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">−</button>
-          <span className="truncate text-slate-600 dark:text-slate-300">{handleLabel('end')}: {formatDayLabel(draftEnd, locale)}</span>
-          <button type="button" aria-label={t('activity.nudgeEndLater')} onClick={() => nudge('end', 1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">+</button>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 text-[11px]">
+          <div className="flex items-center justify-between gap-1">
+            <button type="button" aria-label={t('activity.nudgeStartEarlier')} onClick={() => nudge('start', -1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">−</button>
+            <span className="truncate text-slate-600 dark:text-slate-300">{handleLabel('start')}: {formatDayLabel(draftStart, locale)}</span>
+            <button type="button" aria-label={t('activity.nudgeStartLater')} onClick={() => nudge('start', 1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">+</button>
+          </div>
+          <div className="flex items-center justify-between gap-1">
+            <button type="button" aria-label={t('activity.nudgeEndEarlier')} onClick={() => nudge('end', -1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">−</button>
+            <span className="truncate text-slate-600 dark:text-slate-300">{handleLabel('end')}: {formatDayLabel(draftEnd, locale)}</span>
+            <button type="button" aria-label={t('activity.nudgeEndLater')} onClick={() => nudge('end', 1)} className="min-h-[44px] min-w-[44px] rounded-md border border-slate-300 dark:border-slate-600 px-2 focus-visible:outline-2 focus-visible:outline-brand-500">+</button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

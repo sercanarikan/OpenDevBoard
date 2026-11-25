@@ -18,8 +18,9 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/useApp';
 import type { DeploymentEnvironmentStat, DeploymentRecord, DeploymentSummary } from '../../types/paging';
-import { DateRangeFilter } from '../Common/DateRangeFilter';
-import { DEFAULT_DATE_RANGE_PRESET, chartLabelStep, presetSelection, selectionDayCount, selectionKey, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
+import { useDateRange } from '../../context/useDateRange';
+import { useOnRangeChange, useRangeScopedPage } from '../../hooks/useRangeScopedPage';
+import { chartLabelStep, selectionDayCount } from '../../services/dateRange';
 import { DeploymentInspector } from './DeploymentInspector';
 
 const emptyEnvironments: DeploymentEnvironmentStat[] = [];
@@ -34,8 +35,8 @@ export const DeploymentExplorer: React.FC = () => {
     setSelectedDeployment
   } = useApp();
 
-  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
-  const rangeQuery = useMemo(() => toApiRange(range), [range]);
+  // The date range is global (header); this screen only reads it and fetches for its own metrics.
+  const { range, query: rangeQuery, selectionKey: rangeKey } = useDateRange();
   const dayCount = selectionDayCount(range);
   const [envFilter, setEnvFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -47,12 +48,12 @@ export const DeploymentExplorer: React.FC = () => {
   const [envSearchQuery, setEnvSearchQuery] = useState('');
   const [analyticsView, setAnalyticsView] = useState<'none' | 'trend' | 'projects'>('trend');
 
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useRangeScopedPage(rangeKey);
   const pageSize = 25;
 
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [selectionScope, setSelectionScope] = useState<string | null>(null);
-  const scope = JSON.stringify([filters.selectedProject, envFilter, statusFilter, debouncedSearch, selectionKey(range), page]);
+  const scope = JSON.stringify([filters.selectedProject, envFilter, statusFilter, debouncedSearch, rangeKey, page]);
   // A selection belongs to one continuous visit to a scope, not future visits to the same scope.
   if (selectionScope !== null && selectionScope !== scope) {
     setSelectionScope(null);
@@ -84,7 +85,7 @@ export const DeploymentExplorer: React.FC = () => {
       }
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery, debouncedSearch, setSelectedDeployment]);
+  }, [searchQuery, debouncedSearch, setSelectedDeployment, setPage]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -122,6 +123,7 @@ export const DeploymentExplorer: React.FC = () => {
     setSelectionScope(null);
     setSelectedDeployment(null);
   };
+  useOnRangeChange(rangeKey, invalidateSelection);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -472,13 +474,6 @@ export const DeploymentExplorer: React.FC = () => {
               {t('status.failed')}
             </button>
           </div>
-
-          {/* Shared date range filter (presets + calendar range, applied on Apply) */}
-          <DateRangeFilter
-            value={range}
-            maxSpanDays={90}
-            onApply={next => { invalidateSelection(); setRange(next); setPage(1); }}
-          />
         </div>
 
         {/* Right Search and Refresh */}

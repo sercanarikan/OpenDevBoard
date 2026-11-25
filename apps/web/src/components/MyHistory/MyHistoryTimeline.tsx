@@ -18,8 +18,8 @@ import type { HistoryEvent, HistorySummary } from '../../types/paging';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { PullRequestInspector } from '../PullRequests/PullRequestInspector';
 import { groupTimelineEvents } from './timelineGroups';
-import { DateRangeFilter } from '../Common/DateRangeFilter';
-import { DEFAULT_DATE_RANGE_PRESET, presetSelection, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
+import { useDateRange } from '../../context/useDateRange';
+import { useRangeScopedPage } from '../../hooks/useRangeScopedPage';
 
 export const MyHistoryTimeline: React.FC = () => {
   const { t } = useTranslation(['myHistory', 'common']);
@@ -33,13 +33,13 @@ export const MyHistoryTimeline: React.FC = () => {
     setSelectedPR
   } = useApp();
 
-  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
-  const rangeQuery = useMemo(() => toApiRange(range), [range]);
+  // The date range is global (header); this screen only reads it and fetches for its own metrics.
+  const { query: rangeQuery, selectionKey: rangeKey } = useDateRange();
   const [activityType, setActivityType] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useRangeScopedPage(rangeKey);
   const pageSize = 25;
 
   const [timeline, setTimeline] = useState<{ events: HistoryEvent[]; asOf: number }>({ events: [], asOf: 0 });
@@ -57,7 +57,7 @@ export const MyHistoryTimeline: React.FC = () => {
       setPage(1);
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, setPage]);
 
   const request = useMemo(() => ({ api, range: rangeQuery, project: filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce }),
     [api, rangeQuery, filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce]);
@@ -259,13 +259,6 @@ export const MyHistoryTimeline: React.FC = () => {
               {t('filters.review')}
             </button>
           </div>
-
-          {/* Shared date range filter (presets + calendar range, applied on Apply) */}
-          <DateRangeFilter
-            value={range}
-            maxSpanDays={90}
-            onApply={next => { setRange(next); setPage(1); }}
-          />
         </div>
 
         {/* Right Search and Refresh */}

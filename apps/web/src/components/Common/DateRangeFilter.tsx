@@ -1,142 +1,413 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CalendarDays, Check } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import {
   DATE_RANGE_MAX_AGE_DAYS,
   DATE_RANGE_MAX_SPAN_DAYS,
   addDaysToKey,
-  buildMonthGrid,
-  customSelection,
+  dayCountInclusive,
   formatDayLabel,
   isPickableDay,
   periodSelection,
-  presetSelection,
-  selectionDayCount,
-  selectionSpanDays,
   utcTodayKey,
-  validateCustomRange,
-  type CalendarPresetId,
   type CustomRangeError,
   type DateRangePresetId,
   type DateRangeSelection,
   type PeriodKind,
-  type RollingPresetId
 } from '../../services/dateRange';
-import type { ActivityMetric } from '../../services/activityDaily';
-import { ActivityHeatmap } from './dateRange/ActivityHeatmap';
+import { ACTIVITY_METRICS, selectionBounds, type ActivityMetric } from '../../services/activityDaily';
+import { ActivityCalendar } from './dateRange/ActivityCalendar';
 import { ActivityTimeline } from './dateRange/ActivityTimeline';
 import { useActivityDaily } from './dateRange/useActivityDaily';
+import type { TimelineGranularity } from './dateRange/activityModel';
+import { PRESET_MAIN, PRESET_MORE, draftFromPreset, draftFromSelection, parseDateInput, selectionFromDraft, validateDraft, type Draft } from './dateRange/draftModel';
+import './dateRange/dateRangePicker.css';
 
 export interface DateRangeFilterProps {
+  /** The applied selection. The picker edits a draft of it and only reports a change through `onApply`. */
   value: DateRangeSelection;
   onApply: (selection: DateRangeSelection) => void;
   disabled?: boolean;
-  /** When set, the panel shows the activity timeline and heatmap for this metric. */
-  activityMetric?: ActivityMetric;
-  /**
-   * Longest selectable span for this screen. Screens whose list endpoints still load upstream in one request keep
-   * the 90-day limit; the activity views and the dashboard accept the full query window.
-   */
-  maxSpanDays?: number;
 }
 
-type Tab = 'day' | 'month' | 'quarter' | 'year' | 'custom';
-const TABS: Tab[] = ['day', 'month', 'quarter', 'year', 'custom'];
-const ROLLING_ORDER: RollingPresetId[] = ['last7', 'last14', 'last30', 'last90'];
-const CALENDAR_ORDER: CalendarPresetId[] = ['last1', 'last6m', 'last1y', 'today', 'yesterday', 'thisMonth', 'lastMonth', 'thisQuarter', 'lastQuarter', 'thisYear', 'lastYear'];
-const CATALOG_DAYS = 365;
+type PeriodView = 'month' | 'quarter' | 'year';
+const PERIOD_VIEWS: PeriodView[] = ['month', 'quarter', 'year'];
+const GRANULARITIES: TimelineGranularity[] = ['day', 'week', 'month'];
+const ALL_PRESETS: DateRangePresetId[] = [...PRESET_MAIN, ...PRESET_MORE];
+const CATALOG_DAYS = 364;
+const TIMELINE_DEFAULT_DAYS = 60;
+const YEARS_PER_PAGE = 12;
 
 const monthStart = (key: string) => `${key.slice(0, 8)}01`;
-const monthIndex = (key: string) => ({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)) - 1 });
 const yearOf = (key: string) => Number(key.slice(0, 4));
-const quarterOf = (key: string) => Math.floor((Number(key.slice(5, 7)) - 1) / 3) + 1;
-
-function tabForPreset(preset: CalendarPresetId | RollingPresetId): Tab | null {
-  if (preset === 'day' || preset === 'month' || preset === 'quarter' || preset === 'year' || preset === 'custom') return preset;
-  return null;
-}
-
-function errorKey(error: CustomRangeError): string {
-  return `errors.${error}`;
-}
+const lastDayOfMonth = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+const pad = (n: number) => String(n).padStart(2, '0');
 
 function placementFor(trigger: HTMLElement | null) {
   if (!trigger) return null;
-  const rect = trigger.getBoundingClientRect();
   const vw = window.innerWidth;
-  const vh = window.visualViewport?.height ?? window.innerHeight;
   if (vw < 640) return { mode: 'sheet' as const };
+  const rect = trigger.getBoundingClientRect();
+  const vh = window.visualViewport?.height ?? window.innerHeight;
   const gap = 8;
-  const width = Math.min(vw - 32, 560);
-  const left = Math.min(Math.max(16, rect.left), vw - width - 16);
+  const width = Math.min(vw - 32, 720);
+  const left = Math.min(Math.max(16, rect.right - width), vw - width - 16);
   const spaceBelow = vh - rect.bottom - 16 - gap;
   const spaceAbove = rect.top - 16 - gap;
-  const placeBelow = spaceBelow >= 320 || spaceBelow >= spaceAbove;
-  const maxHeight = Math.max(240, placeBelow ? spaceBelow : spaceAbove);
+  const placeBelow = spaceBelow >= 360 || spaceBelow >= spaceAbove;
+  const maxHeight = Math.max(280, placeBelow ? spaceBelow : spaceAbove);
   return placeBelow
     ? { mode: 'popover' as const, left, width, top: rect.bottom + gap, maxHeight }
     : { mode: 'popover' as const, left, width, bottom: vh - rect.top + gap, maxHeight };
 }
-
 type Placement = NonNullable<ReturnType<typeof placementFor>>;
 
-/** Timeline and heatmap for the draft range. Rendered only while the panel is open, so its hooks run in-app only. */
-function ActivitySection({
-  metric,
-  draftStart,
-  draftEnd,
-  todayKey,
-  locale,
-  onDraftChange,
-}: {
-  metric: ActivityMetric;
-  draftStart: string;
-  draftEnd: string;
-  todayKey: string;
+interface PanelProps {
+  value: DateRangeSelection;
+  titleId: string;
+  panelId: string;
+  placement: Placement;
   locale: string;
-  onDraftChange: (start: string, end: string) => void;
-}) {
+  onApply: (selection: DateRangeSelection) => void;
+  onClose: () => void;
+}
+
+/** The open picker. It mounts only while open, so the draft always starts from the applied selection. */
+function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onClose }: PanelProps) {
   const { t } = useTranslation('dateRange');
-  const catalogStart = draftStart < addDaysToKey(todayKey, -CATALOG_DAYS) ? draftStart : addDaysToKey(todayKey, -CATALOG_DAYS);
+  const [todayKey] = useState(() => utcTodayKey());
+  const earliestKey = addDaysToKey(todayKey, -(DATE_RANGE_MAX_AGE_DAYS - 1));
+  const [draft, setDraft] = useState<Draft>(() => draftFromSelection(value, todayKey));
+  const [typed, setTyped] = useState<{ start: string; end: string } | null>(null);
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [viewMonth, setViewMonth] = useState(() => monthStart(draftFromSelection(value, todayKey).end));
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const [periodView, setPeriodView] = useState<PeriodView>('month');
+  const [periodYear, setPeriodYear] = useState(() => yearOf(draftFromSelection(value, todayKey).end));
+  const [yearPageEnd, setYearPageEnd] = useState(() => yearOf(todayKey));
+  const [moreOpen, setMoreOpen] = useState(() => PRESET_MORE.includes(draftFromSelection(value, todayKey).preset as DateRangePresetId));
+  const [metric, setMetric] = useState<ActivityMetric>('pipelines');
+  const [granularity, setGranularity] = useState<TimelineGranularity>('day');
+  const [info, setInfo] = useState('');
+  const panelRef = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<string | null>(null);
+
+  const lo = draft.start <= draft.end ? draft.start : draft.end;
+  const hi = draft.start <= draft.end ? draft.end : draft.start;
+
+  // The heatmap and the timeline read cached coverage only; nothing here starts an upstream refresh.
+  const timelineStart = lo < addDaysToKey(todayKey, -(TIMELINE_DEFAULT_DAYS - 1)) ? lo : addDaysToKey(todayKey, -(TIMELINE_DEFAULT_DAYS - 1));
+  const earliestWanted = [addDaysToKey(todayKey, -CATALOG_DAYS), `${viewMonth.slice(0, 4)}-01-01`, `${lo.slice(0, 4)}-01-01`].sort()[0];
+  const floor = addDaysToKey(todayKey, -(DATE_RANGE_MAX_SPAN_DAYS - 1));
+  const catalogStart = earliestWanted < floor ? floor : earliestWanted;
   const { data, error, loading } = useActivityDaily({ metric, startDate: catalogStart, endDate: todayKey, mode: 'cache', enabled: true });
+  const timelineDays = useMemo(() => (data ? data.days.filter(d => d.date >= (timelineStart < catalogStart ? catalogStart : timelineStart)) : []), [data, timelineStart, catalogStart]);
   const job = data?.job;
+
+  const setNextDraft = (next: Draft) => {
+    setDraft(next);
+    setTyped(null);
+    setAnchor(null);
+  };
+
+  const showMonthOf = (date: string) => {
+    const month = monthStart(date);
+    setViewMonth(month);
+    setPeriodYear(yearOf(date));
+  };
+
+  useEffect(() => {
+    const target = panelRef.current?.querySelector<HTMLElement>('[data-preset][aria-pressed="true"]') ?? panelRef.current?.querySelector<HTMLElement>('[data-preset]');
+    (target && target.offsetParent !== null ? target : panelRef.current)?.focus();
+  }, []);
+
+  useLayoutEffect(() => {
+    const date = pendingFocus.current;
+    if (!date) return;
+    pendingFocus.current = null;
+    panelRef.current?.querySelector<HTMLElement>(`[data-date="${date}"]`)?.focus();
+  }, [viewMonth]);
+
+  const choosePreset = (preset: DateRangePresetId) => {
+    const next = draftFromPreset(preset, todayKey);
+    setNextDraft(next);
+    setInfo('');
+    showMonthOf(next.end);
+    setPeriodOpen(false);
+    if (PRESET_MORE.includes(preset)) setMoreOpen(true);
+  };
+
+  const pickDay = (date: string) => {
+    if (!isPickableDay(date, todayKey, anchor)) return;
+    if (anchor === null) {
+      setDraft({ start: date, end: date, preset: null });
+      setTyped(null);
+      setAnchor(date);
+      return;
+    }
+    const [start, end] = date < anchor ? [date, anchor] : [anchor, date];
+    setNextDraft({ start, end, preset: null });
+  };
+
+  const moveFocus = (from: string, delta: number) => {
+    const target = addDaysToKey(from, delta);
+    if (target > todayKey || target < earliestKey) return;
+    const element = panelRef.current?.querySelector<HTMLElement>(`[data-date="${target}"]`);
+    if (element) {
+      element.focus();
+      return;
+    }
+    pendingFocus.current = target;
+    showMonthOf(target);
+  };
+
+  const moveMonth = (delta: number) => {
+    const [y, m] = [yearOf(viewMonth), Number(viewMonth.slice(5, 7)) - 1];
+    const next = new Date(Date.UTC(y, m + delta, 1)).toISOString().slice(0, 10);
+    if (next > monthStart(todayKey) || next < monthStart(earliestKey)) return;
+    showMonthOf(next);
+  };
+
+  // A period still in progress is drafted up to today, never into the future.
+  const choosePeriod = (kind: PeriodKind, params: { year: number; month?: number; quarter?: number }) => {
+    const selection = periodSelection(kind, params, todayKey);
+    if (selection.kind !== 'calendar') return;
+    const end = selection.endDate > todayKey ? todayKey : selection.endDate;
+    setNextDraft({ start: selection.startDate, end, preset: end === selection.endDate ? kind : null });
+    setInfo('');
+    showMonthOf(kind === 'year' ? end : selection.startDate);
+    setPeriodOpen(false);
+  };
+  const periodDisabled = (start: string, end: string) => start > todayKey || end < earliestKey;
+
+  const onStartInput = (text: string) => {
+    const nextTyped = { start: text, end: typed?.end ?? draft.end };
+    setTyped(nextTyped);
+    const parsed = parseDateInput(text);
+    if (parsed) {
+      setDraft({ start: parsed, end: draft.end, preset: null });
+      setAnchor(null);
+      if (parsed <= draft.end) showMonthOf(parsed);
+    }
+  };
+  const onEndInput = (text: string) => {
+    const nextTyped = { start: typed?.start ?? draft.start, end: text };
+    setTyped(nextTyped);
+    const parsed = parseDateInput(text);
+    if (parsed) {
+      setDraft({ start: draft.start, end: parsed, preset: null });
+      setAnchor(null);
+      if (parsed <= todayKey && parsed >= draft.start) showMonthOf(parsed);
+    }
+  };
+
+  const startText = typed?.start ?? draft.start;
+  const endText = typed?.end ?? draft.end;
+  const inputInvalid = parseDateInput(startText) === null || parseDateInput(endText) === null;
+  const rangeError: CustomRangeError | null = inputInvalid ? 'invalidDate' : validateDraft(draft.start, draft.end, todayKey);
+  const canApply = !rangeError && anchor === null;
+  const spanText = !rangeError ? t('summary.spanDays', { count: dayCountInclusive(draft.start, draft.end) }) : '';
+
+  const apply = () => {
+    if (!canApply) return;
+    onApply(selectionFromDraft(draft, todayKey));
+    onClose();
+  };
+
+  const [viewYear, viewMonthIndex] = [yearOf(viewMonth), Number(viewMonth.slice(5, 7)) - 1];
+  const monthTitle = new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(viewYear, viewMonthIndex, 1)));
+  const canPrev = viewMonth > monthStart(earliestKey);
+  const canNext = viewMonth < monthStart(todayKey);
+  const firstDayOfView = viewMonth;
+  const rovingDate = lo.slice(0, 7) === viewMonth.slice(0, 7) ? lo : firstDayOfView;
+  const currentYear = yearOf(todayKey);
+  const earliestYear = yearOf(earliestKey);
+
+  const monthName = (m: number) => new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2024, m - 1, 1)));
+
+  const style = placement.mode === 'popover' ? { left: placement.left, width: placement.width, top: placement.top, bottom: placement.bottom, maxHeight: placement.maxHeight } : undefined;
+
+  const presetButton = (preset: DateRangePresetId) => (
+    <button key={preset} type="button" className="drp-preset" data-preset={preset} aria-pressed={draft.preset === preset} onClick={() => choosePreset(preset)}>
+      {t(`presets.${preset}`)}
+    </button>
+  );
+
   return (
-    <div className="space-y-3" data-testid="date-range-activity">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t('activity.title')}</h3>
-        {data?.fixture ? <span className="text-[11px] text-amber-700 dark:text-amber-400">{t('activity.fixture')}</span> : null}
+    <div ref={panelRef} id={panelId} role="dialog" aria-modal="false" aria-labelledby={titleId} tabIndex={-1} data-testid="date-range-panel" data-mode={placement.mode} className="drp-panel" style={style}>
+      <div className="drp-head">
+        <h2 id={titleId}>{t('title')}</h2>
+        <select className="drp-select" data-testid="date-range-metric" aria-label={t('activity.metricLabel')} value={metric} onChange={event => setMetric(event.target.value as ActivityMetric)}>
+          {ACTIVITY_METRICS.map(item => <option key={item} value={item}>{t(`activity.metrics.${item}`)}</option>)}
+        </select>
+        {data?.fixture ? <span className="drp-tag" data-testid="date-range-fixture">{t('activity.fixture')}</span> : null}
+        <button type="button" className="drp-icon drp-close" data-testid="date-range-close" aria-label={t('close')} onClick={onClose}><X size={16} aria-hidden="true" /></button>
       </div>
-      {loading && !data ? <p role="status" className="text-xs text-slate-500">{t('activity.loading')}</p> : null}
-      {error ? <p role="alert" className="text-xs text-red-600 dark:text-red-400">{t(error === 'timeout' ? 'activity.timeout' : 'activity.loadFailed')}</p> : null}
-      {job?.state === 'running' ? <p role="status" className="text-xs text-slate-500">{t('activity.job.running', { total: job.pending })}</p> : null}
-      {job?.state === 'partial' ? <p role="status" className="text-xs text-amber-700 dark:text-amber-400">{t('activity.job.partial')}</p> : null}
-      {job?.state === 'failed' ? <p role="status" className="text-xs text-red-600 dark:text-red-400">{t('activity.job.failed')}</p> : null}
-      {data ? (
-        <>
-          <ActivityTimeline days={data.days} draftStart={draftStart} draftEnd={draftEnd} onDraftChange={onDraftChange} locale={locale} />
-          <ActivityHeatmap days={data.days} draftStart={draftStart} draftEnd={draftEnd} metric={metric} locale={locale} onSelectDay={day => onDraftChange(day, day)} />
-        </>
-      ) : null}
+
+      <div className="drp-mpresets">
+        <select
+          data-testid="date-range-preset-select"
+          aria-label={t('presetSelect')}
+          value={draft.preset ?? ''}
+          onChange={event => event.target.value && choosePreset(event.target.value as DateRangePresetId)}
+        >
+          {draft.preset === null ? <option value="" disabled>{t('presets.custom')}</option> : null}
+          {ALL_PRESETS.map(preset => <option key={preset} value={preset}>{t(`presets.${preset}`)}</option>)}
+        </select>
+      </div>
+
+      <div className="drp-main">
+        <nav className="drp-presets" aria-label={t('presetList')}>
+          {PRESET_MAIN.map(presetButton)}
+          <details className="drp-more" data-testid="date-range-more" open={moreOpen} onToggle={event => setMoreOpen(event.currentTarget.open)}>
+            <summary>{t('more')}</summary>
+            {PRESET_MORE.map(presetButton)}
+          </details>
+        </nav>
+
+        <div className="drp-cal">
+          <div className="drp-calhead">
+            <button type="button" className="drp-icon" aria-label={t('calendar.previousMonth')} disabled={!canPrev} onClick={() => moveMonth(-1)}><ChevronLeft size={16} aria-hidden="true" /></button>
+            <button type="button" className="drp-title" data-testid="date-range-title" aria-expanded={periodOpen} aria-controls="drp-period" onClick={() => setPeriodOpen(open => !open)}>{monthTitle}</button>
+            <button type="button" className="drp-icon" aria-label={t('calendar.nextMonth')} disabled={!canNext} onClick={() => moveMonth(1)}><ChevronRight size={16} aria-hidden="true" /></button>
+          </div>
+
+          {periodOpen ? (
+            <div id="drp-period" data-testid="date-range-period" className="space-y-2">
+              <div className="drp-seg" role="group" aria-label={t('periodView.label')}>
+                {PERIOD_VIEWS.map(view => (
+                  <button key={view} type="button" data-view={view} aria-pressed={periodView === view} onClick={() => setPeriodView(view)}>{t(`periodView.${view}`)}</button>
+                ))}
+              </div>
+              <div className="drp-periodnav">
+                <button
+                  type="button"
+                  className="drp-icon"
+                  data-testid="date-range-period-prev"
+                  aria-label={periodView === 'year' ? t('period.previousYears') : t('period.previousYear')}
+                  disabled={periodView !== 'year' && periodYear <= earliestYear}
+                  onClick={() => (periodView === 'year' ? setYearPageEnd(yearPageEnd - YEARS_PER_PAGE) : setPeriodYear(periodYear - 1))}
+                ><ChevronLeft size={16} aria-hidden="true" /></button>
+                <span data-testid="date-range-period-label">
+                  {periodView === 'year' ? t('period.yearsRange', { from: yearPageEnd - YEARS_PER_PAGE + 1, to: yearPageEnd }) : periodYear}
+                </span>
+                <button
+                  type="button"
+                  className="drp-icon"
+                  data-testid="date-range-period-next"
+                  aria-label={periodView === 'year' ? t('period.nextYears') : t('period.nextYear')}
+                  disabled={periodView === 'year' ? yearPageEnd >= currentYear : periodYear >= currentYear}
+                  onClick={() => (periodView === 'year' ? setYearPageEnd(Math.min(currentYear, yearPageEnd + YEARS_PER_PAGE)) : setPeriodYear(periodYear + 1))}
+                ><ChevronRight size={16} aria-hidden="true" /></button>
+              </div>
+              <div className="drp-periodgrid cols-4">
+                {periodView === 'month' && Array.from({ length: 12 }, (_, i) => i + 1).map(m => {
+                  const start = `${periodYear}-${pad(m)}-01`;
+                  const end = `${periodYear}-${pad(m)}-${pad(lastDayOfMonth(periodYear, m))}`;
+                  return (
+                    <button key={m} type="button" className="drp-pbtn" data-month={m} disabled={periodDisabled(start, end)} aria-pressed={draft.start === start && draft.end === (end > todayKey ? todayKey : end)} onClick={() => choosePeriod('month', { year: periodYear, month: m })}>
+                      {monthName(m)}
+                    </button>
+                  );
+                })}
+                {periodView === 'quarter' && [1, 2, 3, 4].map(q => {
+                  const startMonth = (q - 1) * 3 + 1;
+                  const start = `${periodYear}-${pad(startMonth)}-01`;
+                  const end = `${periodYear}-${pad(startMonth + 2)}-${pad(lastDayOfMonth(periodYear, startMonth + 2))}`;
+                  return (
+                    <button key={q} type="button" className="drp-pbtn" data-quarter={q} disabled={periodDisabled(start, end)} aria-pressed={draft.start === start && draft.end === (end > todayKey ? todayKey : end)} onClick={() => choosePeriod('quarter', { year: periodYear, quarter: q })}>
+                      {t('period.quarterLabel', { quarter: q })}
+                    </button>
+                  );
+                })}
+                {periodView === 'year' && Array.from({ length: YEARS_PER_PAGE }, (_, i) => yearPageEnd - i).map(y => (
+                  <button key={y} type="button" className="drp-pbtn" data-year={y} disabled={periodDisabled(`${y}-01-01`, `${y}-12-31`)} aria-pressed={draft.start === `${y}-01-01` && draft.end === (y === currentYear ? todayKey : `${y}-12-31`)} onClick={() => choosePeriod('year', { year: y })}>
+                    {y}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <ActivityCalendar
+            days={data?.days ?? null}
+            viewMonth={viewMonth}
+            start={lo}
+            end={hi}
+            todayKey={todayKey}
+            earliestKey={earliestKey}
+            metric={metric}
+            locale={locale}
+            rovingDate={rovingDate}
+            onPick={pickDay}
+            onMove={moveFocus}
+            onInfo={setInfo}
+          />
+
+          <ul className="drp-legend" data-testid="date-range-legend">
+            <li><i style={{ background: 'var(--drp-hover)' }} />{t('activity.legend.coveredZero')}</li>
+            <li><span className="drp-scale" aria-hidden="true">{[1, 2, 3, 4, 5, 6].map(n => <i key={n} style={{ background: `var(--drp-b${n})` }} />)}</span>{t('activity.legend.coveredActive')}</li>
+            <li><i style={{ background: 'var(--drp-hatch), var(--drp-surface)' }} />{t('activity.legend.partial')}</li>
+            <li><i style={{ border: '1px dashed var(--drp-muted)' }} />{t('activity.legend.notCollected')}</li>
+            <li><i style={{ border: '1px dotted var(--drp-muted)' }} />{t('activity.legend.unavailable')}</li>
+            <li><i style={{ background: 'var(--drp-text)', width: 4, height: 4, borderRadius: '50%' }} />{t('activity.legend.stale')}</li>
+          </ul>
+
+          {loading && !data ? <p role="status" className="drp-status">{t('activity.loading')}</p> : null}
+          {error ? <p role="alert" className="drp-status bad">{t(error === 'timeout' ? 'activity.timeout' : 'activity.loadFailed')}</p> : null}
+          {job?.state === 'running' ? <p role="status" className="drp-status">{t('activity.job.running', { total: job.pending })}</p> : null}
+          {job?.state === 'partial' ? <p role="status" className="drp-status warn">{t('activity.job.partial')}</p> : null}
+          {job?.state === 'failed' ? <p role="status" className="drp-status bad">{t('activity.job.failed')}</p> : null}
+
+          {timelineDays.length > 0 ? (
+            <div data-testid="date-range-activity">
+              <div className="drp-tlhead">
+                <span>{t('timeline.name')}</span>
+                <span className="drp-seg" role="group" aria-label={t('granularity.label')}>
+                  {GRANULARITIES.map(item => (
+                    <button key={item} type="button" data-granularity={item} aria-pressed={granularity === item} onClick={() => setGranularity(item)}>{t(`granularity.${item}`)}</button>
+                  ))}
+                </span>
+              </div>
+              <ActivityTimeline days={timelineDays} draftStart={lo} draftEnd={hi} locale={locale} granularity={granularity} compact onDraftChange={(start, end) => setNextDraft({ start, end, preset: null })} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="drp-foot">
+        <label className="drp-field">
+          <span>{t('fields.start')}</span>
+          <input data-testid="date-range-start" inputMode="numeric" placeholder={t('fields.placeholder')} aria-invalid={Boolean(rangeError)} aria-describedby="drp-error" value={startText} onChange={event => onStartInput(event.target.value)} />
+        </label>
+        <label className="drp-field">
+          <span>{t('fields.end')}</span>
+          <input data-testid="date-range-end" inputMode="numeric" placeholder={t('fields.placeholder')} aria-invalid={Boolean(rangeError)} aria-describedby="drp-error" value={endText} onChange={event => onEndInput(event.target.value)} />
+        </label>
+        <div className="drp-actions">
+          <button type="button" className="drp-btn" data-testid="date-range-cancel" onClick={onClose}>{t('actions.cancel')}</button>
+          <button type="button" className="drp-btn p" data-testid="date-range-apply" disabled={!canApply} onClick={apply}>{t('actions.apply')}</button>
+        </div>
+        <p id="drp-error" role="alert" data-testid="date-range-error" className="drp-err">
+          {rangeError ? t(`errors.${rangeError}`, { max: rangeError === 'tooLong' ? DATE_RANGE_MAX_SPAN_DAYS : DATE_RANGE_MAX_AGE_DAYS }) : ''}
+        </p>
+        <div className="drp-meta">
+          <span>{spanText}</span>
+          <span data-testid="date-range-info">{info || t('hintUtc')}</span>
+        </div>
+      </div>
     </div>
   );
 }
 
-export function DateRangeFilter({ value, onApply, disabled = false, activityMetric, maxSpanDays = DATE_RANGE_MAX_SPAN_DAYS }: DateRangeFilterProps) {
+export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeFilterProps) {
   const { t, i18n } = useTranslation('dateRange');
   const locale = i18n.language || 'en';
   const panelId = useId();
   const titleId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const [todayKey, setTodayKey] = useState(() => utcTodayKey());
-  const [tab, setTab] = useState<Tab>('custom');
-  const [draftStart, setDraftStart] = useState<string | null>(null);
-  const [draftEnd, setDraftEnd] = useState<string | null>(null);
-  const [anchor, setAnchor] = useState<string | null>(null);
-  const [viewMonth, setViewMonth] = useState(() => monthStart(utcTodayKey()));
-  const [viewYear, setViewYear] = useState(() => yearOf(utcTodayKey()));
   const [placement, setPlacement] = useState<Placement>({ mode: 'sheet' });
 
   const updatePlacement = () => {
@@ -153,57 +424,24 @@ export function DateRangeFilter({ value, onApply, disabled = false, activityMetr
       window.removeEventListener('resize', updatePlacement);
       window.removeEventListener('scroll', updatePlacement, true);
     };
-    // updatePlacement reads refs only and is recreated per open cycle.
+    // updatePlacement reads refs only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    panelRef.current?.querySelector<HTMLElement>('[data-preset][aria-checked="true"], [data-preset]')?.focus();
-  }, [open]);
-
-  const triggerLabel = useMemo(() => t(`presets.${value.preset}`), [value.preset, t]);
-  const rangeText = useMemo(() => {
-    if (value.kind === 'rolling') return null;
-    if (value.startDate === value.endDate) return formatDayLabel(value.startDate, locale);
-    return `${formatDayLabel(value.startDate, locale)} – ${formatDayLabel(value.endDate, locale)}`;
-  }, [value, locale]);
-
-  const closePanel = (restoreFocus: boolean) => {
+  const close = (restoreFocus: boolean) => {
     setOpen(false);
-    setAnchor(null);
     if (restoreFocus) triggerRef.current?.focus();
-  };
-
-  const openPanel = () => {
-    const today = utcTodayKey();
-    setTodayKey(today);
-    const activeTab = tabForPreset(value.preset);
-    setTab(activeTab ?? 'custom');
-    if (value.kind === 'calendar') {
-      setDraftStart(value.startDate);
-      setDraftEnd(value.endDate);
-      setViewMonth(monthStart(value.startDate));
-      setViewYear(yearOf(value.startDate));
-    } else {
-      setDraftStart(null);
-      setDraftEnd(null);
-      setViewMonth(monthStart(today));
-      setViewYear(yearOf(today));
-    }
-    setAnchor(null);
-    setOpen(true);
   };
 
   useEffect(() => {
     if (!open) return undefined;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
-      closePanel(false);
+      if (document.querySelector('[data-testid="date-range-panel"]')?.contains(target) || triggerRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closePanel(true);
+      if (event.key === 'Escape') close(true);
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -211,266 +449,18 @@ export function DateRangeFilter({ value, onApply, disabled = false, activityMetr
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-    // closePanel is stable for the lifetime of an open panel.
+    // close only touches refs and state setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const choosePreset = (preset: DateRangePresetId) => {
-    const selection = presetSelection(preset, utcTodayKey());
-    if (selectionSpanDays(selection) > maxSpanDays) return;
-    onApply(selection);
-    closePanel(true);
-  };
-  const presetTooLong = (preset: DateRangePresetId) => selectionSpanDays(presetSelection(preset, todayKey)) > maxSpanDays;
-
-  const onPresetKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    const items = Array.from(panelRef.current?.querySelectorAll<HTMLButtonElement>('[data-preset]') ?? []);
-    const index = items.indexOf(event.currentTarget);
-    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? index + 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? index - 1 : null;
-    if (next === null) return;
-    event.preventDefault();
-    items[(next + items.length) % items.length]?.focus();
-  };
-
-  // A period that is still in progress (current month, quarter or year) is drafted up to today, never into the future.
-  const setPeriodDraft = (kind: PeriodKind, params: { date?: string; year?: number; month?: number; quarter?: number }) => {
-    const selection = periodSelection(kind, params, todayKey);
-    if (selection.kind !== 'calendar') return;
-    setDraftStart(selection.startDate);
-    setDraftEnd(selection.endDate > todayKey && selection.startDate <= todayKey ? todayKey : selection.endDate);
-    setAnchor(null);
-  };
-
-  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const index = TABS.indexOf(tab);
-    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-    event.preventDefault();
-    const next = TABS[(index + (event.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length];
-    setTab(next);
-  };
-
-  const onDayPick = (day: string) => {
-    if (!isPickableDay(day, todayKey, anchor, maxSpanDays)) return;
-    if (anchor === null) {
-      setAnchor(day);
-      setDraftStart(day);
-      setDraftEnd(null);
-      return;
-    }
-    const [start, end] = day < anchor ? [day, anchor] : [anchor, day];
-    setDraftStart(start);
-    setDraftEnd(end);
-    setAnchor(null);
-  };
-
-  const dayTabPick = (day: string) => {
-    if (!isPickableDay(day, todayKey, null, maxSpanDays)) return;
-    setPeriodDraft('day', { date: day });
-  };
-
-  const draftReady = Boolean(draftStart && draftEnd && !anchor);
-  const customError: CustomRangeError | null = draftReady && draftStart && draftEnd ? validateCustomRange(draftStart, draftEnd, todayKey, maxSpanDays) : null;
-  const canApply = draftReady && !customError;
-
-  const applyDraft = () => {
-    if (!canApply || !draftStart || !draftEnd) return;
-    const full = periodFor(tab, draftStart);
-    // A clipped in-progress period (e.g. this year so far) is applied as the explicit range that is shown.
-    if (full && full.kind === 'calendar' && full.startDate === draftStart && full.endDate === draftEnd) onApply(full);
-    else onApply(customSelection(draftStart, draftEnd));
-    closePanel(true);
-  };
-
-  const periodFor = (activeTab: Tab, start: string): DateRangeSelection | null => {
-    if (activeTab === 'day') return periodSelection('day', { date: start }, todayKey);
-    if (activeTab === 'month') return periodSelection('month', { year: yearOf(start), month: Number(start.slice(5, 7)) }, todayKey);
-    if (activeTab === 'quarter') return periodSelection('quarter', { year: yearOf(start), quarter: quarterOf(start) }, todayKey);
-    if (activeTab === 'year') return periodSelection('year', { year: yearOf(start) }, todayKey);
-    return null;
-  };
-
-  const { year, month } = monthIndex(viewMonth);
-  const weeks = useMemo(() => buildMonthGrid(year, month), [year, month]);
-  const weekdayLabels = useMemo(() => {
-    const formatter = new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' });
-    return Array.from({ length: 7 }, (_, i) => formatter.format(new Date(Date.UTC(2024, 0, 1 + i))));
-  }, [locale]);
-  const monthTitle = useMemo(
-    () => new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(year, month, 1))),
-    [locale, year, month]
-  );
-  const earliestMonth = monthStart(addDaysToKey(todayKey, -DATE_RANGE_MAX_AGE_DAYS));
-  const canGoPrev = viewMonth > earliestMonth;
-  const canGoNext = viewMonth < monthStart(todayKey);
-  const moveMonth = (delta: number) => setViewMonth(new Date(Date.UTC(year, month + delta, 1)).toISOString().slice(0, 10));
-
-  const inDraft = (day: string) => Boolean(draftStart && draftEnd && day >= draftStart && day <= draftEnd);
-  const isDraftEdge = (day: string) => day === draftStart || day === draftEnd;
-  const dayClick = tab === 'day' ? dayTabPick : onDayPick;
-
-  const onGridKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, day: string) => {
-    const offsets: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7, PageUp: -30, PageDown: 30 };
-    const delta = offsets[event.key];
-    if (delta === undefined) return;
-    event.preventDefault();
-    const target = addDaysToKey(day, delta);
-    if (!isPickableDay(target, todayKey, anchor, maxSpanDays)) return;
-    setViewMonth(monthStart(target));
-    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLButtonElement>(`[data-day="${target}"]`)?.focus());
-  };
-
-  const spanText = draftStart && draftEnd ? t('summary.spanDays', { count: selectionDayCount(customSelection(draftStart, draftEnd)) }) : t('summary.pickStart');
-  const selectedTab: Tab | null = tab;
-  const presetActive = (preset: DateRangePresetId) => value.preset === preset;
-
-  const panel = (
-    <div
-      ref={panelRef}
-      id={panelId}
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby={titleId}
-      data-testid="date-range-panel"
-      className={
-        placement.mode === 'sheet'
-          ? 'fixed inset-x-0 bottom-0 z-[60] max-h-[85dvh] overflow-y-auto rounded-t-2xl border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl p-4 pb-[max(1rem,env(safe-area-inset-bottom))]'
-          : 'fixed z-[60] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xl p-4'
-      }
-      style={placement.mode === 'popover' ? { left: placement.left, width: placement.width, top: placement.top, bottom: placement.bottom, maxHeight: placement.maxHeight } : undefined}
-    >
-      <h2 id={titleId} className="sr-only">{t('title')}</h2>
-
-      {/* pb keeps the last legend row above the sticky action bar on phones */}
-      <div className="grid gap-4 pb-20 sm:grid-cols-[minmax(0,160px)_minmax(0,1fr)] sm:pb-0">
-        <div className="space-y-3">
-          <div role="group" aria-label={t('groups.rolling')} className="flex flex-wrap gap-1.5">
-            {ROLLING_ORDER.map(preset => (
-              <button key={preset} type="button" data-preset={preset} aria-checked={presetActive(preset)} disabled={presetTooLong(preset)} onKeyDown={onPresetKeyDown} onClick={() => choosePreset(preset)}
-                className={`min-h-[36px] px-2.5 rounded-md text-xs border ${presetActive(preset) ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-brand-500'} disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-brand-500`}>
-                {t(`presets.${preset}`)}
-              </button>
-            ))}
-          </div>
-          {maxSpanDays < DATE_RANGE_MAX_SPAN_DAYS ? <p className="text-[11px] text-slate-500 dark:text-slate-400">{t('limitHint', { max: maxSpanDays })}</p> : null}
-          <div role="group" aria-label={t('groups.calendar')} className="flex flex-wrap gap-1.5">
-            {CALENDAR_ORDER.map(preset => (
-              <button key={preset} type="button" data-preset={preset} aria-checked={presetActive(preset)} disabled={presetTooLong(preset)} onKeyDown={onPresetKeyDown} onClick={() => choosePreset(preset)}
-                className={`min-h-[36px] px-2.5 rounded-md text-xs border ${presetActive(preset) ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-brand-500'} disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-brand-500`}>
-                {t(`presets.${preset}`)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-3 min-w-0">
-          <div role="tablist" aria-label={t('groups.period')} onKeyDown={onTabKeyDown} className="flex flex-wrap gap-1 rounded-lg bg-slate-100 dark:bg-slate-800 p-1">
-            {TABS.map(item => (
-              <button key={item} type="button" role="tab" aria-selected={selectedTab === item} tabIndex={selectedTab === item ? 0 : -1} onClick={() => setTab(item)}
-                className={`flex-1 min-h-[36px] px-2 rounded-md text-xs font-semibold ${selectedTab === item ? 'bg-white dark:bg-slate-900 text-brand-700 dark:text-brand-300 shadow-sm' : 'text-slate-600 dark:text-slate-300'} focus-visible:outline-2 focus-visible:outline-brand-500`}>
-                {t(`periods.${item}`)}
-              </button>
-            ))}
-          </div>
-
-          {tab === 'year' || tab === 'quarter' || tab === 'month' ? (
-            <div className="space-y-2" data-testid="date-range-period">
-              <div className="flex items-center justify-between">
-                <button type="button" aria-label={t('period.previousYear')} onClick={() => setViewYear(viewYear - 1)} className="min-h-[36px] min-w-[36px] rounded-md border border-slate-200 dark:border-slate-700">‹</button>
-                <span className="text-sm font-semibold tabular-nums text-slate-800 dark:text-slate-100">{viewYear}</span>
-                <button type="button" aria-label={t('period.nextYear')} disabled={viewYear >= yearOf(todayKey)} onClick={() => setViewYear(viewYear + 1)} className="min-h-[36px] min-w-[36px] rounded-md border border-slate-200 dark:border-slate-700 disabled:opacity-40">›</button>
-              </div>
-              {tab === 'month' ? (
-                <div className="grid grid-cols-3 gap-1.5">
-                  {Array.from({ length: 12 }, (_, i) => i + 1).map(m => {
-                    const candidate = `${viewYear}-${String(m).padStart(2, '0')}-01`;
-                    const disabledMonth = candidate > todayKey;
-                    const selected = draftStart?.slice(0, 7) === candidate.slice(0, 7);
-                    return (
-                      <button key={m} type="button" disabled={disabledMonth} aria-pressed={selected} onClick={() => setPeriodDraft('month', { year: viewYear, month: m })}
-                        className={`min-h-[36px] rounded-md text-xs border ${selected ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-200 dark:border-slate-700'} disabled:opacity-40`}>
-                        {new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(viewYear, m - 1, 1)))}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {tab === 'quarter' ? (
-                <div className="grid grid-cols-4 gap-1.5">
-                  {[1, 2, 3, 4].map(q => {
-                    const start = `${viewYear}-${String((q - 1) * 3 + 1).padStart(2, '0')}-01`;
-                    const selected = draftStart === start;
-                    return (
-                      <button key={q} type="button" disabled={start > todayKey} aria-pressed={selected} onClick={() => setPeriodDraft('quarter', { year: viewYear, quarter: q })}
-                        className={`min-h-[36px] rounded-md text-xs border ${selected ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-200 dark:border-slate-700'} disabled:opacity-40`}>
-                        {t('period.quarterLabel', { quarter: q })}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {tab === 'year' ? (
-                <div className="grid grid-cols-3 gap-1.5">
-                  <button type="button" aria-pressed={draftStart === `${viewYear}-01-01` && draftEnd === `${viewYear}-12-31`} onClick={() => setPeriodDraft('year', { year: viewYear })}
-                    className="col-span-3 min-h-[36px] rounded-md text-xs border border-slate-200 dark:border-slate-700">
-                    {viewYear}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {tab === 'day' || tab === 'custom' ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <button type="button" aria-label={t('calendar.previousMonth')} disabled={!canGoPrev} onClick={() => moveMonth(-1)} className="min-h-[36px] min-w-[36px] rounded-md border border-slate-200 dark:border-slate-700 disabled:opacity-40">‹</button>
-                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100 capitalize">{monthTitle}</span>
-                <button type="button" aria-label={t('calendar.nextMonth')} disabled={!canGoNext} onClick={() => moveMonth(1)} className="min-h-[36px] min-w-[36px] rounded-md border border-slate-200 dark:border-slate-700 disabled:opacity-40">›</button>
-              </div>
-              <div className="grid grid-cols-7 gap-1 text-[10px] text-slate-500" aria-hidden="true">
-                {weekdayLabels.map(label => <span key={label} className="text-center">{label}</span>)}
-              </div>
-              <div role="group" aria-label={monthTitle} className="grid grid-cols-7 gap-1">
-                {weeks.flat().map((day, index) => {
-                  if (!day) return <span key={`pad-${index}`} aria-hidden="true" />;
-                  const pickable = isPickableDay(day, todayKey, anchor, maxSpanDays);
-                  const selected = inDraft(day);
-                  return (
-                    <button key={day} type="button" data-day={day} disabled={!pickable} aria-pressed={selected} aria-label={formatDayLabel(day, locale)}
-                      tabIndex={day === (draftStart ?? todayKey) ? 0 : -1}
-                      onClick={() => dayClick(day)} onKeyDown={event => onGridKeyDown(event, day)}
-                      className={`min-h-[36px] rounded-md text-xs tabular-nums ${isDraftEdge(day) ? 'bg-brand-600 text-white font-semibold' : selected ? 'bg-brand-100 dark:bg-brand-900/40 text-slate-800 dark:text-slate-100' : 'text-slate-700 dark:text-slate-200'} ${pickable ? '' : 'opacity-35 cursor-not-allowed'} focus-visible:outline-2 focus-visible:outline-brand-500`}>
-                      {Number(day.slice(8, 10))}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {activityMetric && draftStart && draftEnd ? (
-            <ActivitySection metric={activityMetric} draftStart={draftStart} draftEnd={draftEnd} todayKey={todayKey} locale={locale} onDraftChange={(start, end) => { setDraftStart(start); setDraftEnd(end); setAnchor(null); }} />
-          ) : null}
-
-          <div className="text-xs text-slate-500 dark:text-slate-400" data-testid="date-range-draft">
-            {draftStart && draftEnd ? formatDayLabel(draftStart, locale) + ' – ' + formatDayLabel(draftEnd, locale) : spanText}
-            {customError ? <p role="alert" className="mt-1 text-red-600 dark:text-red-400">{t(errorKey(customError), { max: customError === 'tooLong' ? maxSpanDays : DATE_RANGE_MAX_AGE_DAYS })}</p> : null}
-            <p className="mt-1">{t('hintUtc')}</p>
-          </div>
-          <div className="flex justify-end gap-2 pt-1 sticky bottom-0 bg-white dark:bg-slate-900">
-            <button type="button" onClick={() => closePanel(true)} className="min-h-[36px] px-3 rounded-md text-xs border border-slate-200 dark:border-slate-700">{t('actions.cancel')}</button>
-            <button type="button" data-testid="date-range-apply" disabled={!canApply} onClick={applyDraft}
-              className="min-h-[36px] inline-flex items-center gap-1 px-3 rounded-md text-xs font-semibold bg-brand-600 text-white disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-brand-500">
-              <Check className="w-3.5 h-3.5" aria-hidden="true" />
-              {t('actions.apply')}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const triggerLabel = t(`presets.${value.preset}`);
+  const rangeText = useMemo(() => {
+    const { startDate, endDate } = selectionBounds(value, utcTodayKey());
+    return startDate === endDate ? formatDayLabel(startDate, locale) : `${formatDayLabel(startDate, locale)} – ${formatDayLabel(endDate, locale)}`;
+  }, [value, locale]);
 
   return (
-    <div className="relative inline-block">
+    <div className="relative inline-block min-w-0">
       <button
         ref={triggerRef}
         type="button"
@@ -478,16 +468,17 @@ export function DateRangeFilter({ value, onApply, disabled = false, activityMetr
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        onClick={() => (open ? closePanel(true) : openPanel())}
+        onClick={() => setOpen(current => !current)}
         data-testid="date-range-trigger"
-        className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs text-left hover:border-brand-500 focus-visible:outline-2 focus-visible:outline-brand-500 disabled:opacity-50"
+        className="inline-flex max-w-full items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs text-left hover:border-brand-500 focus-visible:outline-2 focus-visible:outline-brand-500 disabled:opacity-50"
       >
-        <CalendarDays className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
-        <span className="font-semibold text-slate-800 dark:text-slate-200">{triggerLabel}</span>
-        {rangeText && <span className="text-slate-500 dark:text-slate-400 whitespace-nowrap">{rangeText}</span>}
+        <CalendarDays className="w-3.5 h-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+        <span className="font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap">{triggerLabel}</span>
+        <span className="hidden min-[480px]:inline text-slate-500 dark:text-slate-400 whitespace-nowrap tabular-nums">{rangeText}</span>
       </button>
-      {open && typeof document !== 'undefined' ? createPortal(panel, document.body) : null}
+      {open && typeof document !== 'undefined'
+        ? createPortal(<PickerPanel value={value} titleId={titleId} panelId={panelId} placement={placement} locale={locale} onApply={onApply} onClose={() => close(true)} />, document.body)
+        : null}
     </div>
   );
 }
-

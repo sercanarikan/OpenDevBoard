@@ -16,8 +16,8 @@ import { useApp } from '../../context/useApp';
 import type { PipelineRun, PipelineSummary } from '../../types/paging';
 import { PipelineInspector } from './PipelineInspector';
 import { getPipelineNotice } from '../../utils/pipelineNotice';
-import { DateRangeFilter } from '../Common/DateRangeFilter';
-import { DEFAULT_DATE_RANGE_PRESET, presetSelection, toApiRange, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
+import { useDateRange } from '../../context/useDateRange';
+import { useOnRangeChange, useRangeScopedPage } from '../../hooks/useRangeScopedPage';
 
 export const PipelineExplorer: React.FC = () => {
   const { t } = useTranslation(['pipelines', 'common', 'dashboard']);
@@ -29,13 +29,14 @@ export const PipelineExplorer: React.FC = () => {
     setSelectedPipelineRun
   } = useApp();
 
-  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
-  const rangeQuery = useMemo(() => toApiRange(range), [range]);
+  // The date range is global (header); this screen only reads it and fetches for its own metrics.
+  const { query: rangeQuery, selectionKey: rangeKey } = useDateRange();
   const [resultFilter, setResultFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useRangeScopedPage(rangeKey);
+  useOnRangeChange(rangeKey, () => setSelectedPipelineRun(null));
   const pageSize = 25;
 
   const [runs, setRuns] = useState<PipelineRun[]>([]);
@@ -53,7 +54,7 @@ export const PipelineExplorer: React.FC = () => {
       setPage(1);
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, setPage]);
 
   const fetchPipelines = useCallback((signal: AbortSignal) => {
     const offset = (page - 1) * pageSize;
@@ -256,13 +257,6 @@ export const PipelineExplorer: React.FC = () => {
               {t('filters.failed')}
             </button>
           </div>
-
-          {/* Shared date range filter (presets + calendar range, applied on Apply) */}
-          <DateRangeFilter
-            value={range}
-            maxSpanDays={90}
-            onApply={next => { setSelectedPipelineRun(null); setRange(next); setPage(1); }}
-          />
         </div>
 
         {/* Right Search and Refresh */}

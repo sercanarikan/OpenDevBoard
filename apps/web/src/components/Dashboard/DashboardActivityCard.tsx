@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { DateRangeFilter } from '../Common/DateRangeFilter';
+import { useDateRange } from '../../context/useDateRange';
 import { ActivityHeatmap } from '../Common/dateRange/ActivityHeatmap';
 import { useActivityDaily } from '../Common/dateRange/useActivityDaily';
-import { ACTIVITY_METRICS, selectionBounds, type ActivityMetric } from '../../services/activityDaily';
-import { DEFAULT_DATE_RANGE_PRESET, presetSelection, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
+import { ACTIVITY_METRICS, type ActivityMetric } from '../../services/activityDaily';
 
 /**
- * Period activity card: a metric chooser, its own date range and the coverage-backed heatmap. It is independent of
+ * Period activity card: a metric chooser and the coverage-backed heatmap for the global date range (header). It is independent of
  * the page's status cards, which keep their live behaviour. Applying a range starts (or reuses) the chunked backend
  * fetch; opening the picker and dragging the timeline do not.
  */
@@ -15,8 +14,7 @@ export function DashboardActivityCard() {
   const { t, i18n } = useTranslation('dashboard');
   const locale = i18n.language || 'en';
   const [metric, setMetric] = useState<ActivityMetric>('pipelines');
-  const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
-  const bounds = selectionBounds(range, utcTodayKey());
+  const { bounds } = useDateRange();
   const cardRef = useRef<HTMLElement>(null);
   // The card is secondary to the status feeds, so its first request waits until the card is actually on screen.
   const visible = useVisibility(cardRef);
@@ -52,7 +50,6 @@ export function DashboardActivityCard() {
               ))}
             </select>
           </label>
-          <DateRangeFilter value={range} onApply={setRange} activityMetric={metric} />
         </div>
       </header>
 

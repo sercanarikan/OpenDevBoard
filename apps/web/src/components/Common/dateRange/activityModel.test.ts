@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActivityDay } from '../../../services/activityDaily';
-import { bin, clampHandle, dayVisual, maxCoveredCount, stepHandle, timelineGranularity } from './activityModel';
+import { bin, clampHandle, dayVisual, densityLevel, effectiveGranularity, maxCoveredCount, stepHandle, timelineGranularity } from './activityModel';
 
 const day = (date: string, state: ActivityDay['state'], count: number | null = null, stale = false): ActivityDay => ({
   date,
@@ -128,5 +128,34 @@ describe('mixed buckets keep known activity visible (T4)', () => {
     expect(b.count).toBeNull();
     expect(b.coveredDays).toBe(0);
     expect(b.uncoveredDays).toBe(2);
+  });
+});
+
+describe('calendar density (six levels)', () => {
+  it('maps covered counts to levels 1-6 against the largest count', () => {
+    expect(densityLevel(1, 12)).toBe(1);
+    expect(densityLevel(3, 12)).toBe(2);
+    expect(densityLevel(5, 12)).toBe(3);
+    expect(densityLevel(7, 12)).toBe(4);
+    expect(densityLevel(9, 12)).toBe(5);
+    expect(densityLevel(12, 12)).toBe(6);
+  });
+
+  it('never returns a level outside 1-6', () => {
+    expect(densityLevel(5, 0)).toBe(1);
+    expect(densityLevel(50, 10)).toBe(6);
+  });
+});
+
+describe('effective timeline granularity', () => {
+  it('uses the selected granularity when the span allows it', () => {
+    expect(effectiveGranularity('day', 60)).toBe('day');
+    expect(effectiveGranularity('week', 60)).toBe('week');
+  });
+
+  it('forces a coarser granularity for long spans', () => {
+    expect(effectiveGranularity('day', 150)).toBe('week');
+    expect(effectiveGranularity('day', 500)).toBe('month');
+    expect(effectiveGranularity('week', 500)).toBe('month');
   });
 });

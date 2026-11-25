@@ -123,3 +123,27 @@ export function stepHandle(dateKey: string, key: HandleKey, shiftKey: boolean, m
   return clampHandle(addDaysToKey(dateKey, delta), minKey, maxKey);
 }
 
+
+export type DensityLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
+/** Calendar density for a covered, active day: six steps against the largest count in view. */
+export function densityLevel(count: number, maxCount: number): DensityLevel {
+  if (maxCount <= 0) return 1;
+  const ratio = Math.min(1, Math.max(0, count / maxCount));
+  return Math.min(6, Math.max(1, Math.ceil(ratio * 6))) as DensityLevel;
+}
+
+/** Finest granularity that stays legible: days up to 120 days, weeks up to 400, months beyond. */
+function finestGranularity(dayCount: number): TimelineGranularity {
+  if (dayCount <= 120) return 'day';
+  if (dayCount <= 400) return 'week';
+  return 'month';
+}
+
+const GRANULARITY_ORDER: TimelineGranularity[] = ['day', 'week', 'month'];
+
+/** The chosen granularity, made coarser when the span is too long to draw at that detail. */
+export function effectiveGranularity(selected: TimelineGranularity, dayCount: number): TimelineGranularity {
+  const minimum = finestGranularity(dayCount);
+  return GRANULARITY_ORDER.indexOf(selected) >= GRANULARITY_ORDER.indexOf(minimum) ? selected : minimum;
+}

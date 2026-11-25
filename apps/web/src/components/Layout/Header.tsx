@@ -15,6 +15,7 @@ import {
 import { useApp } from '../../context/useApp';
 import { getHeaderTitleKey } from '../../utils/routeState';
 import { LanguageSelector } from '../Common/LanguageSelector';
+import { GlobalDateRangeFilter } from '../Common/GlobalDateRangeFilter';
 
 export const Header: React.FC = () => {
   const { t, i18n } = useTranslation();
@@ -191,13 +192,13 @@ export const Header: React.FC = () => {
       <div className="flex-1 flex justify-center min-w-0 max-w-md mx-auto">
         <button
           onClick={() => setIsCommandPaletteOpen(true)}
-          className="flex items-center gap-2 px-2 min-[1200px]:px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 transition-colors whitespace-nowrap"
+          className="flex items-center gap-2 px-2 min-[1560px]:px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 transition-colors whitespace-nowrap"
           title={`${t('actions.commandMenu')} (⌘K)`}
           aria-label={t('actions.commandMenu')}
         >
           <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-          <span className="font-medium hidden min-[1200px]:inline">{t('actions.commandMenu')}</span>
-          <kbd className="hidden min-[1200px]:inline px-1.5 py-0.5 text-[10px] font-mono rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400">
+          <span className="font-medium hidden min-[1560px]:inline">{t('actions.commandMenu')}</span>
+          <kbd className="hidden min-[1560px]:inline px-1.5 py-0.5 text-[10px] font-mono rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400">
             ⌘K
           </kbd>
         </button>
@@ -205,6 +206,9 @@ export const Header: React.FC = () => {
 
       {/* Right: Sync status, source, Language, Mode, Density, Refresh */}
       <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+        {/* The one global date range; every screen reads it from DateRangeContext. */}
+        <GlobalDateRangeFilter />
+
         {/* Data source + sync state. Live, cached, syncing, failed, unreachable, fixture and demo are always distinct. */}
         <div
           className={`hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] border whitespace-nowrap ${

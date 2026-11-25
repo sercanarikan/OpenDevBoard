@@ -38,7 +38,10 @@
     "previousYear": "Önceki yıl",
     "nextYear": "Sonraki yıl",
     "quarterLabel": "Ç{{quarter}}",
-    "pickDay": "Gün seçin"
+    "pickDay": "Gün seçin",
+    "previousYears": "Önceki yıllar",
+    "nextYears": "Sonraki yıllar",
+    "yearsRange": "{{from}} – {{to}}"
   },
   "summary": {
     "rolling": "Son {{count}} gün",
@@ -47,7 +50,9 @@
   },
   "calendar": {
     "previousMonth": "Önceki ay",
-    "nextMonth": "Sonraki ay"
+    "nextMonth": "Sonraki ay",
+    "label": "Takvim ve aktivite",
+    "weekdays": "Haftanın günleri"
   },
   "activity": {
     "title": "Aktivite",
@@ -110,5 +115,29 @@
     "tooOld": "{{max}} günden eski tarihler kullanılamaz."
   },
   "hintUtc": "Tarihler UTC takvim günleridir.",
-  "limitHint": "Bu ekranda en fazla {{max}} gün gösterilir. Daha uzun dönemler aktivite görünümlerinde ve panoda kullanılabilir."
+  "limitHint": "Bu ekranda en fazla {{max}} gün gösterilir. Daha uzun dönemler aktivite görünümlerinde ve panoda kullanılabilir.",
+  "more": "Diğer dönemler",
+  "presetSelect": "Hazır aralık",
+  "close": "Kapat",
+  "presetList": "Hazır aralıklar",
+  "fields": {
+    "start": "Başlangıç",
+    "end": "Bitiş",
+    "placeholder": "YYYY-AA-GG"
+  },
+  "periodView": {
+    "label": "Dönem seçimi",
+    "month": "Ay",
+    "quarter": "Çeyrek",
+    "year": "Yıl"
+  },
+  "granularity": {
+    "label": "Granülerlik",
+    "day": "Gün",
+    "week": "Hafta",
+    "month": "Ay"
+  },
+  "timeline": {
+    "name": "Zaman çizelgesi"
+  }
 }

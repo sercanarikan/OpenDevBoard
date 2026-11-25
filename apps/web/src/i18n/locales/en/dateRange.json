@@ -38,7 +38,10 @@
     "previousYear": "Previous year",
     "nextYear": "Next year",
     "quarterLabel": "Q{{quarter}}",
-    "pickDay": "Pick a day"
+    "pickDay": "Pick a day",
+    "previousYears": "Previous years",
+    "nextYears": "Next years",
+    "yearsRange": "{{from}} – {{to}}"
   },
   "summary": {
     "rolling": "Last {{count}} days",
@@ -47,7 +50,9 @@
   },
   "calendar": {
     "previousMonth": "Previous month",
-    "nextMonth": "Next month"
+    "nextMonth": "Next month",
+    "label": "Calendar and activity",
+    "weekdays": "Weekdays"
   },
   "activity": {
     "title": "Activity",
@@ -110,5 +115,29 @@
     "tooOld": "Dates older than {{max}} days are not available."
   },
   "hintUtc": "Dates are UTC calendar days.",
-  "limitHint": "This screen shows up to {{max}} days. Longer periods are available in the activity views and on the dashboard."
+  "limitHint": "This screen shows up to {{max}} days. Longer periods are available in the activity views and on the dashboard.",
+  "more": "More periods",
+  "presetSelect": "Preset range",
+  "close": "Close",
+  "presetList": "Preset ranges",
+  "fields": {
+    "start": "Start",
+    "end": "End",
+    "placeholder": "YYYY-MM-DD"
+  },
+  "periodView": {
+    "label": "Period selection",
+    "month": "Month",
+    "quarter": "Quarter",
+    "year": "Year"
+  },
+  "granularity": {
+    "label": "Granularity",
+    "day": "Day",
+    "week": "Week",
+    "month": "Month"
+  },
+  "timeline": {
+    "name": "Timeline"
+  }
 }

@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import i18n from '../../i18n';
 import { TeamActivityExplorer } from './TeamActivityExplorer';
+import { DateRangeProvider } from '../../context/DateRangeContext';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,7 +29,7 @@ async function render() {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
-  await act(async () => { root.render(<TeamActivityExplorer />); });
+  await act(async () => { root.render(<DateRangeProvider><TeamActivityExplorer /></DateRangeProvider>); });
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
   return { host, root };
 }
