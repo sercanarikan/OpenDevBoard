@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 import coverage_ledger as cl
 from activity_chunks import chunk_key, plan_month_chunks
-from activity_jobs import BUSY, DEFERRED, DONE, FAILED, IDLE, PARTIAL, RUNNING, ChunkJobRunner
+from activity_jobs import BUSY, COOLDOWN, DEFERRED, DONE, FAILED, IDLE, PARTIAL, RUNNING, ChunkJobRunner
 from date_window import calendar_window
 from persistence import get_db_connection
 
@@ -139,6 +139,7 @@ class ChunkJobRunnerTests(unittest.TestCase):
                 now=datetime(2028, 3, 10),
             )[0]
             self.assertEqual(small.submit(SCOPE, "pipelines", other, lambda c: True), BUSY)
+            self.assertEqual(small.status(SCOPE, "pipelines", [chunk_key(other)])["busy"], 1)
         finally:
             gate.set()
             small.shutdown(wait=True)
@@ -146,7 +147,7 @@ class ChunkJobRunnerTests(unittest.TestCase):
     def test_status_is_idle_before_any_submit(self):
         self.assertEqual(
             self.runner.status(SCOPE, "pipelines", [self.key]),
-            {"state": IDLE, "pending": 0, "completed": 0, "partial": 0, "failed": 0, "deferred": 0, "retryAfterSeconds": 0.0},
+            {"state": IDLE, "pending": 0, "completed": 0, "partial": 0, "failed": 0, "deferred": 0, "busy": 0, "retryAfterSeconds": 0.0},
         )
 
 
@@ -196,5 +197,49 @@ class DeferredRetryAfterTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.clock[0] += 31.0  # past the advertised wait: eligible again
         self.runner.submit(SCOPE, "pipelines", self.chunk, throttled)
+        wait_until_idle(self.runner, [self.key])
+        self.assertEqual(len(calls), 2)
+
+
+class FailedChunkCooldownTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self._tmp.name, "cooldown.db")
+        self.clock = [1000.0]
+        self.runner = ChunkJobRunner(db_path=self.db_path, max_workers=1, clock=lambda: self.clock[0])
+        self.chunk = february_chunk()
+        self.key = chunk_key(self.chunk)
+
+    def tearDown(self):
+        self.runner.shutdown(wait=True)
+        self._tmp.cleanup()
+
+    def test_failed_chunk_is_cooled_down_for_ten_minutes(self):
+        calls = []
+
+        def boom(chunk):
+            calls.append(1)
+            raise RuntimeError("upstream down")
+
+        self.runner.submit(SCOPE, "pipelines", self.chunk, boom)
+        self.assertEqual(wait_until_idle(self.runner, [self.key])["state"], FAILED)
+        self.clock[0] += 599.0
+        self.assertEqual(self.runner.submit(SCOPE, "pipelines", self.chunk, boom), COOLDOWN)
+        self.assertEqual(len(calls), 1)
+        self.clock[0] += 2.0  # 10 minutes and 1 second after the failure
+        self.assertEqual(self.runner.submit(SCOPE, "pipelines", self.chunk, boom), RUNNING)
+        wait_until_idle(self.runner, [self.key])
+        self.assertEqual(len(calls), 2)
+
+    def test_partial_chunk_is_not_cooled_down(self):
+        calls = []
+
+        def partial(chunk):
+            calls.append(1)
+            return False
+
+        self.runner.submit(SCOPE, "pipelines", self.chunk, partial)
+        wait_until_idle(self.runner, [self.key])
+        self.assertEqual(self.runner.submit(SCOPE, "pipelines", self.chunk, partial), RUNNING)
         wait_until_idle(self.runner, [self.key])
         self.assertEqual(len(calls), 2)

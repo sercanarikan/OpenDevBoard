@@ -795,6 +795,7 @@ def get_activity_daily():
     org_url = get_devops_org_url()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     runner = _get_activity_runner()
+    busy_refusals = 0
 
     conn = persistence.get_db_connection()
     try:
@@ -823,8 +824,9 @@ def get_activity_daily():
                     coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
                 )
                 if needs_fetch:
-                    runner.submit(scope, metric, chunk, fetchers[metric])
-        job = runner.status(scope, metric, keys)
+                    if runner.submit(scope, metric, chunk, fetchers[metric]) == activity_jobs.BUSY:
+                        busy_refusals += 1
+        job = {**runner.status(scope, metric, keys), "busy": busy_refusals}
         counts = activity_service.daily_counts(conn, metric, projects, window)
     finally:
         conn.close()

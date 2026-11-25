@@ -171,6 +171,21 @@ class ActivityDailyRouteTests(unittest.TestCase):
         other = rel(9)
         self.assertEqual((by_day[other]["state"], by_day[other]["count"]), ("covered_zero", 0))
 
+    def test_refused_submissions_are_reported_as_busy(self):
+        class FullRunner:
+            def submit(self, scope, metric, chunk, fetch):
+                return activity_jobs.BUSY
+
+            def status(self, scope, metric, chunk_keys):
+                return {"state": "idle", "pending": 0, "completed": 0, "partial": 0, "failed": 0,
+                        "deferred": 0, "busy": 0, "retryAfterSeconds": 0.0}
+
+        query = self.range_query("pipelines", 20, 5)
+        with patch.object(self.api_app, "_activity_runner", FullRunner()), \
+                patch.object(activity_jobs, "build_live_fetchers", return_value=self.fake_fetchers(True)):
+            body = self.get(query + "&mode=refresh").get_json()
+        self.assertGreaterEqual(body["job"]["busy"], 1)
+
     def test_response_shape_contract(self):
         body = self.get(self.range_query("commits", 3, 2, mode="cache")).get_json()
         # projectScope is an additive field: stored / discovered / unknown.

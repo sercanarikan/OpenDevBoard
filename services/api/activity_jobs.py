@@ -30,6 +30,8 @@ DONE = "done"
 PARTIAL = "partial"
 FAILED = "failed"
 BUSY = "busy"
+COOLDOWN = "cooldown"  # the last attempt failed less than FAILURE_COOLDOWN_SECONDS ago; nothing is started
+FAILURE_COOLDOWN_SECONDS = 600.0
 DEFERRED = "deferred"  # upstream asked for a wait longer than one minute; nothing is retried before then
 
 ChunkFetch = Callable[[DateWindow], bool]
@@ -47,6 +49,8 @@ class ChunkJobRunner:
         self._clock = clock or time.monotonic
         self._defer_until: Dict[JobKey, float] = {}
         self._defer_seconds: Dict[JobKey, float] = {}
+        self._failed_at: Dict[JobKey, float] = {}
+        self._refused: Dict[JobKey, bool] = {}
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="activity-chunk")
         self._max_pending = max_pending
         self._lock = threading.Lock()
@@ -66,8 +70,14 @@ class ChunkJobRunner:
                 return RUNNING  # coalesced
             if self._clock() < self._defer_until.get(key, 0.0):
                 return DEFERRED
+            failed_at = self._failed_at.get(key)
+            if failed_at is not None and self._clock() < failed_at + FAILURE_COOLDOWN_SECONDS:
+                return COOLDOWN
             if len(self._running) >= self._max_pending:
+                self._refused[key] = True
                 return BUSY
+            self._refused.pop(key, None)
+            self._failed_at.pop(key, None)
             self._running[key] = True
             self._outcome.pop(key, None)
             self._defer_until.pop(key, None)
@@ -75,11 +85,13 @@ class ChunkJobRunner:
         return RUNNING
 
     def status(self, scope: str, metric: str, chunk_keys) -> Dict[str, int | str]:
-        counts = {"pending": 0, "completed": 0, "partial": 0, "failed": 0, "deferred": 0}
+        counts = {"pending": 0, "completed": 0, "partial": 0, "failed": 0, "deferred": 0, "busy": 0}
         retry_after = 0.0
         with self._lock:
             for ck in chunk_keys:
                 key = (scope, metric, ck)
+                if key in self._refused:
+                    counts["busy"] += 1
                 if key in self._running:
                     counts["pending"] += 1
                     continue
@@ -129,6 +141,8 @@ class ChunkJobRunner:
                     self._defer_seconds[key] = seconds
             else:
                 cl.record_failed_attempt(conn, scope, metric, ck, error_code=type(error).__name__, attempted_at=_now_iso())
+                with self._lock:
+                    self._failed_at[key] = self._clock()
         finally:
             conn.close()
             with self._lock:
