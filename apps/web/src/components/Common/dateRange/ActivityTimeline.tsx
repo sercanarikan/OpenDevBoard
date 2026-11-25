@@ -2,7 +2,7 @@ import { useMemo, useRef, type KeyboardEvent, type PointerEvent as ReactPointerE
 import { useTranslation } from 'react-i18next';
 import { addDaysToKey, dayCountInclusive, formatDayLabel } from '../../../services/dateRange';
 import type { ActivityDay } from '../../../services/activityDaily';
-import { bin, dayVisual, maxCoveredCount, stepHandle, timelineGranularity, type HandleKey } from './activityModel';
+import { bin, dayVisual, stepHandle, timelineGranularity, type HandleKey } from './activityModel';
 
 export interface ActivityTimelineProps {
   days: ActivityDay[];
@@ -28,12 +28,18 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
   const dayCount = days.length || 1;
   const granularity = timelineGranularity(dayCount);
   const bins = useMemo(() => bin(days, granularity), [days, granularity]);
-  const maxCount = useMemo(() => maxCoveredCount(days), [days]);
+  // Bars are scaled against the largest bin total, so weekly and monthly sums never exceed the track.
+  const maxBinCount = useMemo(() => bins.reduce((max, b) => Math.max(max, b.count ?? 0), 0), [bins]);
 
   const indexOf = (key: string) => Math.max(0, Math.min(dayCount - 1, dayCountInclusive(minKey, key) - 1));
   const startIndex = indexOf(draftStart);
   const endIndex = indexOf(draftEnd);
   const pct = (index: number) => (index / dayCount) * 100;
+  // Handles are centred on their boundary; at the far right they stay inside the track.
+  const handleLeft = (index: number) => {
+    const p = pct(index);
+    return p >= 100 ? 'calc(100% - 12px)' : `calc(${p}% - 6px)`;
+  };
 
   const apply = (which: Which, nextKey: string) => {
     if (which === 'start') {
@@ -112,8 +118,9 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
           const first = b.start;
           const index = indexOf(first);
           const size = b.end === b.start ? 1 : dayCountInclusive(b.start, b.end);
-          const visual = dayVisual({ date: b.start, count: b.count, state: b.state, stale: false } as ActivityDay, maxCount);
-          const heightPct = b.count && maxCount > 0 ? Math.max(8, (b.count / maxCount) * 100) : b.state === 'covered_zero' ? 4 : 100;
+          const visual = dayVisual({ date: b.start, count: b.count, state: b.state, stale: false } as ActivityDay, maxBinCount);
+          const coveredBin = b.state === 'covered_active' || b.state === 'covered_zero';
+          const heightPct = !coveredBin ? 100 : b.count && maxBinCount > 0 ? Math.min(100, Math.max(8, (b.count / maxBinCount) * 100)) : 4;
           const inRange = index + size > startIndex && index <= endIndex;
           const style = {
             width: `${(size / dayCount) * 100}%`,
@@ -138,12 +145,12 @@ export function ActivityTimeline({ days, draftStart, draftEnd, onDraftChange, lo
         <div
           {...handleProps('start', draftStart, startIndex)}
           className="absolute -top-1 bottom-0 w-3 -ml-1.5 cursor-ew-resize rounded-sm bg-amber-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 touch-none"
-          style={{ left: `${pct(startIndex)}%` }}
+          style={{ left: handleLeft(startIndex) }}
         />
         <div
           {...handleProps('end', draftEnd, endIndex)}
           className="absolute -top-1 bottom-0 w-3 -ml-1.5 cursor-ew-resize rounded-sm bg-amber-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 touch-none"
-          style={{ left: `${pct(endIndex + 1)}%` }}
+          style={{ left: handleLeft(endIndex + 1) }}
         />
       </div>
       <div className="grid grid-cols-2 gap-2 text-[11px]">

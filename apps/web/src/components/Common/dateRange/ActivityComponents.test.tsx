@@ -73,6 +73,23 @@ describe('ActivityHeatmap', () => {
   });
 });
 
+describe('ActivityTimeline bar scale', () => {
+  it('never draws a bar taller than its track, even when weekly totals exceed daily maxima', async () => {
+    const { renderToStaticMarkup: toStatic } = await import('react-dom/server');
+    // 120 days of activity: weekly bins sum several days, so their totals exceed any single-day count.
+    const days: ActivityDay[] = Array.from({ length: 120 }, (_, i) => {
+      const date = new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10);
+      return { date, count: 5, state: 'covered_active', stale: false };
+    });
+    const html = toStatic(
+      <ActivityTimeline days={days} draftStart="2026-01-01" draftEnd="2026-01-10" onDraftChange={() => undefined} locale="en" />,
+    );
+    const heights = Array.from(html.matchAll(/height:([0-9.]+)%/g)).map(m => Number(m[1]));
+    expect(heights.length).toBeGreaterThan(0);
+    expect(Math.max(...heights)).toBeLessThanOrEqual(100);
+  });
+});
+
 describe('ActivityTimeline', () => {
   let container: HTMLDivElement;
   let root: Root;
