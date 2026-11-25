@@ -1,6 +1,7 @@
 import type { WorkItem, WorkItemsPoolResponse } from '../types';
 import { applyRangeParams, rangeParams, type AnalyticsRange } from './dateRange';
 import { adaptLiveWorkItemsPool } from './dataAdapter';
+import { activityQuery, type ActivityDailyParams, type ActivityDailyResponse } from './activityDaily';
 import { buildGraphItems, buildProgressHierarchy, type ContextItem } from '../utils/contextHierarchy';
 import {
   ApiError,
@@ -466,3 +467,8 @@ export const liveApi: WorkItemsApi = {
 
   myHistoryTimeline: (params, signal) => getJson<HistoryTimelineResponse>('/my-history/timeline', historyQuery(params), signal)
 };
+
+/** Per-day activity counts with coverage states. `mode=cache` never starts upstream work. */
+export function fetchActivityDaily(params: ActivityDailyParams, signal?: AbortSignal): Promise<ActivityDailyResponse> {
+  return getJson<ActivityDailyResponse>('/activity/daily', activityQuery(params), signal, 30_000);
+}
