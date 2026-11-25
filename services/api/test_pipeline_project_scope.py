@@ -8,6 +8,9 @@ from urllib.parse import urlparse
 import testsupport  # noqa: F401  (must precede the project imports)
 import pipeline_service
 import sync_service
+import activity_jobs
+from datetime import date
+from date_window import calendar_window
 import persistence
 import feature_context
 
@@ -259,4 +262,40 @@ class AccessibleScopeCompletenessTests(unittest.TestCase):
         # the failed attempt must not leave a cacheable state behind
         after = self._sync(failing)['cacheStatus']
         self.assertFalse(after['accessibleScopeComplete'])
+
+class PipelineChunkCompletenessTests(unittest.TestCase):
+    """Calendar chunks run project-scoped; a chunk is complete when every discovered project finished its pages."""
+
+    CHUNK = calendar_window(date(2026, 10, 1), date(2026, 10, 31), today=date(2026, 11, 25))
+    QUEUED = '2026-10-15T10:00:00Z'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.db = patch.object(persistence, 'DB_PATH', os.path.join(self.temp.name, 'synthetic.db'))
+        self.db.start()
+        pipeline_service.init_pipeline_db()
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.db.stop)
+
+    def _chunk_fetch(self, beta_status=200):
+        def fetch(url, *, headers, params, timeout):
+            path = urlparse(url).path
+            if path.endswith('/_apis/projects'):
+                return Response([{'name': 'Alpha'}, {'name': 'Beta'}])
+            if path.endswith('/Alpha/_apis/build/builds'):
+                return Response([{'id': 1, 'project': {'name': 'Alpha'}, 'queueTime': self.QUEUED}])
+            if path.endswith('/Beta/_apis/build/builds'):
+                return Response([], status=beta_status) if beta_status != 200 else Response([{'id': 2, 'project': {'name': 'Beta'}, 'queueTime': self.QUEUED}])
+            raise AssertionError('unexpected synthetic endpoint')
+        return fetch
+
+    def _run_chunk(self, fetch):
+        with patch.object(feature_context, 'is_fixture_mode', return_value=False), patch.object(feature_context, 'get_devops_headers', return_value={}), patch.object(pipeline_service.azure_http, 'get', side_effect=fetch):
+            return activity_jobs.build_live_fetchers('https://dev.azure.com/org', 'synthetic', 'pat')['pipelines'](self.CHUNK)
+
+    def test_chunk_is_complete_when_every_discovered_project_finished_its_pages(self):
+        self.assertTrue(self._run_chunk(self._chunk_fetch()))
+
+    def test_chunk_is_not_complete_when_a_project_fails(self):
+        self.assertFalse(self._run_chunk(self._chunk_fetch(beta_status=500)))
 

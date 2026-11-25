@@ -167,8 +167,14 @@ def build_live_fetchers(org_url: str, org_name: str, pat: str, projects=None) ->
     def _complete(result) -> bool:
         return bool((result or {}).get("cacheStatus", {}).get("complete"))
 
+    def _scope_complete(result) -> bool:
+        status = (result or {}).get("cacheStatus", {})
+        return bool(status.get("complete") or status.get("accessibleScopeComplete"))
+
     return {
-        "pipelines": lambda chunk: _complete(
+        # Calendar pipeline chunks run project-scoped, where `complete` (organization snapshot) is never set;
+        # the chunk is complete when the discovered project scope finished every page (accessibleScopeComplete).
+        "pipelines": lambda chunk: _scope_complete(
             pipeline_service.sync_live_pipeline_runs(org_url, pat, window=chunk, include_cache_status=True)
         ),
         "deployments": lambda chunk: _complete(
