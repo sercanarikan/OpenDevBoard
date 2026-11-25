@@ -19,6 +19,65 @@ def rel(days_ago: int) -> str:
 
 
 class ActivityDailyRouteTests(unittest.TestCase):
+    def _seed(self, statements):
+        conn = sqlite3.connect(self.db_path)
+        for sql, args in statements:
+            conn.execute(sql, args)
+        conn.commit()
+        conn.close()
+
+    def _seed_complete(self, source, label, day):
+        import coverage_ledger
+        scope = {
+            "history": coverage_ledger.scope_key(ORG, [], actor_id="me-id"),
+            "pipelines": coverage_ledger.scope_key(ORG, ["Alpha", "Beta"] if label == "ALL" else ["Alpha"]),
+        }[source]
+        conn = sqlite3.connect(self.db_path)
+        coverage_ledger.init_coverage_db(conn)
+        coverage_ledger.promote_chunk(conn, scope, source, day[:8] + "01", rel(0), True)
+        conn.commit()
+        conn.close()
+
+    def test_my_history_counts_only_the_verified_actor_rows(self):
+        import history_service
+        day = rel(5)
+        conn = sqlite3.connect(self.db_path)
+        history_service.ensure_history_schema(conn)
+        conn.close()
+        self._seed([
+            ("INSERT INTO history_events (id, event_type, occurred_at, project, entity_type, entity_id, title, summary, actor_name, actor_id, url, source_endpoint) VALUES (?, 'commit', ?, 'Alpha', 'commit', ?, 't', '', 'me', ?, '', '')", (f"m{i}", day + "T09:00:00Z", f"m{i}", "ME-ID")) for i in range(2)
+        ] + [
+            ("INSERT INTO history_events (id, event_type, occurred_at, project, entity_type, entity_id, title, summary, actor_name, actor_id, url, source_endpoint) VALUES ('o1', 'commit', ?, 'Alpha', 'commit', 'o1', 't', '', 'other', 'OTHER-ID', '', '')", (day + "T09:00:00Z",)),
+        ])
+        self._seed_complete("history", "ME-ID-scope", day)
+        with patch.object(self.api_app, "_history_identity", return_value={"id": "me-id"}):
+            body = self.get(f"metric=my-history&startDate={day}&endDate={day}&mode=cache").get_json()
+        self.assertEqual(body["days"][0]["count"], 2)
+        with patch.object(self.api_app, "_history_identity", return_value={}):
+            response = self.get(f"metric=my-history&startDate={day}&endDate={day}&mode=cache")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["error"], "identity is unavailable")
+
+    def test_projects_filter_narrows_counts_and_coverage_scope(self):
+        import project_scope
+        day = rel(5)
+        conn = sqlite3.connect(self.db_path)
+        project_scope.init_project_scope_db(conn)
+        project_scope.save_project_set(conn, ORG, ["Alpha", "Beta"], "2026-01-01T00:00:00Z")
+        conn.commit()
+        conn.close()
+        self._seed([
+            ("INSERT INTO pipeline_runs (id, project, queue_time) VALUES (?, ?, ?)", (1, "Alpha", day + "T10:00:00Z")),
+            ("INSERT INTO pipeline_runs (id, project, queue_time) VALUES (?, ?, ?)", (2, "Beta", day + "T10:00:00Z")),
+            ("INSERT INTO pipeline_runs (id, project, queue_time) VALUES (?, ?, ?)", (3, "Beta", day + "T11:00:00Z")),
+        ])
+        self._seed_complete("pipelines", "ALL", day)
+        everything = self.get(f"metric=pipelines&startDate={day}&endDate={day}&mode=cache").get_json()
+        self._seed_complete("pipelines", "ALPHA", day)
+        alpha = self.get(f"metric=pipelines&startDate={day}&endDate={day}&mode=cache&projects=Alpha").get_json()
+        self.assertEqual(everything["days"][0]["count"], 3)
+        self.assertEqual(alpha["days"][0]["count"], 1)
+
     def test_unavailable_retention_days_never_report_the_window_as_complete(self):
         with patch.dict(os.environ, {"ACTIVITY_RETENTION_DAYS": "30"}):
             body = self.get(f"metric=pipelines&startDate={rel(60)}&endDate={rel(50)}&mode=cache").get_json()

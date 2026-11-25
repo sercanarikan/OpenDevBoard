@@ -64,6 +64,28 @@ def daily_counts(conn: sqlite3.Connection, metric: str, projects: Sequence[str],
     return {row[0]: int(row[1]) for row in rows if row[0]}
 
 
+# My History counts come from the verified actor's own events. They are not project-scoped on the ledger side.
+MY_HISTORY_METRIC = "my-history"
+ACTIVITY_METRIC_IDS = tuple(METRICS) + (MY_HISTORY_METRIC,)
+
+
+def daily_counts_for_actor(conn: sqlite3.Connection, actor_id: str, window: DateWindow) -> Dict[str, int]:
+    """Verified-actor history events per UTC day. An empty actor id counts nothing (identity isolation)."""
+    actor = (actor_id or "").strip().lower()
+    if not actor:
+        return {}
+    first = window.start.strftime("%Y-%m-%d")
+    last = (window.end - timedelta(days=1)).strftime("%Y-%m-%d")
+    rows = conn.execute(
+        """SELECT substr(occurred_at, 1, 10) AS day, COUNT(*) AS n
+           FROM history_events
+           WHERE lower(actor_id) = ? AND substr(occurred_at, 1, 10) >= ? AND substr(occurred_at, 1, 10) <= ?
+           GROUP BY day""",
+        (actor, first, last),
+    ).fetchall()
+    return {row[0]: int(row[1]) for row in rows if row[0]}
+
+
 def _month_key(day: datetime) -> str:
     return day.strftime("%Y-%m-01")
 
@@ -120,5 +142,8 @@ __all__ = [
     "NOT_COLLECTED",
     "UNAVAILABLE_RETENTION",
     "daily_counts",
+    "daily_counts_for_actor",
     "classify_days",
+    "ACTIVITY_METRIC_IDS",
+    "MY_HISTORY_METRIC",
 ]

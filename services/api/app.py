@@ -1086,10 +1086,12 @@ def get_activity_daily():
 
     mode=cache never starts upstream work. mode=refresh starts coalesced background
     fetches for chunks that are missing, partial or stale, and returns what is covered now.
+    ``projects`` (comma-separated) narrows the stored project set; coverage and fetches use the same narrowed scope.
+    ``my-history`` counts only the verified current user's events and shares My History's ledger coverage.
     """
     metric = (request.args.get('metric') or '').strip()
-    if metric not in activity_service.METRICS:
-        return jsonify({"error": f"metric must be one of: {', '.join(sorted(activity_service.METRICS))}"}), 400
+    if metric not in activity_service.ACTIVITY_METRIC_IDS:
+        return jsonify({"error": f"metric must be one of: {', '.join(activity_service.ACTIVITY_METRIC_IDS)}"}), 400
     mode = (request.args.get('mode') or 'refresh').strip().lower()
     if mode not in ('cache', 'refresh'):
         return jsonify({"error": "mode must be cache or refresh"}), 400
@@ -1100,6 +1102,7 @@ def get_activity_daily():
         chunks = activity_chunks.plan_month_chunks(window)
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
+    requested_projects = [p.strip() for p in (request.args.get('projects') or '').split(',') if p.strip()]
 
     fixture = sync_service.is_fixture_mode()
     if fixture:
@@ -1108,39 +1111,62 @@ def get_activity_daily():
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     runner = _get_activity_runner()
     busy_refusals = 0
+    keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+    is_mine = metric == activity_service.MY_HISTORY_METRIC
+
+    actor_id = ''
+    user_info = {}
+    if is_mine and not fixture:
+        user_info = _history_identity(org_url, mode == 'refresh')
+        actor_id = (user_info.get("id") or "").strip().lower()
+        if not actor_id:
+            return jsonify({"error": "identity is unavailable"}), 503
 
     conn = persistence.get_db_connection()
     try:
         project_scope.init_project_scope_db(conn)
         work_item_window.init_window_db(conn)
-        if mode == 'refresh' and not fixture:
-            # Only refresh discovers projects upstream; the set is stored for cache-only requests.
-            try:
-                discovered = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
-            except Exception:
-                return jsonify({"error": "project list is unavailable"}), 503
-            project_scope.save_project_set(conn, org_url, discovered, now.isoformat(timespec="seconds") + "Z")
-            projects = discovered
-            project_scope_state = "discovered"
+        if is_mine:
+            projects = []
+            project_scope_state = "not-applicable"
+            scope = coverage_ledger.scope_key(org_url, [], actor_id=actor_id or None)
+            ledger_metric = 'history'
         else:
-            stored = project_scope.load_project_set(conn, org_url)
-            projects = stored or []
-            project_scope_state = "stored" if stored is not None else "unknown"
-        scope = coverage_ledger.scope_key(org_url, projects)
-        keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
-        coverage = coverage_ledger.read_coverage(conn, scope, metric, keys)
+            if mode == 'refresh' and not fixture:
+                # Only refresh discovers projects upstream; the set is stored for cache-only requests.
+                try:
+                    discovered = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+                except Exception:
+                    return jsonify({"error": "project list is unavailable"}), 503
+                project_scope.save_project_set(conn, org_url, discovered, now.isoformat(timespec="seconds") + "Z")
+                stored_projects = discovered
+                project_scope_state = "discovered"
+            else:
+                stored = project_scope.load_project_set(conn, org_url)
+                stored_projects = stored or []
+                project_scope_state = "stored" if stored is not None else "unknown"
+            projects = [p for p in stored_projects if not requested_projects or p in requested_projects]
+            scope = coverage_ledger.scope_key(org_url, projects)
+            ledger_metric = metric
+        coverage = coverage_ledger.read_coverage(conn, scope, ledger_metric, keys)
         if mode == 'refresh':
-            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat(), projects=projects)
+            if is_mine:
+                fetchers = {'history': activity_jobs.build_history_fetcher(org_url, get_devops_pat(), user_info)} if actor_id else {}
+            else:
+                fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat(), projects=projects)
             for chunk in chunks:
                 row = coverage.get(activity_chunks.chunk_key(chunk))
                 needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
                     coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
                 )
-                if needs_fetch:
-                    if runner.submit(scope, metric, chunk, fetchers[metric]) == activity_jobs.BUSY:
+                if needs_fetch and ledger_metric in fetchers:
+                    if runner.submit(scope, ledger_metric, chunk, fetchers[ledger_metric]) == activity_jobs.BUSY:
                         busy_refusals += 1
-        job = {**runner.status(scope, metric, keys), "busy": busy_refusals}
-        counts = activity_service.daily_counts(conn, metric, projects, window)
+        job = {**runner.status(scope, ledger_metric, keys), "busy": busy_refusals}
+        if is_mine:
+            counts = activity_service.daily_counts_for_actor(conn, actor_id, window)
+        else:
+            counts = activity_service.daily_counts(conn, metric, projects, window)
     finally:
         conn.close()
 
@@ -1165,7 +1191,6 @@ def get_activity_daily():
     if fixture:
         body["fixture"] = True
     return jsonify(body), 200
-
 
 WORK_ITEM_WINDOW_DEFAULT_LIMIT = 50
 WORK_ITEM_WINDOW_MAX_LIMIT = 200
