@@ -728,6 +728,10 @@ def get_team_activity_repositories():
         app.logger.error(f"Error in get_team_activity_repositories: {e}", exc_info=True)
         return jsonify({"error": str(e), "repositories": []}), 500
 
+class ProjectListUnavailable(Exception):
+    pass
+
+
 def _pipeline_cache_first(window, refresh=True):
     """Calendar pipeline data: local rows plus coverage and job state; upstream work only via chunk jobs."""
     chunks = activity_chunks.plan_month_chunks(window)
@@ -738,7 +742,14 @@ def _pipeline_cache_first(window, refresh=True):
     conn = persistence.get_db_connection()
     try:
         project_scope.init_project_scope_db(conn)
-        projects = project_scope.load_project_set(conn, org_url) or []
+        if refresh:
+            try:
+                projects = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+            except Exception:
+                raise ProjectListUnavailable()
+            project_scope.save_project_set(conn, org_url, projects, now.isoformat(timespec="seconds") + "Z")
+        else:
+            projects = project_scope.load_project_set(conn, org_url) or []
         scope = coverage_ledger.scope_key(org_url, projects)
         keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
         coverage = coverage_ledger.read_coverage(conn, scope, 'pipelines', keys)
@@ -960,6 +971,8 @@ def get_pipeline_health():
             "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None,
             **({"job": job} if job else {})
         }), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_pipeline_health: {e}", exc_info=True)
         return jsonify({"error": str(e), "total_runs": 0, "success_rate": 100.0, "failed_builds": [], "daily_stats": []}), 500
@@ -981,6 +994,8 @@ def get_pipelines():
         if job:
             res["job"] = job
         return jsonify(res), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_pipelines: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -1005,6 +1020,8 @@ def get_pipelines_summary():
         if job:
             summary["job"] = job
         return jsonify(summary), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_pipelines_summary: {e}", exc_info=True)
         return jsonify({"error": str(e), "totalRuns": 0, "successRate": 100.0}), 500
@@ -1026,6 +1043,8 @@ def get_pipeline_runs():
         if job:
             res["job"] = job
         return jsonify(res), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_pipeline_runs: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -1044,6 +1063,8 @@ def get_pipeline_run_by_id(run_id):
         if not run:
             return jsonify({"error": f"Pipeline run #{run_id} not found"}), 404
         return jsonify(run), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_pipeline_run_by_id: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

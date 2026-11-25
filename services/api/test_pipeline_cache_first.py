@@ -98,7 +98,8 @@ class CacheFirstRouteTests(unittest.TestCase):
         self.assertNotIn(PAT, r.get_data(as_text=True))
 
     def test_default_mode_submits_chunks_and_reports_running_or_failed_but_never_blocks(self):
-        with patch.object(pipeline_service, "sync_live_pipeline_runs", side_effect=RuntimeError("boom")):
+        with patch.object(self.api_app, "get_projects_data", return_value=[{"name": "Alpha"}]), \
+                patch.object(pipeline_service, "sync_live_pipeline_runs", side_effect=RuntimeError("boom")):
             r = self.client.get(f"/api/pipelines/summary?startDate={rel(20)}&endDate={rel(5)}")
         self.assertEqual(r.status_code, 200)
         body = r.get_json()
@@ -113,6 +114,34 @@ class CacheFirstRouteTests(unittest.TestCase):
             self.assertEqual(r.status_code, 200, path)
             self.assertIn("coverage", r.get_json()["cacheStatus"], path)
             self.assertIn("job", r.get_json(), path)
+
+    def test_refresh_discovers_and_stores_project_set(self):
+        conn = persistence.get_db_connection(self.db_path)
+        conn.execute("DELETE FROM activity_project_sets")
+        conn.commit()
+        conn.close()
+        self.patches[-1].stop()
+        try:
+            with patch.object(self.api_app, "get_projects_data", return_value=[{"name": "Alpha"}, {"name": "Alpha"}]), \
+                    patch.object(pipeline_service, "sync_live_pipeline_runs", side_effect=RuntimeError("boom")):
+                r = self.client.get(f"/api/pipelines/summary?startDate={rel(20)}&endDate={rel(5)}")
+        finally:
+            self.patches[-1].start()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["totalRuns"], 1)
+        conn = persistence.get_db_connection(self.db_path)
+        self.assertEqual(project_scope.load_project_set(conn, ORG), ["Alpha"])
+        conn.close()
+
+    def test_refresh_returns_503_when_discovery_fails(self):
+        self.patches[-1].stop()
+        try:
+            with patch.object(self.api_app, "get_projects_data", side_effect=RuntimeError("x")):
+                r = self.client.get(f"/api/pipelines/summary?startDate={rel(20)}&endDate={rel(5)}")
+        finally:
+            self.patches[-1].start()
+        self.assertEqual(r.status_code, 503)
+        self.assertEqual(r.get_json()["error"], "project list is unavailable")
 
     def test_rolling_request_keeps_the_legacy_path(self):
         legacy = {"items": [], "cacheStatus": {"complete": True}}
