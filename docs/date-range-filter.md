@@ -62,7 +62,7 @@ Upstream çekimler **UTC takvim ayı** parçalarına bölünür (chunk). Parça 
 
 | Parametre | Açıklama |
 | --- | --- |
-| `metric` | `pipelines`, `deployments`, `commits`, `pull-requests-created` veya `pull-requests-closed` |
+| `metric` | `pipelines`, `deployments`, `commits`, `pull-requests-created`, `pull-requests-closed`, `workitems-completed` veya `workitems-created` |
 | `startDate`, `endDate` | `YYYY-MM-DD`, UTC, iki uç dahil; birlikte zorunlu |
 | `mode` | `cache` (upstream başlatmaz) veya `refresh` (varsayılan; eksik, kısmi ve bayat parçalar için arka plan işi başlatır) |
 
@@ -78,6 +78,7 @@ Takvim pencerelerinde PR verisi yerel `pull_requests` tablosundan okunur; takvim
 
 - `pull-requests-created`: oluşturulma tarihine (`creation_date`) göre; `queryTimeRangeType=created`, her durum.
 - `pull-requests-closed`: pencerede **tamamlanan** PR'lar (`closed_date`, yalnızca `status=completed`); `queryTimeRangeType=closed`, `status=completed`. Terk edilen PR'lar sayılmaz.
+- `workitems-completed`: pencerede **tamamlanan** iş öğeleri (`[Microsoft.VSTS.Common.ClosedDate]`, durum Closed/Completed/Done/Resolved); `workitems-created`: pencerede **oluşturulan** iş öğeleri (`[System.CreatedDate]`, tüm durumlar). `ChangedDate` hiçbirinin yerine kullanılmaz. Veriler aktif `work_items` önbelleğinden ayrı `work_items_window` tablosunda (`id`, `kind`) tutulur; aktif/bloke/atanmamış/kanban metrikleri aktif önbelleği okumaya devam eder ve tarih aralığını izlemez. Yalnızca WIQL `POST` ve ayrıntı `GET` istekleri kullanılır; 20000 sonuç sınırına ulaşan parça `partial` işaretlenir.
 
 Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-requests/summary` takvim penceresiyle (`startDate`/`endDate`) çağrıldığında yerel okuma yapar; `dateField=created` (varsayılan) veya `closed` seçilir, geçersiz değer HTTP 400 döner. Yanıt `cacheStatus.coverage` (`complete`/`partial`/`missing`), `job`, `window` ve `dateField` taşır. `/api/team-activity*` PR'ları `created` anlamıyla okur; `cacheStatus.pullRequestCoverage` PR parça kapsamını verir ve `job` commit ile PR işlerini birleştirir. Kayan (`days`) istekler eski yolu kullanır.
 

@@ -162,6 +162,7 @@ def build_live_fetchers(org_url: str, org_name: str, pat: str, projects=None) ->
     import pr_service
     import deployment_service
     import team_service
+    import work_item_window
 
     def _complete(result) -> bool:
         return bool((result or {}).get("cacheStatus", {}).get("complete"))
@@ -178,6 +179,10 @@ def build_live_fetchers(org_url: str, org_name: str, pat: str, projects=None) ->
             pr_service.fetch_prs_window(org_url, pat, projects, chunk, "created")[1]),
         "pull-requests-closed": lambda chunk: bool(
             pr_service.fetch_prs_window(org_url, pat, projects, chunk, "closed")[1]),
+        "workitems-completed": lambda chunk: bool(
+            work_item_window.fetch_work_items_window(org_url, pat, projects, chunk, "completed")[1]),
+        "workitems-created": lambda chunk: bool(
+            work_item_window.fetch_work_items_window(org_url, pat, projects, chunk, "created")[1]),
     }
 
 

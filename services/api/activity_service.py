@@ -22,11 +22,16 @@ METRICS: Dict[str, Tuple[str, str, str]] = {
     "commits": ("team_commits", "date", "project"),
     "pull-requests-created": ("pull_requests", "creation_date", "project"),
     "pull-requests-closed": ("pull_requests", "closed_date", "project"),
+    # Windowed work items live in their own table; the active work_items cache is never counted here.
+    "workitems-completed": ("work_items_window", "closed_date", "project"),
+    "workitems-created": ("work_items_window", "created_date", "project"),
 }
 
 # Fixed, whitelisted extra WHERE conditions (never built from input).
 EXTRA_WHERE: Dict[str, str] = {
     "pull-requests-closed": "status = 'completed'",
+    "workitems-completed": "kind = 'completed'",
+    "workitems-created": "kind = 'created'",
 }
 
 COVERED_ZERO = "covered_zero"

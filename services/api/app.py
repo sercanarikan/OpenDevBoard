@@ -28,6 +28,7 @@ import activity_jobs
 import coverage_ledger
 import persistence
 import project_scope
+import work_item_window
 
 # Azure DevOps SDK imports
 from msrest.authentication import BasicAuthentication
@@ -1110,6 +1111,7 @@ def get_activity_daily():
     conn = persistence.get_db_connection()
     try:
         project_scope.init_project_scope_db(conn)
+        work_item_window.init_window_db(conn)
         if mode == 'refresh' and not fixture:
             # Only refresh discovers projects upstream; the set is stored for cache-only requests.
             try:
