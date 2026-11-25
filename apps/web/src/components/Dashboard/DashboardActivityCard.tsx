@@ -77,14 +77,10 @@ export function DashboardActivityCard() {
 
 /** True once the element has intersected the viewport. Without IntersectionObserver the element counts as visible. */
 function useVisibility(ref: RefObject<HTMLElement | null>): boolean {
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined');
   useEffect(() => {
     const element = ref.current;
-    if (!element) return undefined;
-    if (typeof IntersectionObserver === 'undefined') {
-      setVisible(true);
-      return undefined;
-    }
+    if (!element || typeof IntersectionObserver === 'undefined') return undefined;
     const observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) {
         setVisible(true);
