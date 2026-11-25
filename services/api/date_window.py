@@ -20,11 +20,15 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 ROLLING = "rolling"
 CALENDAR = "calendar"
 
-# Calendar windows are bounded so that the upstream fetch, cache rows and
-# day-bucket charts stay inside the range that the pagination and retention
-# behaviour has been verified for. Presets never exceed this span.
-MAX_CALENDAR_SPAN_DAYS = 90
-MAX_CALENDAR_AGE_DAYS = 89  # start must be within the last 90 UTC days, today included
+# Calendar query windows may span up to three years. Long windows are served by
+# chunked, coverage-tracked fetches (see activity_chunks / coverage_ledger), so the
+# query limit is no longer the upstream fetch limit. Start must be within the last
+# QUERY_MAX_AGE_DAYS UTC days (today included in the count).
+QUERY_MAX_SPAN_DAYS = 1096
+QUERY_MAX_AGE_DAYS = 3650
+# Backwards-compatible names: existing imports keep working and now mean the query limits.
+MAX_CALENDAR_SPAN_DAYS = QUERY_MAX_SPAN_DAYS
+MAX_CALENDAR_AGE_DAYS = QUERY_MAX_AGE_DAYS
 
 DATE_FORMAT = "%Y-%m-%d"
 
@@ -95,18 +99,24 @@ def rolling_window(days: int, now: Optional[datetime] = None) -> DateWindow:
     return DateWindow(start=now - timedelta(days=days), end=now, kind=ROLLING, days=days)
 
 
-def calendar_window(start_date: date, end_date: date, today: Optional[date] = None) -> DateWindow:
+def calendar_window(
+    start_date: date,
+    end_date: date,
+    today: Optional[date] = None,
+    max_span_days: int = QUERY_MAX_SPAN_DAYS,
+    max_age_days: int = QUERY_MAX_AGE_DAYS,
+) -> DateWindow:
     """Build a calendar window, rejecting anything that cannot be served exactly."""
     today = today or utc_now().date()
     if end_date < start_date:
         raise ValueError("endDate must be on or after startDate")
     span = (end_date - start_date).days + 1
-    if span > MAX_CALENDAR_SPAN_DAYS:
-        raise ValueError(f"date range must not exceed {MAX_CALENDAR_SPAN_DAYS} days")
+    if span > max_span_days:
+        raise ValueError(f"date range must not exceed {max_span_days} days")
     if end_date > today:
         raise ValueError("endDate must not be in the future (UTC)")
-    if start_date < today - timedelta(days=MAX_CALENDAR_AGE_DAYS):
-        raise ValueError(f"startDate must be within the last {MAX_CALENDAR_AGE_DAYS + 1} days (UTC)")
+    if start_date < today - timedelta(days=max_age_days):
+        raise ValueError(f"startDate must be within the last {max_age_days + 1} days (UTC)")
     start = datetime(start_date.year, start_date.month, start_date.day)
     end = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
     return DateWindow(start=start, end=end, kind=CALENDAR, days=span)
@@ -124,7 +134,13 @@ def _parse_day(raw: str, name: str) -> date:
         raise ValueError(f"{name} must be a date in YYYY-MM-DD format") from None
 
 
-def parse_request_window(args: Mapping[str, Any], default_days: int = 30, now: Optional[datetime] = None) -> DateWindow:
+def parse_request_window(
+    args: Mapping[str, Any],
+    default_days: int = 30,
+    now: Optional[datetime] = None,
+    max_span_days: int = QUERY_MAX_SPAN_DAYS,
+    max_age_days: int = QUERY_MAX_AGE_DAYS,
+) -> DateWindow:
     """Parse ``startDate``/``endDate`` or the legacy ``days`` argument.
 
     Raises ``ValueError`` with a client-facing message for invalid input.
@@ -135,7 +151,13 @@ def parse_request_window(args: Mapping[str, Any], default_days: int = 30, now: O
         if not (raw_start and raw_end):
             raise ValueError("startDate and endDate must be provided together")
         now = now or utc_now()
-        return calendar_window(_parse_day(raw_start, "startDate"), _parse_day(raw_end, "endDate"), today=now.date())
+        return calendar_window(
+            _parse_day(raw_start, "startDate"),
+            _parse_day(raw_end, "endDate"),
+            today=now.date(),
+            max_span_days=max_span_days,
+            max_age_days=max_age_days,
+        )
 
     raw_days = args.get("days", default_days)
     try:

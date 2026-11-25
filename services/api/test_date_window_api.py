@@ -1,6 +1,6 @@
 """Contract tests for the shared analytics date window (synthetic data only)."""
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 import date_window
@@ -66,18 +66,30 @@ class ParseRequestWindowTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.parse({"startDate": "2028-03-09", "endDate": "2028-03-11"})
 
-    def test_ninety_day_span_is_the_limit(self):
-        # today (2028-03-10) minus 89 days is 2027-12-12, the oldest allowed start
-        window = self.parse({"startDate": "2027-12-12", "endDate": "2028-03-10"})
-        self.assertEqual(window.days, 90)
+    def test_three_year_span_is_the_limit(self):
+        # Contract change (approved): query windows may span up to 1096 UTC days.
+        # today (2028-03-10) minus 1095 days is 2025-03-11, the oldest allowed start for a 1096-day span
+        window = self.parse({"startDate": "2025-03-11", "endDate": "2028-03-10"})
+        self.assertEqual(window.days, 1096)
         with self.assertRaises(ValueError):
-            self.parse({"startDate": "2027-12-11", "endDate": "2028-03-10"})
+            self.parse({"startDate": "2025-03-10", "endDate": "2028-03-10"})
 
-    def test_starts_older_than_ninety_days_are_rejected(self):
-        # today minus 89 days is the oldest allowed start (90 UTC days, today included)
-        self.assertEqual(self.parse({"startDate": "2027-12-12", "endDate": "2027-12-12"}).days, 1)
+    def test_starts_older_than_the_age_limit_are_rejected(self):
+        # Contract change (approved): start may be at most 3650 days before today (UTC).
+        oldest_allowed = date(2028, 3, 10) - timedelta(days=3650)
+        self.assertEqual(self.parse({"startDate": oldest_allowed.isoformat(), "endDate": oldest_allowed.isoformat()}).days, 1)
+        too_old = oldest_allowed - timedelta(days=1)
         with self.assertRaises(ValueError):
-            self.parse({"startDate": "2027-12-11", "endDate": "2027-12-11"})
+            self.parse({"startDate": too_old.isoformat(), "endDate": too_old.isoformat()})
+
+    def test_explicit_limits_can_still_be_tightened_by_callers(self):
+        # Legacy-shaped callers may pass tighter limits; they must be enforced exactly.
+        with self.assertRaises(ValueError):
+            parse_request_window(
+                {"startDate": "2028-01-01", "endDate": "2028-03-10"},
+                now=datetime(2028, 3, 10),
+                max_span_days=30,
+            )
 
     def test_month_boundary_range_across_year_end(self):
         window = parse_request_window({"startDate": "2027-12-31", "endDate": "2028-01-01"}, now=datetime(2028, 1, 5))
