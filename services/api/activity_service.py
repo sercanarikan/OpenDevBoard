@@ -76,6 +76,9 @@ def classify_days(
         key = day.strftime("%Y-%m-%d")
         count = counts.get(key)
         row = chunk_coverage.get(_month_key(day))
+        # A row only covers days up to the end that was actually fetched; later days of the same month are unknown.
+        if row is not None and key > row["chunkEnd"]:
+            row = None
         stale = False
         if row is not None:
             stale = cl.freshness(row["fetchedAt"], row["chunkEnd"], now=now) == cl.STALE

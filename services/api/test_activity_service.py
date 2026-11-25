@@ -112,3 +112,16 @@ class ClassifyDaysTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChunkEndTests(unittest.TestCase):
+    def test_days_after_the_fetched_end_are_not_collected(self):
+        # Chunk fetched through 10 Nov: 8-10 Nov are scanned, 11-12 Nov of the same month are unknown.
+        w = window("2026-11-08", "2026-11-12")
+        coverage = {"2026-11-01": {"coverage": "complete", "fetchedAt": "2026-11-10T12:00:00Z", "chunkEnd": "2026-11-10"}}
+        days = svc.classify_days(w, coverage, {}, datetime(2026, 11, 10, 13), None)
+        states = {d["date"]: d["state"] for d in days}
+        self.assertEqual(states["2026-11-08"], "covered_zero")
+        self.assertEqual(states["2026-11-10"], "covered_zero")
+        self.assertEqual(states["2026-11-11"], "not_collected")
+        self.assertEqual(states["2026-11-12"], "not_collected")
