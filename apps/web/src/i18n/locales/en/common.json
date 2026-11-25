@@ -348,5 +348,12 @@
     "showAll": "Show full description",
     "showLess": "Show less",
     "reproSteps": "Repro steps"
+  },
+  "cacheJob": {
+    "running": "Collecting data for this range",
+    "partial": "Partially collected",
+    "missing": "Not collected yet",
+    "deferred": "Upstream wait: {{seconds}} s",
+    "busy": "Some work was refused because the background queue is full; local data is shown."
   }
 }

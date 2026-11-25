@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Users,
@@ -14,6 +14,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { useApp } from '../../context/useApp';
+import { useCacheJob, mergeCacheJobs } from '../../hooks/useCacheJob';
+import { CacheJobNotice } from '../Common/CacheJobNotice';
 import { useDateRange } from '../../context/useDateRange';
 import { useRangeScopedPage } from '../../hooks/useRangeScopedPage';
 import { chartLabelStep, formatDayLabel, selectionDayCount } from '../../services/dateRange';
@@ -49,11 +51,6 @@ export const TeamActivityExplorer: React.FC = () => {
   const [commitPage, setCommitPage] = useRangeScopedPage(rangeKey);
   const pageSize = 25;
 
-  const [summary, setSummary] = useState<TeamActivitySummary | null>(null);
-  const [commits, setCommits] = useState<TeamCommit[]>([]);
-  const [commitsTotal, setCommitsTotal] = useState(0);
-
-  const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Debounce search
@@ -65,39 +62,40 @@ export const TeamActivityExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery, setCommitPage]);
 
-  const request = useMemo(() => ({ api, range: rangeQuery, project: filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce }),
-    [api, rangeQuery, filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce]);
-  const loading = settled?.request !== request;
-  const error = loading ? null : settled.error;
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    request.api.teamActivitySummary(request.range, request.project, ctrl.signal).then(async sum => {
-      if (ctrl.signal.aborted) return;
-      setSummary(sum);
-
-      const offset = (request.commitPage - 1) * pageSize;
-      const cRes = await request.api.teamCommits(
-        {
-          project: request.project,
-          search: request.debouncedSearch,
-          ...request.range,
-          limit: pageSize,
-          offset
-        },
-        ctrl.signal
-      );
-      if (ctrl.signal.aborted) return;
-      setCommits(cRes.items);
-      setCommitsTotal(cRes.total);
-
-      setSettled({ request, error: null });
-    }).catch((e: any) => {
-      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
-      setSettled({ request, error: e?.message || 'Failed to load team activity' });
-    });
-    return () => ctrl.abort();
-  }, [request]);
+  const requestKey = useMemo(
+    () => JSON.stringify([rangeQuery, filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce]),
+    [rangeQuery, filters.selectedProject, debouncedSearch, commitPage, refreshToken, refreshNonce]
+  );
+  const fetchTeam = useCallback(async (signal: AbortSignal) => {
+    const sum = await api.teamActivitySummary(rangeQuery, filters.selectedProject, signal);
+    const cRes = await api.teamCommits(
+      {
+        project: filters.selectedProject,
+        search: debouncedSearch,
+        ...rangeQuery,
+        limit: pageSize,
+        offset: (commitPage - 1) * pageSize
+      },
+      signal
+    );
+    return {
+      summary: sum,
+      commits: cRes.items,
+      commitsTotal: cRes.total,
+      job: mergeCacheJobs(sum.job, cRes.job),
+      cacheStatus: { coverage: cRes.cacheStatus?.coverage ?? sum.cacheStatus?.coverage }
+    };
+  }, [api, rangeQuery, filters.selectedProject, debouncedSearch, commitPage]);
+  // Calendar ranges are cache-first: the hook re-polls while the backend collects in the background.
+  const { data, job, coverage, loading, error } = useCacheJob({
+    requestKey,
+    fetch: fetchTeam,
+    poll: 'startDate' in rangeQuery,
+    keepPrevious: true
+  });
+  const summary: TeamActivitySummary | null = data?.summary ?? null;
+  const commits: TeamCommit[] = data?.commits ?? [];
+  const commitsTotal = data?.commitsTotal ?? 0;
 
   const isReady = summary !== null;
 
@@ -142,6 +140,7 @@ export const TeamActivityExplorer: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
+      <div className="mx-3 mt-3 empty:hidden"><CacheJobNotice job={job} coverage={coverage} /></div>
       {/* 1. Header Metrics Top Strip */}
       <div className="p-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] shrink-0 space-y-3">
         <div className="flex items-center justify-between text-xs text-slate-500 font-medium">

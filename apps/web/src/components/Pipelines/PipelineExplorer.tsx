@@ -17,6 +17,8 @@ import type { PipelineRun, PipelineSummary } from '../../types/paging';
 import { PipelineInspector } from './PipelineInspector';
 import { getPipelineNotice } from '../../utils/pipelineNotice';
 import { useDateRange } from '../../context/useDateRange';
+import { useCacheJob } from '../../hooks/useCacheJob';
+import { CacheJobNotice } from '../Common/CacheJobNotice';
 import { useOnRangeChange, useRangeScopedPage } from '../../hooks/useRangeScopedPage';
 
 export const PipelineExplorer: React.FC = () => {
@@ -39,12 +41,6 @@ export const PipelineExplorer: React.FC = () => {
   useOnRangeChange(rangeKey, () => setSelectedPipelineRun(null));
   const pageSize = 25;
 
-  const [runs, setRuns] = useState<PipelineRun[]>([]);
-  const [total, setTotal] = useState(0);
-  const [summary, setSummary] = useState<PipelineSummary | null>(null);
-  const [cacheStatus, setCacheStatus] = useState<PipelineSummary['cacheStatus']>();
-
-  const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Debounce search
@@ -71,26 +67,21 @@ export const PipelineExplorer: React.FC = () => {
     );
   }, [api, filters.selectedProject, resultFilter, debouncedSearch, rangeQuery, page]);
 
-  // A changed request is loading until that specific request settles.
-  const request = useMemo(() => ({ fetchPipelines, refreshToken, refreshNonce }), [fetchPipelines, refreshToken, refreshNonce]);
-  const loading = settled?.request !== request;
-  const error = loading ? null : settled.error;
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    request.fetchPipelines(ctrl.signal).then(res => {
-      if (ctrl.signal.aborted) return;
-      setRuns(res.items);
-      setTotal(res.total);
-      if (res.summary) setSummary(res.summary);
-      setCacheStatus(res.cacheStatus);
-      setSettled({ request, error: null });
-    }, (e: any) => {
-      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
-      setSettled({ request, error: e?.message || 'Failed to load pipeline runs' });
-    });
-    return () => ctrl.abort();
-  }, [request]);
+  // Calendar ranges are cache-first: the backend collects in the background and the hook re-polls while it runs.
+  const requestKey = useMemo(
+    () => JSON.stringify([filters.selectedProject, resultFilter, debouncedSearch, rangeQuery, page, refreshToken, refreshNonce]),
+    [filters.selectedProject, resultFilter, debouncedSearch, rangeQuery, page, refreshToken, refreshNonce]
+  );
+  const { data, job, coverage, loading, error } = useCacheJob({
+    requestKey,
+    fetch: fetchPipelines,
+    poll: 'startDate' in rangeQuery,
+    keepPrevious: true
+  });
+  const runs: PipelineRun[] = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const summary: PipelineSummary | null = data?.summary ?? null;
+  const cacheStatus = data?.cacheStatus;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -168,6 +159,7 @@ export const PipelineExplorer: React.FC = () => {
           {t(pipelineNotice === 'failed' ? 'cache.pipelineFailed' : pipelineNotice === 'partial' ? 'cache.pipelinePartial' : 'cache.pipelineStale', { ns: 'dashboard' })}
         </div>
       )}
+      <div className="mx-3 mt-3 empty:hidden"><CacheJobNotice job={job} coverage={coverage} /></div>
       {/* 1. Summary Cards Top Strip */}
       <div className="p-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] shrink-0">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

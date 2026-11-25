@@ -1,6 +1,13 @@
 import type { AnalyticsRange } from '../services/dateRange';
 import type { WorkItem } from './index';
 import type { PipelineCacheStatus } from '../utils/pipelineNotice';
+import type { CacheCoverage, CacheJob } from '../hooks/useCacheJob';
+
+/** Cache-first calendar responses: chunk coverage plus the background job state. */
+export interface CacheJobFields {
+  job?: Partial<CacheJob> & { state: CacheJob['state'] };
+}
+export type { CacheCoverage };
 
 export type QuickFilter = 'all' | 'my-tasks' | 'unassigned' | 'blocked' | 'blocking' | 'bugs';
 export type SortBy = 'changedDate' | 'priority' | 'id' | 'title' | 'state';
@@ -304,7 +311,7 @@ export interface PipelineDailyStat {
   total: number;
 }
 
-export interface PipelineSummary {
+export interface PipelineSummary extends CacheJobFields {
   periodDays: number;
   totalPipelines: number;
   totalRuns: number;
@@ -320,7 +327,7 @@ export interface PipelineSummary {
   cacheStatus?: PipelineCacheStatus;
 }
 
-export interface PipelineRunsResponse {
+export interface PipelineRunsResponse extends CacheJobFields {
   items: PipelineRun[];
   total: number;
   limit: number;
@@ -384,7 +391,7 @@ export interface DeploymentProjectStat {
   successRate: number;
 }
 
-export interface DeploymentSummary {
+export interface DeploymentSummary extends CacheJobFields {
   periodDays: number;
   totalDeployments: number;
   succeeded: number;
@@ -395,10 +402,10 @@ export interface DeploymentSummary {
   projects?: DeploymentProjectStat[];
   dailyStats: PipelineDailyStat[];
   lastSyncedAt?: string;
-  cacheStatus?: { outcome: string; complete: boolean; stale: boolean; lastSyncedAt?: string | null; hasSnapshot?: boolean; errors?: { kind: string; status?: number }[] };
+  cacheStatus?: { outcome: string; complete: boolean; stale: boolean; lastSyncedAt?: string | null; hasSnapshot?: boolean; errors?: { kind: string; status?: number }[]; coverage?: CacheCoverage };
 }
 
-export interface DeploymentsResponse {
+export interface DeploymentsResponse extends CacheJobFields {
   items: DeploymentRecord[];
   total: number;
   limit: number;
@@ -466,7 +473,7 @@ export interface TeamDailyStat {
   total: number;
 }
 
-export interface TeamActivitySummary {
+export interface TeamActivitySummary extends CacheJobFields {
   periodDays: number;
   totalCommits: number;
   totalPRs: number;
@@ -475,7 +482,7 @@ export interface TeamActivitySummary {
   contributors: TeamContributor[];
   repositories: TeamRepositoryStat[];
   lastSyncedAt?: string;
-  cacheStatus?: { outcome: string; complete: boolean; stale: boolean };
+  cacheStatus?: { outcome: string; complete: boolean; stale: boolean; coverage?: CacheCoverage };
 }
 
 export interface TeamContributorsResponse {
@@ -487,7 +494,8 @@ export interface TeamContributorsResponse {
   lastSyncedAt?: string;
 }
 
-export interface TeamCommitsResponse {
+export interface TeamCommitsResponse extends CacheJobFields {
+  cacheStatus?: TeamActivitySummary['cacheStatus'];
   items: TeamCommit[];
   total: number;
   limit: number;
@@ -540,7 +548,7 @@ export interface HistoryDailyStat {
   prs: number;
 }
 
-export interface HistorySummary {
+export interface HistorySummary extends CacheJobFields {
   periodDays: number;
   totalEvents: number;
   totalMatchingEvents?: number;
@@ -560,9 +568,10 @@ export interface HistoryCoverage {
   complete: boolean;
   stale: boolean;
   issues?: string[];
+  coverage?: CacheCoverage;
 }
 
-export interface HistoryTimelineResponse {
+export interface HistoryTimelineResponse extends CacheJobFields {
   items: HistoryEvent[];
   total: number;
   limit: number;

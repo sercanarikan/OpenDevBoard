@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Search,
@@ -17,8 +17,10 @@ import {
   Inbox
 } from 'lucide-react';
 import { useApp } from '../../context/useApp';
-import type { DeploymentEnvironmentStat, DeploymentRecord, DeploymentSummary } from '../../types/paging';
+import type { DeploymentEnvironmentStat } from '../../types/paging';
 import { useDateRange } from '../../context/useDateRange';
+import { useCacheJob } from '../../hooks/useCacheJob';
+import { CacheJobNotice } from '../Common/CacheJobNotice';
 import { useOnRangeChange, useRangeScopedPage } from '../../hooks/useRangeScopedPage';
 import { chartLabelStep, selectionDayCount } from '../../services/dateRange';
 import { DeploymentInspector } from './DeploymentInspector';
@@ -58,22 +60,30 @@ export const DeploymentExplorer: React.FC = () => {
   if (selectionScope !== null && selectionScope !== scope) {
     setSelectionScope(null);
   }
-  const request = useMemo(() => ({ scope, api, refreshToken, refreshNonce }), [scope, api, refreshToken, refreshNonce]);
-  const [result, setResult] = useState<{
-    request: typeof request;
-    scope: string;
-    deployments: DeploymentRecord[];
-    total: number;
-    summary: DeploymentSummary | null;
-    cacheStatus: DeploymentSummary['cacheStatus'];
-    error: string | null;
-  } | null>(null);
+  const fetchDeployments = useCallback((signal: AbortSignal) => {
+    const offset = (page - 1) * pageSize;
+    return api.deployments({
+      project: filters.selectedProject,
+      environment: envFilter,
+      status: statusFilter,
+      search: debouncedSearch,
+      ...rangeQuery,
+      limit: pageSize,
+      offset
+    }, signal).then(res => ({ ...res, scope }));
+  }, [api, filters.selectedProject, envFilter, statusFilter, debouncedSearch, rangeQuery, page, scope]);
+  // Calendar ranges are cache-first: the hook re-polls while the backend collects in the background.
+  const { data, job, coverage, loading, error } = useCacheJob({
+    requestKey: JSON.stringify([scope, refreshToken, refreshNonce]),
+    fetch: fetchDeployments,
+    poll: 'startDate' in rangeQuery,
+    keepPrevious: true
+  });
+  const result = data;
   const sameScope = result?.scope === scope;
-  const deployments = sameScope ? result.deployments : [];
+  const deployments = sameScope ? result.items : [];
   const total = sameScope ? result.total : 0;
-  const summary = sameScope ? result.summary : null;
-  const loading = result?.request !== request;
-  const error = loading ? null : result?.error ?? null;
+  const summary = sameScope ? result.summary ?? null : null;
 
   // Debounce search
   useEffect(() => {
@@ -87,36 +97,6 @@ export const DeploymentExplorer: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery, debouncedSearch, setSelectedDeployment, setPage]);
 
-  useEffect(() => {
-    const ctrl = new AbortController();
-    const offset = (page - 1) * pageSize;
-    api.deployments({
-      project: filters.selectedProject,
-      environment: envFilter,
-      status: statusFilter,
-      search: debouncedSearch,
-      ...rangeQuery,
-      limit: pageSize,
-      offset
-    }, ctrl.signal).then(res => {
-      if (ctrl.signal.aborted) return;
-      setResult(previous => ({
-        request, scope, deployments: res.items, total: res.total,
-        summary: res.summary ?? (previous?.scope === scope ? previous.summary : null), cacheStatus: res.cacheStatus, error: null
-      }));
-    }).catch((e: any) => {
-      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
-      setResult(previous => ({
-        request, scope,
-        deployments: previous?.scope === scope ? previous.deployments : [],
-        total: previous?.scope === scope ? previous.total : 0,
-        summary: previous?.scope === scope ? previous.summary : null,
-        cacheStatus: previous?.scope === scope ? previous.cacheStatus : undefined,
-        error: e?.message || 'Failed to load deployment records'
-      }));
-    });
-    return () => ctrl.abort();
-  }, [api, filters.selectedProject, envFilter, statusFilter, debouncedSearch, rangeQuery, page, request, scope]);
 
   // Local scope controls invalidate the shared selection at the event that changes scope.
   const invalidateSelection = () => {
@@ -212,6 +192,7 @@ export const DeploymentExplorer: React.FC = () => {
           {result.cacheStatus.errors?.[0]?.kind === 'upstream_http' ? ` ${t('cache.upstreamHttp', { ns: 'dashboard', status: result.cacheStatus.errors[0].status ?? '' })}` : ''}
         </div>
       )}
+      <div className="mx-3 mt-3 empty:hidden"><CacheJobNotice job={job} coverage={coverage} /></div>
       {/* 1. Overview Metrics Top Strip */}
       <div className="p-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] shrink-0 space-y-3">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

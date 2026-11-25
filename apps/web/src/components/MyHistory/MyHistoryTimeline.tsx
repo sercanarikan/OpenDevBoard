@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CheckCircle2,
@@ -18,8 +18,12 @@ import type { HistoryEvent, HistorySummary } from '../../types/paging';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { PullRequestInspector } from '../PullRequests/PullRequestInspector';
 import { groupTimelineEvents } from './timelineGroups';
+import { useCacheJob, mergeCacheJobs } from '../../hooks/useCacheJob';
+import { CacheJobNotice } from '../Common/CacheJobNotice';
 import { useDateRange } from '../../context/useDateRange';
 import { useRangeScopedPage } from '../../hooks/useRangeScopedPage';
+
+const NO_EVENTS: HistoryEvent[] = [];
 
 export const MyHistoryTimeline: React.FC = () => {
   const { t } = useTranslation(['myHistory', 'common']);
@@ -42,12 +46,6 @@ export const MyHistoryTimeline: React.FC = () => {
   const [page, setPage] = useRangeScopedPage(rangeKey);
   const pageSize = 25;
 
-  const [timeline, setTimeline] = useState<{ events: HistoryEvent[]; asOf: number }>({ events: [], asOf: 0 });
-  const { events, asOf } = timeline;
-  const [total, setTotal] = useState(0);
-  const [summary, setSummary] = useState<HistorySummary | null>(null);
-
-  const [settled, setSettled] = useState<{ request: object; error: string | null } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Debounce search
@@ -59,45 +57,52 @@ export const MyHistoryTimeline: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchQuery, setPage]);
 
-  const request = useMemo(() => ({ api, range: rangeQuery, project: filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce }),
-    [api, rangeQuery, filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce]);
-  const loading = settled?.request !== request;
-  const error = loading ? null : settled.error;
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    request.api.myHistorySummary(request.range, request.project, ctrl.signal, {
-      activityType: request.activityType,
-      search: request.debouncedSearch
-    }).then(async sum => {
-      if (ctrl.signal.aborted) return;
-      setSummary(sum);
-
-      const offset = (request.page - 1) * pageSize;
-      const res = await request.api.myHistoryTimeline(
-        {
-          project: request.project,
-          activityType: request.activityType,
-          search: request.debouncedSearch,
-          ...request.range,
-          limit: pageSize,
-          offset
-        },
-        ctrl.signal
-      );
-      if (ctrl.signal.aborted) return;
-      if (sum.totalMatchingEvents !== undefined && sum.totalMatchingEvents !== res.total) {
+  const requestKey = useMemo(
+    () => JSON.stringify([rangeQuery, filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce]),
+    [rangeQuery, filters.selectedProject, activityType, debouncedSearch, page, refreshToken, refreshNonce]
+  );
+  const fetchHistory = useCallback(async (signal: AbortSignal) => {
+    const sum = await api.myHistorySummary(rangeQuery, filters.selectedProject, signal, {
+      activityType,
+      search: debouncedSearch
+    });
+    const res = await api.myHistoryTimeline(
+      {
+        project: filters.selectedProject,
+        activityType,
+        search: debouncedSearch,
+        ...rangeQuery,
+        limit: pageSize,
+        offset: (page - 1) * pageSize
+      },
+      signal
+    );
+    if (sum.totalMatchingEvents !== undefined && sum.totalMatchingEvents !== res.total) {
+      // While a calendar job is still collecting, the two reads may legitimately differ; the next poll settles them.
+      if (res.job?.state !== 'running' && sum.job?.state !== 'running') {
         throw new Error(`History scope mismatch: summary=${sum.totalMatchingEvents}, timeline=${res.total}`);
       }
-      setTimeline({ events: res.items, asOf: Date.now() });
-      setTotal(res.total);
-      setSettled({ request, error: null });
-    }).catch((e: any) => {
-      if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
-      setSettled({ request, error: e?.message || 'Failed to load activity history' });
-    });
-    return () => ctrl.abort();
-  }, [request]);
+    }
+    return {
+      summary: sum,
+      events: res.items,
+      total: res.total,
+      asOf: Date.now(),
+      job: mergeCacheJobs(sum.job, res.job),
+      cacheStatus: { coverage: res.cacheStatus?.coverage ?? sum.cacheStatus?.coverage }
+    };
+  }, [api, rangeQuery, filters.selectedProject, activityType, debouncedSearch, page]);
+  // Calendar ranges are cache-first: the hook re-polls while the backend collects in the background.
+  const { data, job, coverage, loading, error } = useCacheJob({
+    requestKey,
+    fetch: fetchHistory,
+    poll: 'startDate' in rangeQuery,
+    keepPrevious: true
+  });
+  const summary: HistorySummary | null = data?.summary ?? null;
+  const events: HistoryEvent[] = data?.events ?? NO_EVENTS;
+  const total = data?.total ?? 0;
+  const asOf = data?.asOf ?? 0;
 
   const isReady = !loading && summary !== null;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -153,6 +158,7 @@ export const MyHistoryTimeline: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
+      <div className="mx-3 mt-3 empty:hidden"><CacheJobNotice job={job} coverage={coverage} /></div>
       {/* 1. Overview Metrics Top Strip */}
       <div className="p-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] shrink-0 space-y-3">
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">

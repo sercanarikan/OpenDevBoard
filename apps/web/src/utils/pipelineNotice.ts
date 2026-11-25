@@ -6,6 +6,7 @@ export interface PipelineCacheStatus {
   /** True when the accessible-project inventory and every required query finished all their pages. */
   accessibleScopeComplete?: boolean;
   organizationSnapshotComplete?: boolean;
+  coverage?: { complete: number; partial: number; missing: number };
 }
 
 export type PipelineNotice = 'none' | 'accessible' | 'partial' | 'failed' | 'stale';

@@ -348,5 +348,12 @@
     "showAll": "Açıklamanın tamamını göster",
     "showLess": "Daha az göster",
     "reproSteps": "Tekrar adımları"
+  },
+  "cacheJob": {
+    "running": "Bu aralık için veri toplanıyor",
+    "partial": "Bu aralık kısmen toplandı",
+    "missing": "Bu aralık henüz toplanmadı",
+    "deferred": "upstream bekleme süresi: {{seconds}} sn",
+    "busy": "Arka plan kuyruğu dolu olduğu için bazı işler reddedildi; yerel veri gösteriliyor."
   }
 }
