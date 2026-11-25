@@ -1,7 +1,6 @@
 {
   "title": "Tarih aralığı",
   "presets": {
-    "last1": "Son 1 gün",
     "last7": "Son 7 gün",
     "last14": "Son 14 gün",
     "last30": "Son 30 gün",
@@ -133,7 +132,11 @@
   "fields": {
     "start": "Başlangıç",
     "end": "Bitiş",
-    "placeholder": "YYYY-AA-GG"
+    "placeholder": "YYYY-AA-GG",
+    "pickStart": "Başlangıç tarihini takvimden seç",
+    "pickEnd": "Bitiş tarihini takvimden seç",
+    "pickHintStart": "Takvimden başlangıç gününü seçin.",
+    "pickHintEnd": "Takvimden bitiş gününü seçin."
   },
   "periodView": {
     "label": "Dönem seçimi",
@@ -149,5 +152,6 @@
   },
   "timeline": {
     "name": "Zaman çizelgesi"
-  }
+  },
+  "currentStateNotice": "Bu ekran güncel durumu gösterir. Üst çubuktaki tarih aralığı bu ekranın verilerini ve sayılarını değiştirmez."
 }

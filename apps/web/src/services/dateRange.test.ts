@@ -41,7 +41,6 @@ describe('preset selections', () => {
   });
 
   it('computes last 1 day, today and yesterday as single UTC days', () => {
-    expect(presetSelection('last1', TODAY)).toEqual({ kind: 'calendar', preset: 'last1', startDate: TODAY, endDate: TODAY });
     expect(presetSelection('today', TODAY)).toEqual({ kind: 'calendar', preset: 'today', startDate: TODAY, endDate: TODAY });
     expect(presetSelection('yesterday', TODAY)).toEqual({ kind: 'calendar', preset: 'yesterday', startDate: '2026-11-23', endDate: '2026-11-23' });
   });

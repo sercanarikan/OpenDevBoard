@@ -94,6 +94,10 @@
 .drp-field { display: grid; gap: 4px; font-size: 12px; color: var(--drp-muted); min-width: 0; }
 .drp-field input { width: 100%; min-width: 0; height: 34px; border: 1px solid var(--drp-border); border-radius: 7px; background: var(--drp-surface); padding: 0 8px; color: var(--drp-text); font-variant-numeric: tabular-nums; }
 .drp-field input[aria-invalid="true"] { border-color: #dc2626; }
+.drp-input-row { display: flex; gap: 6px; align-items: stretch; min-width: 0; }
+.drp-input-row input { flex: 1; min-width: 0; }
+.drp-pick { height: 34px; width: 34px; flex: none; }
+.drp-pick[aria-pressed="true"] { border-color: var(--drp-accent, #2563eb); color: var(--drp-accent, #2563eb); }
 .drp-err { color: #dc2626; font-size: 12px; min-height: 16px; grid-column: 1 / -1; margin: 0; }
 .dark .drp-err { color: #f87171; }
 .drp-actions { display: flex; gap: 8px; }
@@ -123,6 +127,7 @@
   .drp-d { height: 44px; font-size: 14px; border-radius: 8px; }
   .drp-pbtn { height: 44px; }
   .drp-icon { width: 44px; height: 44px; }
+  .drp-pick { height: 44px; width: 44px; }
   .drp-foot { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .drp-actions { grid-column: 1 / -1; }
   .drp-actions .drp-btn { flex: 1; height: 44px; }

@@ -39,6 +39,7 @@ import {
   buildFocusedDependencyGraph,
   evaluateItemBlockedStatus
 } from '../../utils/dependencyEngine';
+import { CurrentStateNotice } from '../Common/CurrentStateNotice';
 
 const nodeTypes = {
   workItemNode: WorkItemNode as any
@@ -347,6 +348,7 @@ export const DependencyExplorer: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
+      <CurrentStateNotice />
       {/* 1. Header Toolbar */}
       <div className="p-3 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] space-y-3 shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3">

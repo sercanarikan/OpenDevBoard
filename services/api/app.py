@@ -1164,7 +1164,7 @@ def get_activity_daily():
                         busy_refusals += 1
         job = {**runner.status(scope, ledger_metric, keys), "busy": busy_refusals}
         if is_mine:
-            counts = activity_service.daily_counts_for_actor(conn, actor_id, window)
+            counts = activity_service.daily_counts_for_actor(conn, actor_id, window, requested_projects or None)
         else:
             counts = activity_service.daily_counts(conn, metric, projects, window)
     finally:

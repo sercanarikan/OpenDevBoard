@@ -1,7 +1,6 @@
 {
   "title": "Date range",
   "presets": {
-    "last1": "Last 1 day",
     "last7": "Last 7 days",
     "last14": "Last 14 days",
     "last30": "Last 30 days",
@@ -133,7 +132,11 @@
   "fields": {
     "start": "Start",
     "end": "End",
-    "placeholder": "YYYY-MM-DD"
+    "placeholder": "YYYY-MM-DD",
+    "pickStart": "Pick start date from calendar",
+    "pickEnd": "Pick end date from calendar",
+    "pickHintStart": "Choose the start day on the calendar.",
+    "pickHintEnd": "Choose the end day on the calendar."
   },
   "periodView": {
     "label": "Period selection",
@@ -149,5 +152,6 @@
   },
   "timeline": {
     "name": "Timeline"
-  }
+  },
+  "currentStateNotice": "This screen shows current state. The date range in the header does not change its data or counts."
 }

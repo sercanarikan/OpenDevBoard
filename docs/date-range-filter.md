@@ -11,7 +11,6 @@ Filtre iki tüketici için çalışır:
 
 | Preset | Tür | API karşılığı |
 | --- | --- | --- |
-| Son 1 gün | Takvim | `startDate` = `endDate` = bugün (UTC). Gün çözünürlüğünde "Bugün" ile aynı aralığı verir; ayrı tutulur çünkü kullanıcının seçim niyeti farklıdır. Kayan `days=1` isteği kullanılmaz: kayan liste uçları 7/14/30/90 günü kabul eder. |
 | Son 7 / 14 / 30 / 90 gün | Kayan | `days=7/14/30/90` |
 | Son 6 ay | Takvim | bugünden 6 ay öncesinin ertesi günü … bugün |
 | Son 1 yıl | Takvim | bugünden 1 yıl öncesinin ertesi günü … bugün |
@@ -23,6 +22,13 @@ Filtre iki tüketici için çalışır:
 Presetler sol tarafta dikey bir listedir; en sık kullanılan sekiz dönem açıktır, kalanı **Diğer dönemler** altındadır. Telefonda (<640 px) presetler tek bir seçim kutusudur. Preset seçmek yalnızca taslağı değiştirir; **Uygula** ile kesinleşir, **İptal** taslağı atar.
 
 Takvim başlığına (ay adı) tıklamak **Ay / Çeyrek / Yıl** seçicisini açar (varsayılan görünümde gizlidir). Ay, çeyrek ve yıl doğrudan tam dönem olarak seçilir; yıl listesi sabit değildir (geriye sınırsız gezilir, ileri bu yılla sınırlıdır; saklama yaşından eski yıllar seçilemez). Devam eden bir dönem bugüne kadar kırpılır; gelecek günler asla seçilmez. Takvimde iki tıklamayla başlangıç ve bitiş seçilir; alttaki başlangıç/bitiş alanlarına `YYYY-AA-GG` yazılabilir (geçersiz giriş Uygula'yı kapatır).
+
+### Başlangıç ve bitiş alanları
+
+- Her alan elle yazılabilir (`YYYY-MM-DD`, klavye), bir takvim simgesiyle açılabilir. Simgeye basmak sonraki takvim tıklamasının yalnızca o alanı değiştirmesini sağlar; alan seçimi takvim, ısı haritası ve zaman çizelgesiyle aynı taslağı günceller (çift yönlü).
+- Geçersiz biçim, gelecek tarih ve başlangıcın bitişten sonra olması hata olarak gösterilir ve **Uygula** devre dışı kalır.
+- Hiçbir seçim **Uygula**'ya basılana kadar uygulanmaz; **İptal** taslağı atar. Tüm tarihler UTC takvim günüdür.
+- Ayrı bir ikinci takvim paneli yoktur; birleşik takvim kullanılır.
 
 ## Sınırlar (UTC)
 
@@ -115,10 +121,11 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 
 ## Bilinen sınırlamalar
 
-- **Liste ekranları** global aralığı (1096 güne kadar) olduğu gibi gönderir; parça parça (chunk) yükleme bu ekranlar için henüz tamamlanmamıştır, çok uzun aralıklarda yanıt yavaş olabilir (D3 kapsamında ele alınacaktır).
-- **My History** için aktivite görünümü yoktur.
+- **Liste ekranları** (Pipeline, Deployment, Team Activity, Geçmişim) global aralığı (1096 güne kadar) olduğu gibi gönderir; bu ekranlar için parça parça (chunk) yükleme henüz yoktur, çok uzun aralıklarda yanıt yavaş olabilir.
 - **Dashboard takım özeti ve geçmiş kartları** takvim aralığında arka plan toplama bildirimi göstermez ve yoklama yapmaz; ilk yanıtı gösterir.
-- **Yerel senkronizasyonlar** (kayan pencere) kapsam kaydı yazmaz. Bu günler, bir takvim çekimi kapsayana kadar `not_collected` görünür.
+- **Yerel senkronizasyonlar** (kayan pencere) kapsam kaydı yazmaz. Bu günlerin satırları yalnızca kapsam kaydı o günü kapsadığında sayılır; aksi halde gün `not_collected` görünür ve sayı gösterilmez. Bu bilinen ve kabul edilmiş bir sınırlamadır: yanlış kapsam üretmez, ancak kayan sync verisi takvim görünümüne kendiliğinden katkı yapmaz.
+- **Güncel durum ekranları** (Görevler, Kanban, Hiyerarşi, Bağımlılık Grafiği) tarih aralığından etkilenmez; bu ekranlarda "Güncel durum" notu gösterilir. Bu ekranların sayıları ve listeleri aralıkla değişmez.
+- **Son 1 gün** kaldırılmıştır: gün çözünürlüğünde **Bugün** ile aynı aralığı verdiği için ayrı bir seçenek olarak tutulmamıştır.
 - `ACTIVITY_RETENTION_DAYS` tanımlı değilse `unavailable_retention` hiç üretilmez; geçmiş verinin varlığı iddia edilmez.
 
 ## Doğrulama
@@ -129,7 +136,7 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 - `services/api/test_activity_service.py`: gün sınıflandırması, sıfır ile toplanmamış ayrımı, saklama süresi, yıl sonu ve artık gün.
 - `services/api/test_activity_jobs.py`: birleştirme, eşzamanlılık sınırı (2), bekleyen sınırı, hata sınıfı kaydı, durum hesabı.
 - `services/api/test_bench_harness.py`: sentetik karşılaştırma sayaçları (sahte upstream çağrı sayımı, birleştirme sayacı, kuyruk tepesi); zamanlamalar doğrulanmaz.
-- `services/api/test_activity_api.py`: 400 doğrulamaları, `mode=cache` upstream çağırmaz, eksik parçalar için iş başlatma, kısmi yanıtın sıfır üretmemesi, PAT'in yanıtta olmaması.
+- `services/api/test_activity_api.py`: my-history kimlik izolasyonu ve proje kapsamı, 400 doğrulamaları, `mode=cache` upstream çağırmaz, eksik parçalar için iş başlatma, kısmi yanıtın sıfır üretmemesi, PAT'in yanıtta olmaması.
 - `apps/web/src/services/dateRange.test.ts`: presetler, dönem seçimleri, sınır doğrulamaları.
 - `apps/web/src/services/activityDaily.test.ts`: sorgu sözleşmesi, demo fixture'ı, tüm gün durumları.
 - `apps/web/src/components/Common/dateRange/*.test.ts(x)`: görünüm modeli, heatmap/timeline etiketleri ve klavye, sürüklemenin istek üretmemesi, yoklama, eski yanıtın reddi.

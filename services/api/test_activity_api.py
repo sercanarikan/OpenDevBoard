@@ -58,6 +58,26 @@ class ActivityDailyRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.get_json()["error"], "identity is unavailable")
 
+    def test_my_history_project_scope_keeps_identity_isolation(self):
+        # Same verified user in two projects on one day, plus another user in the selected project.
+        import history_service
+        day = rel(5)
+        conn = sqlite3.connect(self.db_path)
+        history_service.ensure_history_schema(conn)
+        conn.close()
+        def event(event_id, project, actor):
+            return ("INSERT INTO history_events (id, event_type, occurred_at, project, entity_type, entity_id, title, summary, actor_name, actor_id, url, source_endpoint) VALUES (?, 'commit', ?, ?, 'commit', ?, 't', '', ?, ?, '', '')",
+                    (event_id, day + "T09:00:00Z", project, event_id, actor, actor))
+        self._seed([event("a1", "Alpha", "ME-ID"), event("b1", "Beta", "ME-ID"), event("a2", "Alpha", "OTHER-ID")])
+        self._seed_complete("history", "ME", day)
+        with patch.object(self.api_app, "_history_identity", return_value={"id": "me-id"}):
+            everything = self.get(f"metric=my-history&startDate={day}&endDate={day}&mode=cache").get_json()
+            alpha = self.get(f"metric=my-history&startDate={day}&endDate={day}&mode=cache&projects=Alpha").get_json()
+            beta = self.get(f"metric=my-history&startDate={day}&endDate={day}&mode=cache&projects=Beta").get_json()
+        self.assertEqual(everything["days"][0]["count"], 2)
+        self.assertEqual(alpha["days"][0]["count"], 1)
+        self.assertEqual(beta["days"][0]["count"], 1)
+
     def test_projects_filter_narrows_counts_and_coverage_scope(self):
         import project_scope
         day = rel(5)

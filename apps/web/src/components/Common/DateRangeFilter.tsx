@@ -84,6 +84,8 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
   const [draft, setDraft] = useState<Draft>(() => draftFromSelection(value, todayKey));
   const [typed, setTyped] = useState<{ start: string; end: string } | null>(null);
   const [anchor, setAnchor] = useState<string | null>(null);
+  // Which field the next calendar click sets (from the field's calendar button); null = two-click range.
+  const [fieldTarget, setFieldTarget] = useState<'start' | 'end' | null>(null);
   const [viewMonth, setViewMonth] = useState(() => monthStart(draftFromSelection(value, todayKey).end));
   const [periodOpen, setPeriodOpen] = useState(false);
   const [periodView, setPeriodView] = useState<PeriodView>('month');
@@ -114,6 +116,7 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
     setDraft(next);
     setTyped(null);
     setAnchor(null);
+    setFieldTarget(null);
   };
 
   const showMonthOf = (date: string) => {
@@ -143,8 +146,28 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
     if (PRESET_MORE.includes(preset)) setMoreOpen(true);
   };
 
+  const chooseFieldTarget = (field: 'start' | 'end') => {
+    if (fieldTarget === field) {
+      setFieldTarget(null);
+      setInfo('');
+      return;
+    }
+    setAnchor(null);
+    setFieldTarget(field);
+    setInfo(t(field === 'start' ? 'fields.pickHintStart' : 'fields.pickHintEnd'));
+  };
+
   const pickDay = (date: string) => {
     if (!isPickableDay(date, todayKey, anchor)) return;
+    if (fieldTarget) {
+      // One field at a time: the other field keeps its value. Order and future checks stay in validateDraft.
+      const next = fieldTarget === 'start' ? { start: date, end: draft.end, preset: null } : { start: draft.start, end: date, preset: null };
+      setFieldTarget(null);
+      setInfo('');
+      setNextDraft(next);
+      showMonthOf(date);
+      return;
+    }
     if (anchor === null) {
       setDraft({ start: date, end: date, preset: null });
       setTyped(null);
@@ -187,6 +210,7 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
   const periodDisabled = (start: string, end: string) => start > todayKey || end < earliestKey;
 
   const onStartInput = (text: string) => {
+    setFieldTarget(null);
     const nextTyped = { start: text, end: typed?.end ?? draft.end };
     setTyped(nextTyped);
     const parsed = parseDateInput(text);
@@ -197,6 +221,7 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
     }
   };
   const onEndInput = (text: string) => {
+    setFieldTarget(null);
     const nextTyped = { start: typed?.start ?? draft.start, end: text };
     setTyped(nextTyped);
     const parsed = parseDateInput(text);
@@ -384,11 +409,17 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
       <div className="drp-foot">
         <label className="drp-field">
           <span>{t('fields.start')}</span>
-          <input data-testid="date-range-start" inputMode="numeric" placeholder={t('fields.placeholder')} aria-invalid={Boolean(rangeError)} aria-describedby="drp-error" value={startText} onChange={event => onStartInput(event.target.value)} />
+          <span className="drp-input-row">
+            <input data-testid="date-range-start" inputMode="numeric" placeholder={t('fields.placeholder')} aria-invalid={Boolean(rangeError)} aria-describedby="drp-error" value={startText} onChange={event => onStartInput(event.target.value)} />
+            <button type="button" className="drp-icon drp-pick" data-testid="date-range-start-pick" aria-label={t('fields.pickStart')} aria-pressed={fieldTarget === 'start'} title={t('fields.pickStart')} onClick={() => chooseFieldTarget('start')}><CalendarDays size={16} aria-hidden="true" /></button>
+          </span>
         </label>
         <label className="drp-field">
           <span>{t('fields.end')}</span>
-          <input data-testid="date-range-end" inputMode="numeric" placeholder={t('fields.placeholder')} aria-invalid={Boolean(rangeError)} aria-describedby="drp-error" value={endText} onChange={event => onEndInput(event.target.value)} />
+          <span className="drp-input-row">
+            <input data-testid="date-range-end" inputMode="numeric" placeholder={t('fields.placeholder')} aria-invalid={Boolean(rangeError)} aria-describedby="drp-error" value={endText} onChange={event => onEndInput(event.target.value)} />
+            <button type="button" className="drp-icon drp-pick" data-testid="date-range-end-pick" aria-label={t('fields.pickEnd')} aria-pressed={fieldTarget === 'end'} title={t('fields.pickEnd')} onClick={() => chooseFieldTarget('end')}><CalendarDays size={16} aria-hidden="true" /></button>
+          </span>
         </label>
         <div className="drp-actions">
           <button type="button" className="drp-btn" data-testid="date-range-cancel" onClick={onClose}>{t('actions.cancel')}</button>

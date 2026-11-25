@@ -21,6 +21,7 @@ import { computeCanonicalProgressMap, type RollupProgress } from '../../utils/pr
 import { UserAvatar } from '../Common/UserAvatar';
 import { stateLabel, priorityLabel } from '../../i18n/labels';
 import { hasMoreToRight } from '../../utils/layout';
+import { CurrentStateNotice } from '../Common/CurrentStateNotice';
 
 // Title column keeps a readable width; the table scrolls horizontally rather than squeezing the right-hand columns.
 // `contain: inline-size` stops a long title from inflating the row to its full text width: without it the sticky cell
@@ -80,6 +81,7 @@ const HierarchyNode: React.FC<HierarchyNodeProps> = ({
 
   return (
     <div className="flex flex-col">
+      <CurrentStateNotice />
       {/* Node Row */}
       <div
         onClick={() => onSelect(item)}

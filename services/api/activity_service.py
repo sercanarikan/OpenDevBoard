@@ -69,19 +69,32 @@ MY_HISTORY_METRIC = "my-history"
 ACTIVITY_METRIC_IDS = tuple(METRICS) + (MY_HISTORY_METRIC,)
 
 
-def daily_counts_for_actor(conn: sqlite3.Connection, actor_id: str, window: DateWindow) -> Dict[str, int]:
-    """Verified-actor history events per UTC day. An empty actor id counts nothing (identity isolation)."""
+def daily_counts_for_actor(
+    conn: sqlite3.Connection, actor_id: str, window: DateWindow, projects: Optional[Sequence[str]] = None
+) -> Dict[str, int]:
+    """Verified-actor history events per UTC day, optionally limited to ``projects`` (None = all projects).
+
+    An empty actor id counts nothing (identity isolation). An empty ``projects`` list counts nothing.
+    """
     actor = (actor_id or "").strip().lower()
     if not actor:
         return {}
+    project_names = None if projects is None else [p for p in projects if p]
+    if project_names is not None and not project_names:
+        return {}
     first = window.start.strftime("%Y-%m-%d")
     last = (window.end - timedelta(days=1)).strftime("%Y-%m-%d")
+    project_filter = ""
+    params: list = [actor, first, last]
+    if project_names is not None:
+        project_filter = f" AND project IN ({','.join('?' for _ in project_names)})"
+        params.extend(project_names)
     rows = conn.execute(
-        """SELECT substr(occurred_at, 1, 10) AS day, COUNT(*) AS n
+        f"""SELECT substr(occurred_at, 1, 10) AS day, COUNT(*) AS n
            FROM history_events
-           WHERE lower(actor_id) = ? AND substr(occurred_at, 1, 10) >= ? AND substr(occurred_at, 1, 10) <= ?
+           WHERE lower(actor_id) = ? AND substr(occurred_at, 1, 10) >= ? AND substr(occurred_at, 1, 10) <= ?{project_filter}
            GROUP BY day""",
-        (actor, first, last),
+        params,
     ).fetchall()
     return {row[0]: int(row[1]) for row in rows if row[0]}
 

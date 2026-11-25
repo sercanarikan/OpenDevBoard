@@ -144,7 +144,7 @@ describe('DateRangeFilter (Rev 2)', () => {
     const select = find<HTMLSelectElement>('[data-testid="date-range-preset-select"]')!;
     expect(select).not.toBeNull();
     expect(Array.from(select.options).map(o => o.value)).toEqual(expect.arrayContaining(['last7', 'last30', 'thisMonth', 'lastYear']));
-    expect(select.querySelectorAll('option').length).toBeGreaterThanOrEqual(15);
+    expect(select.querySelectorAll('option').length).toBe(14);
     await act(async () => setNative(select, 'last7', 'change'));
     expect(startInput().value).toBe(addDaysToKey(today, -6));
   });
@@ -237,6 +237,38 @@ describe('DateRangeFilter (Rev 2)', () => {
     await click('[data-testid="date-range-apply"]');
     expect(onApply).toHaveBeenCalledWith(customSelection(first, last));
     expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('a start-field calendar pick changes only the start and stays a draft until Apply', async () => {
+    await render(presetSelection('last30', today));
+    await open();
+    const cells = enabledDays();
+    const firstOfMonth = cells[0].dataset.date!;
+    const originalEnd = endInput().value;
+    await click('[data-testid="date-range-start-pick"]');
+    expect(find<HTMLButtonElement>('[data-testid="date-range-start-pick"]')!.getAttribute('aria-pressed')).toBe('true');
+    await act(async () => cells[0].click());
+    expect(startInput().value).toBe(firstOfMonth);
+    expect(endInput().value).toBe(originalEnd);
+    expect(find<HTMLButtonElement>('[data-testid="date-range-start-pick"]')!.getAttribute('aria-pressed')).toBe('false');
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('an end-field calendar pick changes only the end and a start after the end is rejected', async () => {
+    await render(presetSelection('last30', today));
+    await open();
+    const cells = enabledDays();
+    const originalStart = startInput().value;
+    await click('[data-testid="date-range-end-pick"]');
+    await act(async () => cells[0].click());
+    expect(endInput().value).toBe(cells[0].dataset.date!);
+    expect(startInput().value).toBe(originalStart);
+    await click('[data-testid="date-range-start-pick"]');
+    await act(async () => cells[cells.length - 1].click());
+    expect(startInput().value).toBe(cells[cells.length - 1].dataset.date!);
+    expect(apply().disabled).toBe(true);
+    expect(find('[data-testid="date-range-error"]')?.textContent ?? '').not.toBe('');
+    expect(onApply).not.toHaveBeenCalled();
   });
 
   it('validates manual start and end input and disables Apply while invalid', async () => {

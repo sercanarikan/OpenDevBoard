@@ -38,6 +38,7 @@ import {
 import { kanbanParams } from '../../utils/listParams';
 import { kanbanScopeSplit } from '../../utils/layout';
 import { useKanban, remainingCount } from '../../hooks/useKanban';
+import { CurrentStateNotice } from '../Common/CurrentStateNotice';
 
 const renderedCount = (lane: KanbanLane): number =>
   KANBAN_COLUMNS.reduce((n, col) => n + (lane.columns[col.id]?.length ?? 0), 0);
@@ -698,6 +699,7 @@ export const KanbanBoard: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-[#F8FAFC] dark:bg-[#0B0F17] overflow-hidden select-none">
+      <CurrentStateNotice />
       {/* 1. Header Toolbar with KPI Tabs & Controls */}
       <div className="p-3 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] space-y-3 shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3">

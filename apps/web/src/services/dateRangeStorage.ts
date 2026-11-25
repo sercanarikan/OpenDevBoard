@@ -15,7 +15,7 @@ export const DATE_RANGE_STORAGE_KEY = 'opendevboard.dateRange.v1';
 
 // Presets that are defined relative to "today": their dates are recomputed on load, never trusted from storage.
 const RELATIVE_CALENDAR_PRESETS = new Set<string>([
-  'last1', 'last6m', 'last1y', 'today', 'yesterday', 'thisMonth', 'lastMonth', 'thisQuarter', 'lastQuarter', 'thisYear', 'lastYear',
+  'last6m', 'last1y', 'today', 'yesterday', 'thisMonth', 'lastMonth', 'thisQuarter', 'lastQuarter', 'thisYear', 'lastYear',
 ]);
 const STORED_CALENDAR_PRESETS = new Set<string>(['custom', 'day', 'month', 'quarter', 'year']);
 

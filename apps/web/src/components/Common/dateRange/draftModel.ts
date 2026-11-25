@@ -24,7 +24,7 @@ export interface Draft {
 /** Most used periods, always visible. */
 export const PRESET_MAIN: DateRangePresetId[] = ['last7', 'last14', 'last30', 'last90', 'today', 'thisMonth', 'lastMonth', 'thisYear'];
 /** Everything else, behind "More periods". */
-export const PRESET_MORE: DateRangePresetId[] = ['last1', 'yesterday', 'thisQuarter', 'lastQuarter', 'lastYear', 'last6m', 'last1y'];
+export const PRESET_MORE: DateRangePresetId[] = ['yesterday', 'thisQuarter', 'lastQuarter', 'lastYear', 'last6m', 'last1y'];
 export const RELATIVE_PRESETS: DateRangePresetId[] = [...PRESET_MAIN, ...PRESET_MORE];
 
 const PERIOD_KINDS: PeriodKind[] = ['day', 'month', 'quarter', 'year'];

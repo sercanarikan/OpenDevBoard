@@ -13,7 +13,6 @@ export const DEFAULT_DATE_RANGE_PRESET: RollingPresetId = 'last30';
 
 export type RollingPresetId = 'last7' | 'last14' | 'last30' | 'last90';
 export type CalendarPresetId =
-  | 'last1'
   | 'last6m'
   | 'last1y'
   | 'today'
@@ -106,9 +105,6 @@ function quarterEndKey(startKey: string): string {
 
 /** Selection for a preset, relative to the given UTC day. */
 export function presetSelection(preset: DateRangePresetId, todayKey: string): DateRangeSelection {
-  if (preset === 'last1') {
-    return { kind: 'calendar', preset, startDate: todayKey, endDate: todayKey };
-  }
   if (preset === 'last6m') {
     return { kind: 'calendar', preset, startDate: addDaysToKey(addMonthsToKey(todayKey, -6), 1), endDate: todayKey };
   }
