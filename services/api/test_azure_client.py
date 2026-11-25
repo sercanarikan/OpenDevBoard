@@ -83,11 +83,22 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(self.sleeps, [7.0])
         self.assertEqual(self.client.stats['retries'], 1)
 
-    def test_retry_after_is_capped(self):
-        responses = [FakeResponse(503, headers={'Retry-After': '999'}), FakeResponse(200, {})]
+    def test_retry_after_within_one_minute_is_honoured_exactly(self):
+        responses = [FakeResponse(503, headers={'Retry-After': '60'}), FakeResponse(200, {})]
         with mock.patch.object(azure_client.requests, 'get', side_effect=responses):
             self.client._request('GET', f'{ORG}/x')
-        self.assertEqual(self.sleeps, [30.0])
+        self.assertEqual(self.sleeps, [60.0])
+
+    def test_retry_after_over_one_minute_defers_without_waiting(self):
+        # Contract change (approved): a longer advertised wait is never slept in-process; the work is deferred.
+        responses = [FakeResponse(503, headers={'Retry-After': '999'}), FakeResponse(200, {})]
+        with mock.patch.object(azure_client.requests, 'get', side_effect=responses) as get:
+            with self.assertRaises(azure_client.AzureError) as ctx:
+                self.client._request('GET', f'{ORG}/x')
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(self.sleeps, [])
+        self.assertTrue(ctx.exception.deferred)
+        self.assertEqual(ctx.exception.retry_after, 999.0)
 
     def test_backoff_without_retry_after(self):
         responses = [FakeResponse(502), FakeResponse(504), FakeResponse(503), FakeResponse(200, {})]

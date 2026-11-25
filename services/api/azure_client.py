@@ -22,7 +22,8 @@ WIQL_RESULT_LIMIT = 20000
 BATCH_SIZE = 200
 API_VERSION = '7.1'
 RETRY_STATUSES = (429, 502, 503, 504)
-RETRY_AFTER_CAP = 30
+# A Retry-After up to this many seconds is honoured in-process. Longer waits are never slept: the caller defers the work.
+RETRY_AFTER_MAX_WAIT = 60.0
 # Bounded parallelism for the read-only detail GETs of get_items(); SYNC_DETAIL_WORKERS selects it.
 # 1 (the default) is the previous strictly sequential behaviour; anything above MAX_DETAIL_WORKERS is clamped.
 DEFAULT_DETAIL_WORKERS = 1
@@ -32,11 +33,14 @@ WIQL_PATH = '/_apis/wit/wiql'
 
 
 class AzureError(Exception):
-    def __init__(self, message, status=None, retryable=False):
+    def __init__(self, message, status=None, retryable=False, deferred=False, retry_after=None):
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.size_limit = False
+        # deferred: the server asked for a wait longer than RETRY_AFTER_MAX_WAIT; nothing was retried in-process.
+        self.deferred = deferred
+        self.retry_after = retry_after
 
 
 def quote_wiql(value):
@@ -72,7 +76,7 @@ def _parse_retry_after(resp):
         value = float(headers.get('Retry-After'))
     except (TypeError, ValueError):
         return None
-    return min(max(value, 0.0), RETRY_AFTER_CAP)
+    return max(value, 0.0)
 
 
 def _json(resp):
@@ -247,6 +251,10 @@ class AzureClient:
                         error.size_limit = True
                     raise error
 
+            if retry_after is not None and retry_after > RETRY_AFTER_MAX_WAIT:
+                failure.deferred = True
+                failure.retry_after = retry_after
+                raise failure
             if attempt >= self._max_retries:
                 raise failure
             delay = retry_after if retry_after is not None else float(2 ** attempt)

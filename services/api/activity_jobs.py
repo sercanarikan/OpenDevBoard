@@ -14,6 +14,7 @@ can contain URLs or tokens, is never stored.
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Callable, Dict, Optional, Tuple
@@ -29,6 +30,7 @@ DONE = "done"
 PARTIAL = "partial"
 FAILED = "failed"
 BUSY = "busy"
+DEFERRED = "deferred"  # upstream asked for a wait longer than one minute; nothing is retried before then
 
 ChunkFetch = Callable[[DateWindow], bool]
 JobKey = Tuple[str, str, str]  # (scope, metric, chunk_key)
@@ -39,8 +41,12 @@ def _now_iso() -> str:
 
 
 class ChunkJobRunner:
-    def __init__(self, db_path: Optional[str] = None, max_workers: int = 2, max_pending: int = 64):
+    def __init__(self, db_path: Optional[str] = None, max_workers: int = 2, max_pending: int = 64,
+                 clock: Optional[Callable[[], float]] = None):
         self._db_path = db_path
+        self._clock = clock or time.monotonic
+        self._defer_until: Dict[JobKey, float] = {}
+        self._defer_seconds: Dict[JobKey, float] = {}
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="activity-chunk")
         self._max_pending = max_pending
         self._lock = threading.Lock()
@@ -58,15 +64,19 @@ class ChunkJobRunner:
         with self._lock:
             if key in self._running:
                 return RUNNING  # coalesced
+            if self._clock() < self._defer_until.get(key, 0.0):
+                return DEFERRED
             if len(self._running) >= self._max_pending:
                 return BUSY
             self._running[key] = True
             self._outcome.pop(key, None)
+            self._defer_until.pop(key, None)
         self._pool.submit(self._run, key, chunk, fetch)
         return RUNNING
 
     def status(self, scope: str, metric: str, chunk_keys) -> Dict[str, int | str]:
-        counts = {"pending": 0, "completed": 0, "partial": 0, "failed": 0}
+        counts = {"pending": 0, "completed": 0, "partial": 0, "failed": 0, "deferred": 0}
+        retry_after = 0.0
         with self._lock:
             for ck in chunk_keys:
                 key = (scope, metric, ck)
@@ -80,8 +90,13 @@ class ChunkJobRunner:
                     counts["partial"] += 1
                 elif outcome == FAILED:
                     counts["failed"] += 1
+                elif outcome == DEFERRED:
+                    counts["deferred"] += 1
+                    retry_after = max(retry_after, self._defer_seconds.get(key, 0.0))
         if counts["pending"]:
             state = RUNNING
+        elif counts["deferred"] and not counts["completed"] and not counts["partial"] and not counts["failed"]:
+            state = DEFERRED
         elif counts["failed"]:
             state = FAILED
         elif counts["partial"]:
@@ -90,7 +105,7 @@ class ChunkJobRunner:
             state = DONE
         else:
             state = IDLE
-        return {"state": state, **counts}
+        return {"state": state, **counts, "retryAfterSeconds": retry_after}
 
     def _connect(self):
         return get_db_connection(self._db_path)
@@ -104,7 +119,16 @@ class ChunkJobRunner:
             cl.promote_chunk(conn, scope, metric, ck, chunk_last_day(chunk), complete, fetched_at=_now_iso())
             outcome = DONE if complete else PARTIAL
         except Exception as error:  # noqa: BLE001 - any upstream failure is an attempt failure
-            cl.record_failed_attempt(conn, scope, metric, ck, error_code=type(error).__name__, attempted_at=_now_iso())
+            if getattr(error, "deferred", False):
+                # Upstream asked for a longer wait than one minute: record the attempt, keep coverage, retry later.
+                seconds = float(getattr(error, "retry_after", None) or 60.0)
+                cl.record_failed_attempt(conn, scope, metric, ck, error_code="retry-after-deferred", attempted_at=_now_iso())
+                outcome = DEFERRED
+                with self._lock:
+                    self._defer_until[key] = self._clock() + seconds
+                    self._defer_seconds[key] = seconds
+            else:
+                cl.record_failed_attempt(conn, scope, metric, ck, error_code=type(error).__name__, attempted_at=_now_iso())
         finally:
             conn.close()
             with self._lock:

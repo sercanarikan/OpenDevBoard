@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 import coverage_ledger as cl
 from activity_chunks import chunk_key, plan_month_chunks
-from activity_jobs import BUSY, DONE, FAILED, IDLE, PARTIAL, RUNNING, ChunkJobRunner
+from activity_jobs import BUSY, DEFERRED, DONE, FAILED, IDLE, PARTIAL, RUNNING, ChunkJobRunner
 from date_window import calendar_window
 from persistence import get_db_connection
 
@@ -146,9 +146,55 @@ class ChunkJobRunnerTests(unittest.TestCase):
     def test_status_is_idle_before_any_submit(self):
         self.assertEqual(
             self.runner.status(SCOPE, "pipelines", [self.key]),
-            {"state": IDLE, "pending": 0, "completed": 0, "partial": 0, "failed": 0},
+            {"state": IDLE, "pending": 0, "completed": 0, "partial": 0, "failed": 0, "deferred": 0, "retryAfterSeconds": 0.0},
         )
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeferredRetryAfterTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self._tmp.name, "defer.db")
+        self.clock = [1000.0]
+        self.runner = ChunkJobRunner(db_path=self.db_path, max_workers=1, clock=lambda: self.clock[0])
+        self.chunk = february_chunk()
+        self.key = chunk_key(self.chunk)
+
+    def tearDown(self):
+        self.runner.shutdown(wait=True)
+        self._tmp.cleanup()
+
+    def test_retry_after_over_a_minute_is_deferred_not_failed(self):
+        from azure_client import AzureError
+
+        def throttled(chunk):
+            raise AzureError("HTTP 429", status=429, retryable=True, deferred=True, retry_after=90.0)
+
+        self.runner.submit(SCOPE, "pipelines", self.chunk, throttled)
+        status = wait_until_idle(self.runner, [self.key])
+        self.assertEqual(status["state"], DEFERRED)
+        self.assertEqual(status["deferred"], 1)
+        self.assertEqual(status["failed"], 0)
+        self.assertEqual(status["retryAfterSeconds"], 90.0)
+
+    def test_deferred_chunk_is_not_resubmitted_before_its_retry_time(self):
+        from azure_client import AzureError
+
+        calls = []
+
+        def throttled(chunk):
+            calls.append(1)
+            raise AzureError("HTTP 429", status=429, retryable=True, deferred=True, retry_after=90.0)
+
+        self.runner.submit(SCOPE, "pipelines", self.chunk, throttled)
+        wait_until_idle(self.runner, [self.key])
+        self.clock[0] += 60.0  # one minute later: still inside the advertised 90 s
+        self.assertEqual(self.runner.submit(SCOPE, "pipelines", self.chunk, throttled), DEFERRED)
+        self.assertEqual(len(calls), 1)
+        self.clock[0] += 31.0  # past the advertised wait: eligible again
+        self.runner.submit(SCOPE, "pipelines", self.chunk, throttled)
+        wait_until_idle(self.runner, [self.key])
+        self.assertEqual(len(calls), 2)
