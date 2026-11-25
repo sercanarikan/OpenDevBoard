@@ -4,14 +4,33 @@
 // contract (startDate/endDate inclusive, interpreted in UTC). Rolling presets keep
 // sending the legacy `days` parameter so existing API behaviour is unchanged.
 
-export const DATE_RANGE_MAX_SPAN_DAYS = 90;
-// Start must be within the last 90 UTC days, today included (mirrors the backend limit).
-export const DATE_RANGE_MAX_AGE_DAYS = 89;
+// Query windows may span three years (mirrors backend QUERY_MAX_SPAN_DAYS). Long windows are served
+// by chunked, coverage-tracked fetches on the backend.
+export const DATE_RANGE_MAX_SPAN_DAYS = 1096;
+// Start may be at most 3650 days before today (UTC), today included in the count.
+export const DATE_RANGE_MAX_AGE_DAYS = 3650;
 export const DEFAULT_DATE_RANGE_PRESET: RollingPresetId = 'last30';
 
 export type RollingPresetId = 'last7' | 'last14' | 'last30' | 'last90';
-export type CalendarPresetId = 'thisMonth' | 'lastMonth' | 'custom';
+export type CalendarPresetId =
+  | 'last1'
+  | 'last6m'
+  | 'last1y'
+  | 'today'
+  | 'yesterday'
+  | 'thisMonth'
+  | 'lastMonth'
+  | 'thisQuarter'
+  | 'lastQuarter'
+  | 'thisYear'
+  | 'lastYear'
+  | 'day'
+  | 'month'
+  | 'quarter'
+  | 'year'
+  | 'custom';
 export type DateRangePresetId = RollingPresetId | CalendarPresetId;
+export type PeriodKind = 'day' | 'month' | 'quarter' | 'year';
 
 export const ROLLING_PRESETS: Record<RollingPresetId, number> = { last7: 7, last14: 14, last30: 30, last90: 90 };
 
@@ -64,19 +83,98 @@ function firstOfPreviousMonthKey(todayKey: string): string {
   return `${last.slice(0, 8)}01`;
 }
 
+/** Adds calendar months to a key, clamping the day to the target month's length. */
+export function addMonthsToKey(key: string, delta: number): string {
+  const [y, m, d] = key.split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1 + delta, 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  const day = Math.min(d, lastDay);
+  return new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), day)).toISOString().slice(0, 10);
+}
+
+function quarterStartKey(todayKey: string, quarterOffset = 0): string {
+  const [y, m] = todayKey.split('-').map(Number);
+  const index = Math.floor((m - 1) / 3) + quarterOffset; // may be negative: previous year
+  const year = y + Math.floor(index / 4);
+  const month = ((index % 4) + 4) % 4 * 3 + 1;
+  return `${year}-${String(month).padStart(2, '0')}-01`;
+}
+
+function quarterEndKey(startKey: string): string {
+  return addDaysToKey(addMonthsToKey(startKey, 3), -1);
+}
+
 /** Selection for a preset, relative to the given UTC day. */
 export function presetSelection(preset: DateRangePresetId, todayKey: string): DateRangeSelection {
+  if (preset === 'last1') {
+    return { kind: 'calendar', preset, startDate: todayKey, endDate: todayKey };
+  }
+  if (preset === 'last6m') {
+    return { kind: 'calendar', preset, startDate: addDaysToKey(addMonthsToKey(todayKey, -6), 1), endDate: todayKey };
+  }
+  if (preset === 'last1y') {
+    return { kind: 'calendar', preset, startDate: addDaysToKey(addMonthsToKey(todayKey, -12), 1), endDate: todayKey };
+  }
+  if (preset === 'today') {
+    return { kind: 'calendar', preset, startDate: todayKey, endDate: todayKey };
+  }
+  if (preset === 'yesterday') {
+    const yesterday = addDaysToKey(todayKey, -1);
+    return { kind: 'calendar', preset, startDate: yesterday, endDate: yesterday };
+  }
   if (preset === 'thisMonth') {
     return { kind: 'calendar', preset, startDate: firstOfMonthKey(todayKey), endDate: todayKey };
   }
   if (preset === 'lastMonth') {
     return { kind: 'calendar', preset, startDate: firstOfPreviousMonthKey(todayKey), endDate: lastOfPreviousMonthKey(todayKey) };
   }
-  if (preset === 'custom') {
-    // Custom starts as the current month so the picker always opens on a valid range.
+  if (preset === 'thisQuarter') {
+    return { kind: 'calendar', preset, startDate: quarterStartKey(todayKey), endDate: todayKey };
+  }
+  if (preset === 'lastQuarter') {
+    const start = quarterStartKey(todayKey, -1);
+    return { kind: 'calendar', preset, startDate: start, endDate: quarterEndKey(start) };
+  }
+  if (preset === 'thisYear') {
+    return { kind: 'calendar', preset, startDate: `${todayKey.slice(0, 4)}-01-01`, endDate: todayKey };
+  }
+  if (preset === 'lastYear') {
+    const year = Number(todayKey.slice(0, 4)) - 1;
+    return { kind: 'calendar', preset, startDate: `${year}-01-01`, endDate: `${year}-12-31` };
+  }
+  if (preset === 'custom' || preset === 'day' || preset === 'month' || preset === 'quarter' || preset === 'year') {
+    // Custom and period kinds start from the current month so the picker always opens on a valid range.
     return { kind: 'calendar', preset, startDate: firstOfMonthKey(todayKey), endDate: todayKey };
   }
   return { kind: 'rolling', preset, days: ROLLING_PRESETS[preset] };
+}
+
+export type PeriodParams = { date?: string; year?: number; month?: number; quarter?: number };
+
+/** Direct period selection: a single day, a calendar month, a quarter or a whole year. */
+export function periodSelection(kind: PeriodKind, params: PeriodParams, todayKey: string): DateRangeSelection {
+  if (kind === 'day') {
+    const date = params.date ?? todayKey;
+    return { kind: 'calendar', preset: 'day', startDate: date, endDate: date };
+  }
+  if (kind === 'month') {
+    const year = params.year ?? Number(todayKey.slice(0, 4));
+    const month = params.month ?? Number(todayKey.slice(5, 7));
+    const start = `${year}-${String(month).padStart(2, '0')}-01`;
+    return { kind: 'calendar', preset: 'month', startDate: start, endDate: lastDayOfMonthKey(start) };
+  }
+  if (kind === 'quarter') {
+    const year = params.year ?? Number(todayKey.slice(0, 4));
+    const quarter = params.quarter ?? Math.floor((Number(todayKey.slice(5, 7)) - 1) / 3) + 1;
+    const start = `${year}-${String((quarter - 1) * 3 + 1).padStart(2, '0')}-01`;
+    return { kind: 'calendar', preset: 'quarter', startDate: start, endDate: quarterEndKey(start) };
+  }
+  const year = params.year ?? Number(todayKey.slice(0, 4));
+  return { kind: 'calendar', preset: 'year', startDate: `${year}-01-01`, endDate: `${year}-12-31` };
+}
+
+function lastDayOfMonthKey(startKey: string): string {
+  return addDaysToKey(addMonthsToKey(startKey, 1), -1);
 }
 
 /** Explicit custom selection; the caller must validate with `validateCustomRange` first. */
