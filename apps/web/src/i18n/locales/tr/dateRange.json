@@ -1,13 +1,44 @@
 {
   "title": "Tarih aralığı",
   "presets": {
+    "last1": "Son 1 gün",
     "last7": "Son 7 gün",
     "last14": "Son 14 gün",
     "last30": "Son 30 gün",
     "last90": "Son 90 gün",
+    "last6m": "Son 6 ay",
+    "last1y": "Son 1 yıl",
+    "today": "Bugün",
+    "yesterday": "Dün",
     "thisMonth": "Bu ay",
     "lastMonth": "Geçen ay",
-    "custom": "Özel aralık"
+    "thisQuarter": "Bu çeyrek",
+    "lastQuarter": "Geçen çeyrek",
+    "thisYear": "Bu yıl",
+    "lastYear": "Geçen yıl",
+    "custom": "Özel aralık",
+    "day": "Gün",
+    "month": "Ay",
+    "quarter": "Çeyrek",
+    "year": "Yıl"
+  },
+  "groups": {
+    "rolling": "Kayan",
+    "calendar": "Takvim",
+    "period": "Dönem"
+  },
+  "periods": {
+    "day": "Gün",
+    "month": "Ay",
+    "quarter": "Çeyrek",
+    "year": "Yıl",
+    "custom": "Özel"
+  },
+  "period": {
+    "previousYear": "Önceki yıl",
+    "nextYear": "Sonraki yıl",
+    "quarterLabel": "Ç{{quarter}}",
+    "pickDay": "Gün seçin"
   },
   "summary": {
     "rolling": "Son {{count}} gün",
@@ -18,6 +49,53 @@
     "previousMonth": "Önceki ay",
     "nextMonth": "Sonraki ay"
   },
+  "activity": {
+    "title": "Aktivite",
+    "metricLabel": "Aktivite kaynağı",
+    "metrics": {
+      "pipelines": "Pipeline çalıştırmaları",
+      "deployments": "Deployment'lar",
+      "commits": "Commit'ler"
+    },
+    "units": {
+      "pipelines": "çalıştırma",
+      "deployments": "deployment",
+      "commits": "commit"
+    },
+    "legend": {
+      "coveredZero": "Tarandı, aktivite yok",
+      "coveredActive": "Aktivite",
+      "partial": "Kısmen toplandı",
+      "notCollected": "Henüz toplanmadı",
+      "unavailable": "Saklama süresi dışında",
+      "stale": "Yenileme bekliyor",
+      "selected": "Seçili aralık"
+    },
+    "day": {
+      "covered": "{{date}}: {{count}} {{unit}}",
+      "zero": "{{date}}: aktivite yok (tarandı)",
+      "partial": "{{date}}: kısmen toplandı",
+      "notCollected": "{{date}}: henüz toplanmadı",
+      "unavailable": "{{date}}: saklama süresi dışında",
+      "stale": " (yenileme bekliyor)"
+    },
+    "job": {
+      "running": "{{total}} ay için veri toplanıyor…",
+      "partial": "Bazı aylar tam toplanamadı.",
+      "failed": "Bazı aylar toplanamadı."
+    },
+    "timelineLabel": "Seçili dönemdeki aktivite",
+    "timelineSummary": "{{start}} – {{end}}",
+    "startHandle": "Başlangıç günü",
+    "endHandle": "Bitiş günü",
+    "nudgeStartEarlier": "Başlangıcı bir gün önceye al",
+    "nudgeStartLater": "Başlangıcı bir gün sonraya al",
+    "nudgeEndEarlier": "Bitişi bir gün önceye al",
+    "nudgeEndLater": "Bitişi bir gün sonraya al",
+    "loadFailed": "Aktivite yüklenemedi.",
+    "timeout": "Yükleme çok uzun sürdü. Tekrar deneyin.",
+    "fixture": "Örnek veri, canlı değil"
+  },
   "actions": {
     "apply": "Uygula",
     "cancel": "İptal"
@@ -27,7 +105,7 @@
     "endBeforeStart": "Bitiş tarihi başlangıç tarihinden sonra veya aynı gün olmalıdır.",
     "tooLong": "Aralık en fazla {{max}} gün olabilir.",
     "future": "Gelecek tarihler kullanılamaz.",
-    "tooOld": "Yalnızca son 90 gün kullanılabilir."
+    "tooOld": "{{max}} günden eski tarihler kullanılamaz."
   },
   "hintUtc": "Tarihler UTC takvim günleridir."
 }
