@@ -22,6 +22,11 @@ import observability
 import ipaddress
 import projects_cache
 import date_window
+import activity_service
+import activity_chunks
+import activity_jobs
+import coverage_ledger
+import persistence
 
 # Azure DevOps SDK imports
 from msrest.authentication import BasicAuthentication
@@ -738,6 +743,100 @@ def _load_all_deployments(days=30, force_refresh=False, window=None):
     org_name = get_devops_org_name()
     pat = get_devops_pat()
     return _live_flights.run(('deployments',) + window.key + (force_refresh,), lambda: deployment_service.sync_live_deployments(org_url, org_name, pat, days=window.days, force_refresh=force_refresh, include_cache_status=True, **_window_kw(window)))
+
+_activity_runner = None
+_activity_runner_lock = Lock()
+
+
+def _get_activity_runner():
+    global _activity_runner
+    with _activity_runner_lock:
+        if _activity_runner is None:
+            _activity_runner = activity_jobs.ChunkJobRunner()
+        return _activity_runner
+
+
+def _activity_retention_days():
+    raw = (os.environ.get('ACTIVITY_RETENTION_DAYS') or '').strip()
+    if not raw:
+        return None  # unknown horizon: never claim unavailable
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+@app.route('/api/activity/daily', methods=['GET'])
+def get_activity_daily():
+    """Per-UTC-day activity counts with coverage states for the heatmap and timeline.
+
+    mode=cache never starts upstream work. mode=refresh starts coalesced background
+    fetches for chunks that are missing, partial or stale, and returns what is covered now.
+    """
+    metric = (request.args.get('metric') or '').strip()
+    if metric not in activity_service.METRICS:
+        return jsonify({"error": f"metric must be one of: {', '.join(sorted(activity_service.METRICS))}"}), 400
+    mode = (request.args.get('mode') or 'refresh').strip().lower()
+    if mode not in ('cache', 'refresh'):
+        return jsonify({"error": "mode must be cache or refresh"}), 400
+    if not (request.args.get('startDate') and request.args.get('endDate')):
+        return jsonify({"error": "startDate and endDate are required"}), 400
+    try:
+        window = date_window.parse_request_window(request.args)
+        chunks = activity_chunks.plan_month_chunks(window)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+    fixture = sync_service.is_fixture_mode()
+    if fixture:
+        mode = 'cache'  # fixture data is never fetched upstream
+    try:
+        projects = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+    except Exception:
+        return jsonify({"error": "project list is unavailable"}), 503
+
+    org_url = get_devops_org_url()
+    scope = coverage_ledger.scope_key(org_url, projects)
+    keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    runner = _get_activity_runner()
+
+    conn = persistence.get_db_connection()
+    try:
+        coverage = coverage_ledger.read_coverage(conn, scope, metric, keys)
+        if mode == 'refresh':
+            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat())
+            for chunk in chunks:
+                row = coverage.get(activity_chunks.chunk_key(chunk))
+                needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
+                    coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
+                )
+                if needs_fetch:
+                    runner.submit(scope, metric, chunk, fetchers[metric])
+        job = runner.status(scope, metric, keys)
+        counts = activity_service.daily_counts(conn, metric, projects, window)
+    finally:
+        conn.close()
+
+    days = activity_service.classify_days(window, coverage, counts, now, _activity_retention_days())
+    partial_days = sum(1 for d in days if d['state'] == activity_service.PARTIAL)
+    not_collected_days = sum(1 for d in days if d['state'] == activity_service.NOT_COLLECTED)
+    body = {
+        "metric": metric,
+        "window": window.to_meta(),
+        "days": days,
+        "job": job,
+        "cacheStatus": {
+            "complete": partial_days == 0 and not_collected_days == 0,
+            "partialDays": partial_days,
+            "notCollectedDays": not_collected_days,
+        },
+    }
+    if fixture:
+        body["fixture"] = True
+    return jsonify(body), 200
+
 
 @app.route('/api/pipeline-health', methods=['GET'])
 def get_pipeline_health():
