@@ -33,43 +33,48 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def ensure_history_schema(conn: sqlite3.Connection) -> None:
+    """Creates (and migrates) the history_events table on the given connection."""
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS history_events (
+            id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            project TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT,
+            actor_name TEXT NOT NULL,
+            actor_id TEXT,
+            url TEXT,
+            source_endpoint TEXT,
+            source_event_id TEXT,
+            verification_status TEXT DEFAULT 'verified',
+            last_synced_at TEXT
+        )
+    ''')
+    # Safely migrate existing tables if columns are missing
+    cursor.execute("PRAGMA table_info(history_events)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    for col_name, col_type in [
+        ("source_endpoint", "TEXT"),
+        ("source_event_id", "TEXT"),
+        ("verification_status", "TEXT DEFAULT 'verified'")
+    ]:
+        if col_name not in existing_cols:
+            cursor.execute(f"ALTER TABLE history_events ADD COLUMN {col_name} {col_type}")
+
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_hist_actor ON history_events(actor_name, occurred_at)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_hist_type ON history_events(event_type, project)')
+    conn.commit()
+
+
 def init_history_db():
     """Initializes the history_events cache table in SQLite."""
     with persistence.db_lock, persistence.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS history_events (
-                id TEXT PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                occurred_at TEXT NOT NULL,
-                project TEXT NOT NULL,
-                entity_type TEXT NOT NULL,
-                entity_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                summary TEXT,
-                actor_name TEXT NOT NULL,
-                actor_id TEXT,
-                url TEXT,
-                source_endpoint TEXT,
-                source_event_id TEXT,
-                verification_status TEXT DEFAULT 'verified',
-                last_synced_at TEXT
-            )
-        ''')
-        # Safely migrate existing tables if columns are missing
-        cursor.execute("PRAGMA table_info(history_events)")
-        existing_cols = {row["name"] for row in cursor.fetchall()}
-        for col_name, col_type in [
-            ("source_endpoint", "TEXT"),
-            ("source_event_id", "TEXT"),
-            ("verification_status", "TEXT DEFAULT 'verified'")
-        ]:
-            if col_name not in existing_cols:
-                cursor.execute(f"ALTER TABLE history_events ADD COLUMN {col_name} {col_type}")
-
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_hist_actor ON history_events(actor_name, occurred_at)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_hist_type ON history_events(event_type, project)')
-        conn.commit()
+        ensure_history_schema(conn)
 
 
 try:
@@ -571,6 +576,23 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
             "issues": sorted(set(coverage_issues)),
         },
     }
+
+
+def load_local_history(conn: sqlite3.Connection, user_id: str, window: DateWindow) -> List[Dict[str, Any]]:
+    """Cache-only read of the verified user's events in the window. Never touches upstream.
+
+    Identity isolation: rows are matched on the verified actor id only; an empty id returns nothing, so another
+    user's rows can never be returned.
+    """
+    user_id = (user_id or "").strip().lower()
+    if not user_id:
+        return []
+    conn.row_factory = sqlite3.Row
+    ensure_history_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM history_events WHERE lower(actor_id) = ? ORDER BY occurred_at DESC", (user_id,)
+    ).fetchall()
+    return [e for e in (_row_to_event_dict(r) for r in rows) if _window_matches(e.get("occurredAt"), window)]
 
 
 def _row_to_event_dict(row: sqlite3.Row) -> Dict[str, Any]:

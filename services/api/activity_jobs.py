@@ -171,3 +171,14 @@ def build_live_fetchers(org_url: str, org_name: str, pat: str) -> Dict[str, Chun
         ),
         "commits": lambda chunk: _complete(team_service.sync_live_team_activity(org_url, pat, window=chunk)),
     }
+
+
+def build_history_fetcher(org_url: str, pat: str, user_info: dict) -> ChunkFetch:
+    """Chunk fetcher for My History, bound to the verified current user (identity is never taken from the chunk)."""
+    import history_service
+
+    def fetch(chunk) -> bool:
+        result = history_service.sync_live_history(org_url, pat, dict(user_info), window=chunk)
+        return bool((result or {}).get("cacheStatus", {}).get("complete"))
+
+    return fetch

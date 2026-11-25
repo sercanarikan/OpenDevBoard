@@ -1420,14 +1420,79 @@ def get_project_work_item_stats():
         app.logger.error(f"Error in get_project_work_item_stats: {e}", exc_info=True)
         return jsonify({"total_active_work_items": 0, "stats_by_project": {}}), 500
 
+class HistoryIdentityUnavailable(Exception):
+    pass
+
+
+def _history_cache_first(window, refresh=True):
+    """Calendar My History: the verified user's local rows plus coverage and job state; upstream only via chunk jobs.
+
+    Coverage and rows are scoped to the verified current user, so another user's data is never read or reused.
+    """
+    user_info = get_current_user_info() or {}
+    user_id = (user_info.get("id") or "").strip()
+    if not user_id:
+        raise HistoryIdentityUnavailable()
+    chunks = activity_chunks.plan_month_chunks(window)
+    org_url = get_devops_org_url()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    runner = _get_activity_runner()
+    busy_refusals = 0
+    scope = coverage_ledger.scope_key(org_url, [], actor_id=user_id.lower())
+    keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+    conn = persistence.get_db_connection()
+    try:
+        coverage = coverage_ledger.read_coverage(conn, scope, 'history', keys)
+        if refresh:
+            fetcher = activity_jobs.build_history_fetcher(org_url, get_devops_pat(), user_info)
+            for chunk in chunks:
+                row = coverage.get(activity_chunks.chunk_key(chunk))
+                needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
+                    coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
+                )
+                if needs_fetch and runner.submit(scope, 'history', chunk, fetcher) == activity_jobs.BUSY:
+                    busy_refusals += 1
+        job = {**runner.status(scope, 'history', keys), "busy": busy_refusals}
+        events = history_service.load_local_history(conn, user_id, window)
+    finally:
+        conn.close()
+    counts = {"complete": 0, "partial": 0, "missing": 0}
+    for key in keys:
+        row = coverage.get(key)
+        if row is None:
+            counts["missing"] += 1
+        elif row['coverage'] == coverage_ledger.COVERAGE_COMPLETE:
+            counts["complete"] += 1
+        else:
+            counts["partial"] += 1
+    complete = counts["partial"] == 0 and counts["missing"] == 0
+    cache_status = {
+        "outcome": "complete" if complete else "partial",
+        "complete": complete,
+        "stale": not complete,
+        "coverage": counts,
+        "source": "local-cache",
+        "issues": [],
+    }
+    return {"events": events, "cacheStatus": cache_status, "job": job}
+
+
 def _load_all_history(days=30, force_refresh=False, window=None):
     window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return history_service.build_fixture_history("Fixture User")
+    if window.is_calendar:
+        mode = (request.args.get('mode') or 'refresh').strip().lower()
+        return _history_cache_first(window, refresh=(mode != 'cache'))
     org_url = get_devops_org_url()
     pat = get_devops_pat()
     user_info = get_current_user_info() or {}
     return history_service.sync_live_history(org_url, pat, user_info, days=window.days, force_refresh=force_refresh, **_window_kw(window))
+
+
+def _job_part(data):
+    return {"job": data["job"]} if data.get("job") else {}
+
 
 @app.route('/api/my-history', methods=['GET'])
 def get_my_history():
@@ -1518,6 +1583,7 @@ def get_my_history():
             "period_days": window.days,
             "user_name": user_name,
             "cacheStatus": _history_cache_status(history_data),
+            **_job_part(history_data),
             "summary": {
                 "total_completed_work_items": summary["completedWorkItems"],
                 "bugs_resolved": 0,
@@ -1537,6 +1603,8 @@ def get_my_history():
             "timelineGroups": timeline_groups,
             "metrics": summary
         }), 200
+    except HistoryIdentityUnavailable:
+        return jsonify({"error": "identity is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_my_history: {e}", exc_info=True)
         return jsonify({"error": str(e), "timeline": [], "daily_activity": []}), 500
@@ -1556,7 +1624,9 @@ def get_my_history_summary():
         summary = history_service.compute_history_summary(
             data["events"], project=project, activity_type=activity_type, search=search, **_range_kwargs(window)
         )
-        return jsonify({**summary, "cacheStatus": _history_cache_status(data)}), 200
+        return jsonify({**summary, "cacheStatus": _history_cache_status(data), **_job_part(data)}), 200
+    except HistoryIdentityUnavailable:
+        return jsonify({"error": "identity is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_my_history_summary: {e}", exc_info=True)
         return jsonify({"error": str(e), "totalEvents": 0}), 500
@@ -1571,7 +1641,9 @@ def get_my_history_timeline():
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         data = _load_all_history(**_range_kwargs(window), force_refresh=force_refresh)
         res = history_service.query_history_events(data["events"], request.args, window=window)
-        return jsonify({**res, "cacheStatus": _history_cache_status(data)}), 200
+        return jsonify({**res, "cacheStatus": _history_cache_status(data), **_job_part(data)}), 200
+    except HistoryIdentityUnavailable:
+        return jsonify({"error": "identity is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_my_history_timeline: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -1588,6 +1660,8 @@ def get_my_history_event_by_id(event_id):
             if e["id"] == event_id:
                 return jsonify(e), 200
         return jsonify({"error": f"History event {event_id} not found"}), 404
+    except HistoryIdentityUnavailable:
+        return jsonify({"error": "identity is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_my_history_event_by_id: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
