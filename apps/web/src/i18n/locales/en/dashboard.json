@@ -79,5 +79,15 @@
     "goToDeployments": "Deployment Metrics",
     "goToTeam": "Team Activity",
     "goToHistory": "My History"
+  },
+  "activityCard": {
+    "title": "Activity over time",
+    "subtitle": "Counts per UTC day from collected data. Days that were not collected are not shown as zero.",
+    "periodBadge": "Date filter applies to this card",
+    "coverage": "{{partial}} partly collected days · {{notCollected}} days not collected yet"
+  },
+  "scope": {
+    "instant": "Live",
+    "instantHint": "Current status; not affected by the date filter"
   }
 }

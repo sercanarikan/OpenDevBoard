@@ -23,6 +23,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { pullRequestsPath } from '../../utils/prFilter';
 import { useApp } from '../../context/useApp';
+import { DashboardActivityCard } from './DashboardActivityCard';
 import type { WorkItem, ViewMode } from '../../types';
 import type { PullRequest, HistoryEvent, TeamActivitySummary } from '../../types/paging';
 import { PriorityBadge, TypeBadge } from '../Common/Badge';
@@ -287,6 +288,7 @@ export const DashboardOverview: React.FC = () => {
               </span>
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.myTasks')}
+                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
               </div>
               <div className="text-[11px] text-slate-400 truncate">
                 {t('cards.myTasksDesc')}
@@ -312,6 +314,7 @@ export const DashboardOverview: React.FC = () => {
               </span>
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.blockedTasks')}
+                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
               </div>
               <div className="text-[11px] text-slate-400 truncate">
                 {t('cards.blockedTasksDesc')}
@@ -338,6 +341,7 @@ export const DashboardOverview: React.FC = () => {
               {prSummaryError && <span className="sr-only" data-testid="dash-pr-summary-error">{prSummaryError}</span>}
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.pendingPRs')}
+                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
               </div>
               <div role={prSummaryError ? 'alert' : undefined} className="text-[11px] text-slate-400 truncate">
                 {prSummaryError || (prIdentityRefreshing
@@ -370,6 +374,7 @@ export const DashboardOverview: React.FC = () => {
               {prSummaryError && <span className="sr-only" data-testid="dash-pr-summary-error">{prSummaryError}</span>}
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.myOpenPRs')}
+                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
               </div>
               <div role={prSummaryError ? 'alert' : undefined} className="text-[11px] text-slate-400 truncate">
                 {prSummaryError || (prCacheStale
@@ -521,6 +526,8 @@ export const DashboardOverview: React.FC = () => {
             </h3>
             <p className="text-[11px] text-slate-400">{t('sections.cicdHealthDesc')}</p>
           </div>
+
+          <DashboardActivityCard />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Pipelines Health Card */}
