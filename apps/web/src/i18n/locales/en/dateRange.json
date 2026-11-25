@@ -60,12 +60,22 @@
     "metrics": {
       "pipelines": "Pipeline runs",
       "deployments": "Deployments",
-      "commits": "Commits"
+      "commits": "Commits",
+      "pull-requests-created": "Pull requests created",
+      "pull-requests-closed": "Pull requests completed",
+      "workitems-completed": "Work items completed",
+      "workitems-created": "Work items created",
+      "my-history": "My activity (verified)"
     },
     "units": {
       "pipelines": "runs",
       "deployments": "deployments",
-      "commits": "commits"
+      "commits": "commits",
+      "pull-requests-created": "pull requests",
+      "pull-requests-closed": "pull requests",
+      "workitems-completed": "work items",
+      "workitems-created": "work items",
+      "my-history": "events"
     },
     "legend": {
       "coveredZero": "Scanned, no activity",

@@ -78,6 +78,14 @@ class ActivityDailyRouteTests(unittest.TestCase):
         self.assertEqual(everything["days"][0]["count"], 3)
         self.assertEqual(alpha["days"][0]["count"], 1)
 
+    def test_rolling_sync_rows_are_hidden_until_the_ledger_covers_their_day(self):
+        # Rolling syncs write rows but no ledger coverage; those rows must not be shown as collected days.
+        day = rel(5)
+        self._seed([("INSERT INTO pipeline_runs (id, project, queue_time) VALUES (?, ?, ?)", (9, "Alpha", day + "T10:00:00Z"))])
+        body = self.get(f"metric=pipelines&startDate={day}&endDate={day}&mode=cache").get_json()
+        self.assertIsNone(body["days"][0]["count"])
+        self.assertNotEqual(body["days"][0]["state"], "covered_active")
+
     def test_unavailable_retention_days_never_report_the_window_as_complete(self):
         with patch.dict(os.environ, {"ACTIVITY_RETENTION_DAYS": "30"}):
             body = self.get(f"metric=pipelines&startDate={rel(60)}&endDate={rel(50)}&mode=cache").get_json()

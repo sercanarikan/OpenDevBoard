@@ -16,7 +16,7 @@ import {
   type DateRangeSelection,
   type PeriodKind,
 } from '../../services/dateRange';
-import { ACTIVITY_METRICS, selectionBounds, type ActivityMetric } from '../../services/activityDaily';
+import { DASHBOARD_ACTIVITY_METRICS, selectionBounds, type ActivityMetric } from '../../services/activityDaily';
 import { ActivityCalendar } from './dateRange/ActivityCalendar';
 import { ActivityTimeline } from './dateRange/ActivityTimeline';
 import { useActivityDaily } from './dateRange/useActivityDaily';
@@ -29,6 +29,8 @@ export interface DateRangeFilterProps {
   value: DateRangeSelection;
   onApply: (selection: DateRangeSelection) => void;
   disabled?: boolean;
+  /** Activity metrics offered by the heatmap selector; the global filter passes the active screen's list. */
+  metrics?: ActivityMetric[];
 }
 
 type PeriodView = 'month' | 'quarter' | 'year';
@@ -71,10 +73,11 @@ interface PanelProps {
   locale: string;
   onApply: (selection: DateRangeSelection) => void;
   onClose: () => void;
+  metrics: ActivityMetric[];
 }
 
 /** The open picker. It mounts only while open, so the draft always starts from the applied selection. */
-function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onClose }: PanelProps) {
+function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onClose, metrics }: PanelProps) {
   const { t } = useTranslation('dateRange');
   const [todayKey] = useState(() => utcTodayKey());
   const earliestKey = addDaysToKey(todayKey, -(DATE_RANGE_MAX_AGE_DAYS - 1));
@@ -87,7 +90,9 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
   const [periodYear, setPeriodYear] = useState(() => yearOf(draftFromSelection(value, todayKey).end));
   const [yearPageEnd, setYearPageEnd] = useState(() => yearOf(todayKey));
   const [moreOpen, setMoreOpen] = useState(() => PRESET_MORE.includes(draftFromSelection(value, todayKey).preset as DateRangePresetId));
-  const [metric, setMetric] = useState<ActivityMetric>('pipelines');
+  const [selectedMetric, setMetric] = useState<ActivityMetric>(metrics[0] ?? 'pipelines');
+  // The route decides which metrics exist; a selection that is no longer offered falls back to the first one.
+  const metric: ActivityMetric = metrics.includes(selectedMetric) ? selectedMetric : (metrics[0] ?? 'pipelines');
   const [granularity, setGranularity] = useState<TimelineGranularity>('day');
   const [info, setInfo] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
@@ -239,7 +244,7 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
       <div className="drp-head">
         <h2 id={titleId}>{t('title')}</h2>
         <select className="drp-select" data-testid="date-range-metric" aria-label={t('activity.metricLabel')} value={metric} onChange={event => setMetric(event.target.value as ActivityMetric)}>
-          {ACTIVITY_METRICS.map(item => <option key={item} value={item}>{t(`activity.metrics.${item}`)}</option>)}
+          {metrics.map(item => <option key={item} value={item}>{t(`activity.metrics.${item}`)}</option>)}
         </select>
         {data?.fixture ? <span className="drp-tag" data-testid="date-range-fixture">{t('activity.fixture')}</span> : null}
         <button type="button" className="drp-icon drp-close" data-testid="date-range-close" aria-label={t('close')} onClick={onClose}><X size={16} aria-hidden="true" /></button>
@@ -401,7 +406,7 @@ function PickerPanel({ value, titleId, panelId, placement, locale, onApply, onCl
   );
 }
 
-export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeFilterProps) {
+export function DateRangeFilter({ value, onApply, disabled = false, metrics = DASHBOARD_ACTIVITY_METRICS }: DateRangeFilterProps) {
   const { t, i18n } = useTranslation('dateRange');
   const locale = i18n.language || 'en';
   const panelId = useId();
@@ -477,7 +482,7 @@ export function DateRangeFilter({ value, onApply, disabled = false }: DateRangeF
         <span className="hidden min-[480px]:inline text-slate-500 dark:text-slate-400 whitespace-nowrap tabular-nums">{rangeText}</span>
       </button>
       {open && typeof document !== 'undefined'
-        ? createPortal(<PickerPanel value={value} titleId={titleId} panelId={panelId} placement={placement} locale={locale} onApply={onApply} onClose={() => close(true)} />, document.body)
+        ? createPortal(<PickerPanel value={value} titleId={titleId} panelId={panelId} placement={placement} locale={locale} onApply={onApply} onClose={() => close(true)} metrics={metrics} />, document.body)
         : null}
     </div>
   );

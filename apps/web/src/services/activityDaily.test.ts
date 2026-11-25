@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { activityQuery, demoActivityDaily, isValidActivityRange, selectionBounds } from './activityDaily';
+import {
+  activityMetricsForPath,
+  activityQuery,
+  DASHBOARD_ACTIVITY_METRICS,
+  demoActivityDaily,
+  isValidActivityRange,
+  selectionBounds,
+} from './activityDaily';
 import { presetSelection } from './dateRange';
 
 const TODAY = '2026-11-24';
@@ -65,5 +72,28 @@ describe('demo activity fixture', () => {
   it('supports a two-year window', () => {
     const body = demoActivityDaily({ ...base, startDate: '2025-01-01', endDate: '2026-12-31' });
     expect(body.days).toHaveLength(730);
+  });
+});
+
+describe('screen-aware metrics and project filter', () => {
+  it('offers the metrics that match each screen, with the Dashboard set as the fallback', () => {
+    expect(activityMetricsForPath('/dashboard')).toEqual(['pipelines', 'deployments', 'commits']);
+    expect(activityMetricsForPath('/pull-requests')).toEqual(['pull-requests-created', 'pull-requests-closed']);
+    expect(activityMetricsForPath('/my-history')).toEqual(['my-history']);
+    expect(activityMetricsForPath('/kanban')).toEqual(['workitems-created', 'workitems-completed']);
+    expect(activityMetricsForPath('/unknown-screen')).toEqual(DASHBOARD_ACTIVITY_METRICS);
+  });
+
+  it('sends the header project as projects and omits it for all projects', () => {
+    const base = { metric: 'pipelines' as const, startDate: '2026-11-01', endDate: '2026-11-25', mode: 'cache' as const };
+    expect(activityQuery({ ...base, project: 'Alpha' }).get('projects')).toBe('Alpha');
+    expect(activityQuery({ ...base, project: 'all' }).has('projects')).toBe(false);
+    expect(activityQuery(base).has('projects')).toBe(false);
+  });
+
+  it('offers every registry metric in the demo fixture with its own count range', () => {
+    const body = demoActivityDaily({ metric: 'my-history', startDate: '2026-07-01', endDate: '2026-07-10', mode: 'cache' });
+    expect(body.metric).toBe('my-history');
+    expect(body.days.every(day => day.count === null || day.count >= 0)).toBe(true);
   });
 });

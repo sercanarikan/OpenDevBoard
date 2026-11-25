@@ -5,7 +5,15 @@
 
 import { addDaysToKey, dayCountInclusive, isDateKey, type DateRangeSelection } from './dateRange';
 
-export type ActivityMetric = 'pipelines' | 'deployments' | 'commits';
+export type ActivityMetric =
+  | 'pipelines'
+  | 'deployments'
+  | 'commits'
+  | 'pull-requests-created'
+  | 'pull-requests-closed'
+  | 'workitems-completed'
+  | 'workitems-created'
+  | 'my-history';
 export type ActivityDayState =
   | 'covered_zero'
   | 'covered_active'
@@ -15,7 +23,34 @@ export type ActivityDayState =
 export type ActivityJobState = 'idle' | 'running' | 'done' | 'partial' | 'failed';
 export type ActivityMode = 'cache' | 'refresh';
 
-export const ACTIVITY_METRICS: ActivityMetric[] = ['pipelines', 'deployments', 'commits'];
+export const ACTIVITY_METRICS: ActivityMetric[] = [
+  'pipelines', 'deployments', 'commits', 'pull-requests-created', 'pull-requests-closed',
+  'workitems-completed', 'workitems-created', 'my-history',
+];
+
+// Metrics offered by each screen. The first entry is the default. Screens without a temporal source
+// fall back to the Dashboard set, so the control never disappears.
+const SCREEN_METRICS: Record<string, ActivityMetric[]> = {
+  dashboard: ['pipelines', 'deployments', 'commits'],
+  pipelines: ['pipelines'],
+  deployments: ['deployments'],
+  'team-activity': ['commits', 'pull-requests-created', 'pull-requests-closed'],
+  'pull-requests': ['pull-requests-created', 'pull-requests-closed'],
+  'my-history': ['my-history'],
+  tasks: ['workitems-created', 'workitems-completed'],
+  kanban: ['workitems-created', 'workitems-completed'],
+  hierarchy: ['workitems-created', 'workitems-completed'],
+  dependencies: ['workitems-created', 'workitems-completed'],
+};
+
+/** The Dashboard metric set: the default when no screen supplies one. */
+export const DASHBOARD_ACTIVITY_METRICS: ActivityMetric[] = SCREEN_METRICS.dashboard;
+
+/** Metrics the global picker offers on a route; never empty. */
+export function activityMetricsForPath(pathname: string): ActivityMetric[] {
+  const screen = pathname.split('/').filter(Boolean)[0] ?? 'dashboard';
+  return SCREEN_METRICS[screen] ?? SCREEN_METRICS.dashboard;
+}
 
 export interface ActivityDay {
   date: string;
@@ -38,6 +73,8 @@ export interface ActivityDailyParams {
   startDate: string;
   endDate: string;
   mode: ActivityMode;
+  /** The header project filter; omitted or 'all' means every stored project. */
+  project?: string;
 }
 
 /** Calendar bounds for a selection. Rolling presets are converted from their day count ending today. */
@@ -52,6 +89,7 @@ export function activityQuery(params: ActivityDailyParams): URLSearchParams {
   q.set('startDate', params.startDate);
   q.set('endDate', params.endDate);
   q.set('mode', params.mode);
+  if (params.project && params.project !== 'all') q.set('projects', params.project);
   return q;
 }
 
@@ -63,7 +101,10 @@ export function isValidActivityRange(startDate: string, endDate: string): boolea
 // Days before the fixture start are not collected; one month is partial so every state is visible.
 const DEMO_COLLECTED_FROM = '2026-06-01';
 const DEMO_PARTIAL_MONTH = '2026-09';
-const DEMO_MAX_COUNT: Record<ActivityMetric, number> = { pipelines: 18, deployments: 6, commits: 12 };
+const DEMO_MAX_COUNT: Record<ActivityMetric, number> = {
+  pipelines: 18, deployments: 6, commits: 12, 'pull-requests-created': 4, 'pull-requests-closed': 4,
+  'workitems-completed': 5, 'workitems-created': 5, 'my-history': 8,
+};
 
 function hash(text: string): number {
   let h = 2166136261;

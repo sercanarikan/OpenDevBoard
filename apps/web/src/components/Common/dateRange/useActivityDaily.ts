@@ -32,13 +32,14 @@ interface Snapshot {
  * request is polled. Demo mode uses the deterministic fixture and makes no network request.
  */
 export function useActivityDaily({ metric, startDate, endDate, mode, enabled }: UseActivityDailyOptions): UseActivityDailyResult {
-  const { isDemo } = useApp();
-  const requestKey = `${isDemo ? 'demo' : 'live'}|${metric}|${mode}|${startDate}|${endDate}`;
+  const { isDemo, filters } = useApp();
+  const project = filters.selectedProject;
+  const requestKey = `${isDemo ? 'demo' : 'live'}|${metric}|${mode}|${startDate}|${endDate}|${project}`;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
 
   useEffect(() => {
     if (!enabled || !isValidActivityRange(startDate, endDate)) return undefined;
-    const params = { metric, startDate, endDate, mode };
+    const params = { metric, startDate, endDate, mode, project };
     if (isDemo) {
       setSnapshot({ key: requestKey, data: demoActivityDaily(params), error: null, loading: false });
       return undefined;

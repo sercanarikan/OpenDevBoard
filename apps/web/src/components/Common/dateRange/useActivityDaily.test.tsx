@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityDailyResponse } from '../../../services/activityDaily';
 import { ACTIVITY_POLL_MS, useActivityDaily, type UseActivityDailyOptions, type UseActivityDailyResult } from './useActivityDaily';
 
-const mockApp = vi.hoisted(() => ({ isDemo: false }));
+const mockApp = vi.hoisted(() => ({ isDemo: false, filters: { selectedProject: 'all' } }));
 const fetchActivityDaily = vi.hoisted(() => vi.fn());
 
 vi.mock('../../../context/useApp', () => ({ useApp: () => mockApp }));

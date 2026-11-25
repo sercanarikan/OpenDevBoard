@@ -60,12 +60,22 @@
     "metrics": {
       "pipelines": "Pipeline çalıştırmaları",
       "deployments": "Deployment'lar",
-      "commits": "Commit'ler"
+      "commits": "Commit'ler",
+      "pull-requests-created": "Oluşturulan PR'lar",
+      "pull-requests-closed": "Tamamlanan PR'lar",
+      "workitems-completed": "Tamamlanan iş öğeleri",
+      "workitems-created": "Oluşturulan iş öğeleri",
+      "my-history": "Kendi aktivitem (doğrulanmış)"
     },
     "units": {
       "pipelines": "çalıştırma",
       "deployments": "deployment",
-      "commits": "commit"
+      "commits": "commit",
+      "pull-requests-created": "PR",
+      "pull-requests-closed": "PR",
+      "workitems-completed": "iş öğesi",
+      "workitems-created": "iş öğesi",
+      "my-history": "olay"
     },
     "legend": {
       "coveredZero": "Tarandı, aktivite yok",

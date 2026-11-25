@@ -5,11 +5,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import i18n from '../../i18n';
 import { DateRangeFilter } from './DateRangeFilter';
 import { GlobalDateRangeFilter } from './GlobalDateRangeFilter';
+import { MemoryRouter } from 'react-router-dom';
 import { DateRangeProvider } from '../../context/DateRangeContext';
 import { useDateRange } from '../../context/useDateRange';
 import { addDaysToKey, customSelection, periodSelection, presetSelection, utcTodayKey, type DateRangeSelection } from '../../services/dateRange';
 
-const mockApp = vi.hoisted(() => ({ isDemo: false }));
+const mockApp = vi.hoisted(() => ({ isDemo: false, filters: { selectedProject: 'all' } }));
 const fetchActivityDaily = vi.hoisted(() => vi.fn());
 
 vi.mock('../../context/useApp', () => ({ useApp: () => mockApp }));
@@ -376,10 +377,12 @@ describe('GlobalDateRangeFilter', () => {
     };
     await act(async () => {
       root.render(
-        <DateRangeProvider>
-          <GlobalDateRangeFilter />
-          <Consumer />
-        </DateRangeProvider>,
+        <MemoryRouter>
+          <DateRangeProvider>
+            <GlobalDateRangeFilter />
+            <Consumer />
+          </DateRangeProvider>
+        </MemoryRouter>,
       );
     });
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="date-range-trigger"]')!.click());
