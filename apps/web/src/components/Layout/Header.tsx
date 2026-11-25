@@ -169,7 +169,7 @@ export const Header: React.FC = () => {
             onChange={handleProjectChange}
             aria-label={t('projects.all')}
             title={orgSnapshot > 0 ? t('projects.orgSnapshot', { loaded: totalActive, org: orgSnapshot }) : undefined}
-            className="min-w-0 max-w-[220px] truncate bg-transparent font-medium text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer border-none py-0.5 pr-2"
+            className="min-w-[7rem] max-w-[220px] truncate bg-transparent font-medium text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer border-none py-0.5 pr-2"
           >
             <option value="all" className="bg-white dark:bg-slate-900">
               {t('projects.all')} ({allTotalLabel})
@@ -188,17 +188,17 @@ export const Header: React.FC = () => {
         </div>
       </div>
 
-      {/* Center: Command Palette Trigger (icon-only below 1200px) */}
+      {/* Center: Command Palette Trigger (icon-only below 1680px) */}
       <div className="flex-1 flex justify-center min-w-0 max-w-md mx-auto">
         <button
           onClick={() => setIsCommandPaletteOpen(true)}
-          className="flex items-center gap-2 px-2 min-[1560px]:px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 transition-colors whitespace-nowrap"
+          className="flex items-center gap-2 px-2 min-[1680px]:px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 transition-colors whitespace-nowrap"
           title={`${t('actions.commandMenu')} (⌘K)`}
           aria-label={t('actions.commandMenu')}
         >
           <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-          <span className="font-medium hidden min-[1560px]:inline">{t('actions.commandMenu')}</span>
-          <kbd className="hidden min-[1560px]:inline px-1.5 py-0.5 text-[10px] font-mono rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400">
+          <span className="font-medium hidden min-[1680px]:inline">{t('actions.commandMenu')}</span>
+          <kbd className="hidden min-[1680px]:inline px-1.5 py-0.5 text-[10px] font-mono rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400">
             ⌘K
           </kbd>
         </button>
@@ -229,11 +229,11 @@ export const Header: React.FC = () => {
           ) : (
             <Database className="w-3 h-3 text-slate-400 shrink-0" />
           )}
-          {/* Full label on wide screens; compact label with the same tooltip below 1280px */}
-          <span className="font-medium whitespace-nowrap min-[1280px]:hidden">{t('status.syncShort')}</span>
-          <span className="font-medium whitespace-nowrap hidden min-[1280px]:inline">{syncLabel}</span>
+          {/* Full label on wide screens; compact label with the same tooltip below 1440px */}
+          <span className="font-medium whitespace-nowrap min-[1440px]:hidden">{t('status.syncShort')}</span>
+          <span className="font-medium whitespace-nowrap hidden min-[1440px]:inline">{syncLabel}</span>
           {lastSyncText && ind.kind !== 'demo' && (
-            <span className="font-mono text-slate-400 whitespace-nowrap hidden min-[1280px]:inline" data-testid="last-sync">
+            <span className="font-mono text-slate-400 whitespace-nowrap hidden min-[1440px]:inline" data-testid="last-sync">
               · {lastSyncText}
             </span>
           )}
@@ -297,7 +297,7 @@ export const Header: React.FC = () => {
         )}
 
         {/* Wide screens: language, density and the Azure link stay inline */}
-        <div className="hidden min-[1100px]:flex items-center gap-2.5 shrink-0">
+        <div className="hidden min-[1440px]:flex items-center gap-2.5 shrink-0">
           <LanguageSelector />
           {densityButton}
           {openInDevopsLink}
@@ -316,7 +316,7 @@ export const Header: React.FC = () => {
         </button>
 
         {/* Narrow screens: secondary actions collapse into one menu */}
-        <div className="relative min-[1100px]:hidden shrink-0" ref={moreRef}>
+        <div className="relative min-[1440px]:hidden shrink-0" ref={moreRef}>
           <button
             ref={moreButtonRef}
             type="button"
