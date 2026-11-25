@@ -20,7 +20,7 @@
     "contributor": "Kullanıcı",
     "commits": "Commit",
     "authoredPRs": "Açılan PR",
-    "reviews": "İnceleme",
+    "reviewerAssignments": "Reviewer olarak atandığı PR",
     "lastActivity": "Son Aktivite",
     "commitsTooltip": "Commit ve PR sayıları analitik aktivite hacmidir; bireysel çalışan performansı veya başarı puanı değildir.",
     "repository": "Depo",

@@ -115,8 +115,8 @@ export const TeamActivityExplorer: React.FC = () => {
         valA = a.authoredPRs;
         valB = b.authoredPRs;
       } else if (contributorSortBy === 'reviews') {
-        valA = a.reviewsCount;
-        valB = b.reviewsCount;
+        valA = a.reviewerAssignments ?? a.reviewsCount;
+        valB = b.reviewerAssignments ?? b.reviewsCount;
       } else if (contributorSortBy === 'name') {
         valA = a.name.toLowerCase();
         valB = b.name.toLowerCase();
@@ -370,7 +370,7 @@ export const TeamActivityExplorer: React.FC = () => {
                           onClick={() => { setContributorSortBy('reviews'); setSortOrder(o => o === 'desc' ? 'asc' : 'desc'); }}
                           className="py-2.5 px-3 text-center cursor-pointer hover:text-brand-600"
                         >
-                          {t('columns.reviews')} {contributorSortBy === 'reviews' ? (sortOrder === 'desc' ? '▼' : '▲') : ''}
+                          {t('columns.reviewerAssignments')} {contributorSortBy === 'reviews' ? (sortOrder === 'desc' ? '▼' : '▲') : ''}
                         </th>
                         <th className="py-2.5 px-3 text-right">{t('columns.lastActivity')}</th>
                       </tr>
@@ -415,7 +415,7 @@ export const TeamActivityExplorer: React.FC = () => {
                             </td>
 
                             <td className="py-2.5 px-3 text-center font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
-                              {c.reviewsCount}
+                              {c.reviewerAssignments ?? c.reviewsCount}
                             </td>
 
                             <td className="py-2.5 px-3 text-right font-mono text-[11px] text-slate-500">
@@ -578,8 +578,8 @@ export const TeamActivityExplorer: React.FC = () => {
                   <span className="font-bold text-indigo-600 dark:text-indigo-400">{selectedContributor.authoredPRs}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">{t('columns.reviews')}:</span>
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400">{selectedContributor.reviewsCount}</span>
+                  <span className="text-slate-500">{t('columns.reviewerAssignments')}:</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">{selectedContributor.reviewerAssignments ?? selectedContributor.reviewsCount}</span>
                 </div>
                 <div className="flex justify-between pt-1 border-t border-slate-200/50 dark:border-slate-800/50">
                   <span className="text-slate-500">{t('columns.lastActivity')}:</span>

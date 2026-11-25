@@ -20,7 +20,7 @@
     "contributor": "Contributor",
     "commits": "Commits",
     "authoredPRs": "Opened PRs",
-    "reviews": "Reviews",
+    "reviewerAssignments": "PRs assigned as reviewer",
     "lastActivity": "Last Activity",
     "commitsTooltip": "Commit and PR counts reflect analytical activity volume; they are not an individual performance or productivity score.",
     "repository": "Repository",

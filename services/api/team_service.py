@@ -599,10 +599,8 @@ def _load_live_prs_summary_only(org_url: str, pat: str, days: int, window: Optio
             except Exception:
                 pass
         author = pr.get("createdBy", {}).get("displayName") or "Unknown"
-        reviewers = [
-            r.get("displayName") for r in pr.get("reviewers", [])
-            if r.get("displayName") and r.get("vote", 0) != 0
-        ]
+        reviewer_votes = _reviewer_votes(pr.get("reviewers", []))
+        reviewers = [r["name"] for r in reviewer_votes]
         proj = pr.get("repository", {}).get("project", {}).get("name") or "General"
         repo = pr.get("repository", {}).get("name") or "repo"
         prs.append({
@@ -612,11 +610,21 @@ def _load_live_prs_summary_only(org_url: str, pat: str, days: int, window: Optio
             "title": pr.get("title") or "PR",
             "author": author,
             "reviewers": reviewers,
+            "reviewerVotes": reviewer_votes,
             "status": pr.get("status") or "active",
             "creationDate": c_date,
             "url": f"{org_url.rstrip('/')}/{proj}/_git/{repo}/pullrequest/{pr.get('pullRequestId')}"
         })
     return prs
+
+
+def _reviewer_votes(raw_reviewers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every named reviewer listed on a PR with its CURRENT vote (0 = assigned, no vote yet)."""
+    return [
+        {"name": r["displayName"], "vote": r.get("vote") or 0}
+        for r in raw_reviewers or []
+        if r.get("displayName")
+    ]
 
 
 def _row_to_commit_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -694,6 +702,8 @@ def compute_team_summary(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]
                 "commitCount": 0,
                 "authoredPRs": 0,
                 "reviewsCount": 0,
+                "reviewerAssignments": 0,
+                "reviewVotesCount": 0,
                 "lastActivity": c.get("date") or ""
             }
         contrib_map[name]["commitCount"] += 1
@@ -709,12 +719,20 @@ def compute_team_summary(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]
                 "commitCount": 0,
                 "authoredPRs": 0,
                 "reviewsCount": 0,
+                "reviewerAssignments": 0,
+                "reviewVotesCount": 0,
                 "lastActivity": p.get("creationDate") or ""
             }
         contrib_map[author]["authoredPRs"] += 1
         if (p.get("creationDate") or "") > contrib_map[author]["lastActivity"]:
             contrib_map[author]["lastActivity"] = p.get("creationDate") or ""
 
+        # reviewerAssignments: reviewer listed on a PR CREATED in the window (not the author).
+        # This is reviewer ASSIGNMENT, not a review event. "reviewsCount" is kept for API compatibility
+        # and always equals reviewerAssignments; it must not be presented as reviews done.
+        # reviewVotesCount: listed reviewers whose CURRENT vote is non-zero. It is a current vote
+        # state of PRs created in the window, not a dated review event and not a period metric.
+        vote_by_name = {v["name"]: v.get("vote") or 0 for v in p.get("reviewerVotes") or []}
         for r in p.get("reviewers", []):
             if r != author:
                 if r not in contrib_map:
@@ -724,9 +742,16 @@ def compute_team_summary(commits: List[Dict[str, Any]], prs: List[Dict[str, Any]
                         "commitCount": 0,
                         "authoredPRs": 0,
                         "reviewsCount": 0,
+                        "reviewerAssignments": 0,
+                        "reviewVotesCount": 0,
+                "reviewerAssignments": 0,
+                "reviewVotesCount": 0,
                         "lastActivity": p.get("creationDate") or ""
                     }
                 contrib_map[r]["reviewsCount"] += 1
+                contrib_map[r]["reviewerAssignments"] += 1
+                if vote_by_name.get(r, 0) != 0:
+                    contrib_map[r]["reviewVotesCount"] += 1
 
     contributors = sorted(
         contrib_map.values(),

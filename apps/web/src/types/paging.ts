@@ -431,7 +431,12 @@ export interface TeamContributor {
   email: string;
   commitCount: number;
   authoredPRs: number;
+  /** Deprecated alias of reviewerAssignments (assignment, NOT reviews done). */
   reviewsCount: number;
+  /** Reviewer listed on a PR created in the window (not the author). Assignment, not a review event. */
+  reviewerAssignments?: number;
+  /** Listed reviewers with a non-zero CURRENT vote; current vote state, not dated in the window. */
+  reviewVotesCount?: number;
   lastActivity: string;
 }
 
