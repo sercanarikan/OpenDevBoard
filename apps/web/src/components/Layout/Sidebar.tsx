@@ -109,7 +109,7 @@ export const Sidebar: React.FC = () => {
   const navGroups: {
     id: string;
     labelKey: string;
-    items: { id: ViewMode; label: string; icon: React.ReactNode; count?: number }[];
+    items: { id: ViewMode; label: string; icon: React.ReactNode; count?: number; countHint?: string }[];
   }[] = [
     {
       id: 'overview',
@@ -163,7 +163,9 @@ export const Sidebar: React.FC = () => {
           id: 'pipelines',
           label: t('views.pipelines'),
           icon: <PlayCircle className="w-4 h-4" />,
-          count: pipelineSummary?.failed && pipelineSummary.failed > 0 ? pipelineSummary.failed : undefined
+          // Failed runs in the applied global range (a temporal count), not the current failed state.
+          count: pipelineSummary?.failed && pipelineSummary.failed > 0 ? pipelineSummary.failed : undefined,
+          countHint: t('views.failedRunsPeriod')
         },
         {
           id: 'deployments',
@@ -336,7 +338,7 @@ export const Sidebar: React.FC = () => {
                                   active
                                     ? 'bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300'
                                     : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
-                                }`}>
+                                }`} title={item.countHint}>
                                   {item.count}
                                 </span>
                               )}

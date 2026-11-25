@@ -13,6 +13,7 @@
     "deployments": "Deployment Metrics",
     "teamActivity": "Team Activity",
     "myHistory": "My History",
+    "failedRunsPeriod": "Failed runs in the selected date range",
     "navGroups": {
       "overview": "Overview",
       "workManagement": "Work Management",

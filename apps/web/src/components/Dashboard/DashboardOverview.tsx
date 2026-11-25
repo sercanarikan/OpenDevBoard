@@ -24,7 +24,7 @@ import { useNavigate } from 'react-router-dom';
 import { pullRequestsPath } from '../../utils/prFilter';
 import { useApp } from '../../context/useApp';
 import type { WorkItem, ViewMode } from '../../types';
-import type { PullRequest, HistoryEvent, TeamActivitySummary } from '../../types/paging';
+import type { PullRequest, HistoryEvent, TeamActivitySummary, HistoryTimelineResponse, DeploymentSummary } from '../../types/paging';
 import { PriorityBadge, TypeBadge } from '../Common/Badge';
 import { WorkItemInspector } from '../Explorer/WorkItemInspector';
 import { PullRequestInspector } from '../PullRequests/PullRequestInspector';
@@ -38,7 +38,6 @@ import { useDateRange } from '../../context/useDateRange';
 import { useCacheJob } from '../../hooks/useCacheJob';
 import { CacheJobNotice } from '../Common/CacheJobNotice';
 import { formatDayLabel } from '../../services/dateRange';
-import type { PipelineSummary, DeploymentSummary } from '../../types/paging';
 
 /** Text badge naming the global range a period card covers. */
 const PeriodLabel: React.FC = () => {
@@ -78,6 +77,11 @@ export const DashboardOverview: React.FC = () => {
     prSummary,
     prSummaryLoading,
     prSummaryError,
+    pipelineSummary,
+    pipelineSummaryLoading,
+    pipelineSummaryError,
+    pipelineJob,
+    pipelineCoverage,
     selectedPipelineRun,
     setSelectedPipelineRun,
     selectedDeployment,
@@ -112,11 +116,6 @@ export const DashboardOverview: React.FC = () => {
 
   const [tasksState, setTasksState] = useState<LoadState | null>(() => seededState(seedTasks?.scope));
   const [prsState, setPrsState] = useState<LoadState | null>(() => seededState(seedPRs?.scope));
-  const [historyState, setHistoryState] = useState<LoadState | null>(() => seededState(seedHistory?.scope));
-  const [teamState, setTeamState] = useState<LoadState | null>(() => seededState(seedTeam?.scope));
-
-  const [recentEvents, setRecentEvents] = useState<HistoryEvent[]>(() => seedHistory?.items ?? []);
-  const [teamSnapshot, setTeamSnapshot] = useState<TeamActivitySummary | null>(() => seedTeam?.snapshot ?? null);
 
   const [refreshNonce, setRefreshNonce] = useState(0);
 
@@ -126,37 +125,46 @@ export const DashboardOverview: React.FC = () => {
     [rangeQuery, filters.selectedProject, refreshToken, refreshNonce]
   );
   const poll = 'startDate' in rangeQuery;
-  const fetchPipelineSummary = useCallback((signal: AbortSignal) => api.pipelinesSummary(rangeQuery, filters.selectedProject, signal), [api, rangeQuery, filters.selectedProject]);
   const fetchDeploymentSummary = useCallback((signal: AbortSignal) => api.deploymentsSummary(rangeQuery, filters.selectedProject, signal), [api, rangeQuery, filters.selectedProject]);
-  const pipelineJob = useCacheJob<PipelineSummary>({ requestKey: `pipelines:${periodKey}`, fetch: fetchPipelineSummary, poll, enabled: !booting, keepPrevious: true });
+  const fetchHistory = useCallback((signal: AbortSignal) => api.myHistoryTimeline({ limit: 5, project: filters.selectedProject, ...rangeQuery }, signal).then(res => {
+    feeds.history = { scope: periodScope, items: res.items };
+    return res;
+  }), [api, rangeQuery, filters.selectedProject, feeds, periodScope]);
+  const fetchTeam = useCallback((signal: AbortSignal) => api.teamActivitySummary(rangeQuery, filters.selectedProject, signal).then(res => {
+    feeds.team = { scope: periodScope, snapshot: res };
+    return res;
+  }), [api, rangeQuery, filters.selectedProject, feeds, periodScope]);
+  // The pipeline summary is the app-level request (it also feeds the sidebar badge), so it is never fetched twice.
   const deploymentJob = useCacheJob<DeploymentSummary>({ requestKey: `deployments:${periodKey}`, fetch: fetchDeploymentSummary, poll, enabled: !booting, keepPrevious: true });
-  const pipelineSummary = pipelineJob.data;
-  const pipelineSummaryLoading = pipelineJob.loading;
-  const pipelineSummaryError = pipelineJob.error;
+  // History and team never show another range's data: no keepPrevious, a seed only for the exact scope.
+  const historyJob = useCacheJob<HistoryTimelineResponse>({ requestKey: `history:${periodKey}`, fetch: fetchHistory, poll, enabled: !booting });
+  const teamJob = useCacheJob<TeamActivitySummary>({ requestKey: `team:${periodKey}`, fetch: fetchTeam, poll, enabled: !booting });
   const deploymentSummary = deploymentJob.data;
   const deploymentSummaryLoading = deploymentJob.loading;
   const deploymentSummaryError = deploymentJob.error;
+  const recentEvents: HistoryEvent[] = historyJob.data?.items ?? seedHistory?.items ?? [];
+  const teamSnapshot: TeamActivitySummary | null = teamJob.data ?? seedTeam?.snapshot ?? null;
+  const historyAvailable = !!historyJob.data || !!seedHistory;
+  const teamAvailable = !!teamJob.data || !!seedTeam;
+  const loadingHistory = historyJob.loading;
+  const loadingTeam = teamJob.loading;
+  const errorTeam = !loadingTeam ? teamJob.error : null;
 
   // Each panel settles independently; keep successful data only within its original scope.
-  const request = useMemo(() => ({ api, project: filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce, rangeQuery, periodScope }),
-    [api, filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce, rangeQuery, periodScope]);
+  const request = useMemo(() => ({ api, project: filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce }),
+    [api, filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce]);
   const taskScope = JSON.stringify([request.project, request.currentUserName]);
   const tasksAvailable = !!currentUserName && tasksState?.successfulScope === taskScope;
   const prsAvailable = prsState?.successfulScope === request.project;
-  const historyAvailable = historyState?.successfulScope === periodScope;
-  const teamAvailable = teamState?.successfulScope === periodScope;
   const loadingTasks = booting ? !tasksAvailable : !!currentUserName && tasksState?.request !== request;
   const loadingPRs = booting ? !prsAvailable : prsState?.request !== request;
-  const loadingHistory = booting ? !historyAvailable : historyState?.request !== request;
-  const loadingTeam = booting ? !teamAvailable : teamState?.request !== request;
   const errorTasks = !loadingTasks && currentUserName && tasksState?.request === request ? tasksState.error : null;
   const errorPRs = !loadingPRs && prsState?.request === request ? prsState.error : null;
-  const errorTeam = !loadingTeam && teamState?.request === request ? teamState.error : null;
 
   useEffect(() => {
     if (request.booting) return;
     const ctrl = new AbortController();
-    const { api, project, currentUserName, rangeQuery, periodScope } = request;
+    const { api, project, currentUserName } = request;
     const scope = JSON.stringify([project, currentUserName]);
 
     if (currentUserName) {
@@ -193,28 +201,6 @@ export const DashboardOverview: React.FC = () => {
         if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
         setPrsState(prev => ({ request, error: e?.message || 'Failed to load pending reviews', successfulScope: prev?.successfulScope }));
       });
-
-    api.myHistoryTimeline({ limit: 5, project, ...rangeQuery }, ctrl.signal)
-      .then(res => {
-        if (ctrl.signal.aborted) return;
-        setRecentEvents(res.items);
-        feeds.history = { scope: periodScope, items: res.items };
-        setHistoryState({ request, error: null, successfulScope: periodScope });
-      }, (e: any) => {
-        if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
-        setHistoryState(prev => ({ request, error: null, successfulScope: prev?.successfulScope }));
-      });
-
-    api.teamActivitySummary(rangeQuery, project, ctrl.signal)
-      .then(res => {
-        if (ctrl.signal.aborted) return;
-        setTeamSnapshot(res);
-        feeds.team = { scope: periodScope, snapshot: res };
-        setTeamState({ request, error: null, successfulScope: periodScope });
-      }, (e: any) => {
-        if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
-        setTeamState(prev => ({ request, error: 'failed', successfulScope: prev?.successfulScope }));
-      });
     return () => ctrl.abort();
   }, [request, feeds, t]);
 
@@ -232,7 +218,7 @@ export const DashboardOverview: React.FC = () => {
   const pipelineRefreshing = pipelineSummaryLoading && !!pipelineSummary;
   const deploymentInitialLoading = deploymentSummaryLoading && !deploymentSummary;
   const deploymentRefreshing = deploymentSummaryLoading && !!deploymentSummary;
-  const teamRefreshing = loadingTeam && teamAvailable;
+  const teamRefreshing = loadingTeam && !!teamSnapshot;
   const teamCacheStatus = teamSnapshot?.cacheStatus;
   const teamPartialOrStale = !!teamCacheStatus && (teamCacheStatus.outcome !== 'complete' || teamCacheStatus.stale);
   const deploymentState = getIntegrationState({
@@ -593,7 +579,7 @@ export const DashboardOverview: React.FC = () => {
                 </button>
               </div>
 
-              <div className="empty:hidden"><CacheJobNotice job={pipelineJob.job} coverage={pipelineJob.coverage} /></div>
+              <div className="empty:hidden"><CacheJobNotice job={pipelineJob} coverage={pipelineCoverage} /></div>
 
               <div className="grid grid-cols-3 gap-2.5">
                 <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 text-center">
@@ -773,6 +759,7 @@ export const DashboardOverview: React.FC = () => {
               </button>
             </div>
 
+            <div className="empty:hidden"><CacheJobNotice job={historyJob.job} coverage={historyJob.coverage} /></div>
             {loadingHistory && !historyAvailable ? (
               <div data-testid="dash-feed-loading" className="py-6 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
@@ -848,6 +835,7 @@ export const DashboardOverview: React.FC = () => {
               </div>
             </div>
 
+            <div className="empty:hidden"><CacheJobNotice job={teamJob.job} coverage={teamJob.coverage} /></div>
             {loadingTeam && !teamAvailable ? (
               <div data-testid="dash-feed-loading" className="py-6 flex justify-center text-slate-400">
                 <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />

@@ -149,11 +149,11 @@ const MainContent: React.FC = () => {
 export function App() {
   return (
     <BrowserRouter>
-      <AppProvider>
-        <DateRangeProvider>
+      <DateRangeProvider>
+        <AppProvider>
           <MainContent />
-        </DateRangeProvider>
-      </AppProvider>
+        </AppProvider>
+      </DateRangeProvider>
     </BrowserRouter>
   );
 }

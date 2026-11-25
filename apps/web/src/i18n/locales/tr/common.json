@@ -13,6 +13,7 @@
     "deployments": "Deployment Metrics",
     "teamActivity": "Ekip Aktivitesi",
     "myHistory": "Geçmişim",
+    "failedRunsPeriod": "Seçili tarih aralığındaki başarısız çalıştırmalar",
     "navGroups": {
       "overview": "Genel Bakış",
       "workManagement": "İş Yönetimi",

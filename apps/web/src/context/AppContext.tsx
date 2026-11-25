@@ -10,6 +10,7 @@ import {
   type WorkItemsApi,
   type PullRequest,
   type PipelineRun,
+  type PipelineSummary,
   type DeploymentRecord
 } from '../types/paging';
 import { liveApi, fetchSyncReport, fetchPool, fetchOrgProjects, postSync, onNetworkEvent, pullRequestSnapshotParams, probeBackend, isTimeoutError } from '../services/liveApi';
@@ -20,6 +21,8 @@ import i18n from '../i18n';
 import { apiErrorTranslationKey } from '../utils/apiErrorMessage';
 import type { DashboardFeedCache } from '../utils/dashboardFeedCache';
 import { pageKeyFromPath, visibleSelection, select, closeKind, refreshWorkItem, type Selection } from '../utils/selection';
+import { useDateRange } from './useDateRange';
+import { useCacheJob } from '../hooks/useCacheJob';
 
 export const SYNC_POLL_MS = 20000;
 const LOST_AFTER_FAILURES = 2;
@@ -461,11 +464,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetFilters = useCallback(() => setFilters(prev => ({ ...defaultFilters, density: prev.density })), []);
 
   const prRequest = useCallback((signal: AbortSignal) => api.pullRequestsSummary(filters.selectedProject, signal), [api, filters.selectedProject]);
-  const pipelineRequest = useCallback((signal: AbortSignal) => api.pipelinesSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
-  const deploymentRequest = useCallback((signal: AbortSignal) => api.deploymentsSummary(30, filters.selectedProject, signal), [api, filters.selectedProject]);
+  // Pipeline runs are a temporal metric: the one request follows the global range and feeds both the sidebar badge
+  // and the dashboard pipeline card. Deployments are only read by the dashboard, which owns its own range request.
+  const { query: rangeQuery } = useDateRange();
+  const fetchPipelineSummary = useCallback((signal: AbortSignal) => api.pipelinesSummary(rangeQuery, filters.selectedProject, signal), [api, rangeQuery, filters.selectedProject]);
+  const pipelineKey = useMemo(() => `pipelines:${JSON.stringify([rangeQuery, filters.selectedProject, refreshToken])}`, [rangeQuery, filters.selectedProject, refreshToken]);
+  const pipelineJob = useCacheJob<PipelineSummary>({ requestKey: pipelineKey, fetch: fetchPipelineSummary, poll: 'startDate' in rangeQuery, enabled: !booting, keepPrevious: true });
+  const pipelineSummary = pipelineJob.data;
+  const pipelineSummaryLoading = pipelineJob.loading;
+  const pipelineSummaryError = pipelineJob.error;
   const { data: prSummary, loading: prSummaryLoading, error: prSummaryError } = useScopedSummary(prRequest, !booting, refreshToken);
-  const { data: pipelineSummary, loading: pipelineSummaryLoading, error: pipelineSummaryError } = useScopedSummary(pipelineRequest, !booting, refreshToken);
-  const { data: deploymentSummary, loading: deploymentSummaryLoading, error: deploymentSummaryError } = useScopedSummary(deploymentRequest, !booting, refreshToken);
   const setSelectedPR = useCallback((pr: PullRequest | null) => {
     if (pr) setSelection(select('pullRequest', pageRef.current, pr));
     else setSelection(cur => closeKind(cur, 'pullRequest'));
@@ -580,9 +588,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedPipelineRun,
     pipelineSummaryLoading,
     pipelineSummaryError,
-    deploymentSummary,
-    deploymentSummaryLoading,
-    deploymentSummaryError,
+    pipelineJob: pipelineJob.job,
+    pipelineCoverage: pipelineJob.coverage,
     dashboardFeedCache,
     selectedDeployment,
     setSelectedDeployment

@@ -2,7 +2,8 @@ import type { DashboardFeedCache } from '../utils/dashboardFeedCache';
 import { createContext, useContext } from 'react';
 import type React from 'react';
 import type { WorkItem, WorkItemsPoolResponse, ViewMode, FilterOptions } from '../types';
-import type { SummaryResponse, SyncReportResponse, WorkItemsApi, PullRequest, PullRequestsSummary, PipelineSummary, PipelineRun, DeploymentSummary, DeploymentRecord } from '../types/paging';
+import type { SummaryResponse, SyncReportResponse, WorkItemsApi, PullRequest, PullRequestsSummary, PipelineSummary, PipelineRun, DeploymentRecord } from '../types/paging';
+import type { CacheJob, CacheCoverage } from '../hooks/useCacheJob';
 import type { DataSourceKind, SyncIndicator } from '../utils/syncState';
 
 export interface AppContextType {
@@ -73,12 +74,11 @@ export interface AppContextType {
   pipelineSummary: PipelineSummary | null;
   pipelineSummaryLoading: boolean;
   pipelineSummaryError: string | null;
+  pipelineJob: CacheJob | null;
+  pipelineCoverage: CacheCoverage | null;
   selectedPipelineRun: PipelineRun | null;
   setSelectedPipelineRun: (run: PipelineRun | null) => void;
 
-  deploymentSummary: DeploymentSummary | null;
-  deploymentSummaryLoading: boolean;
-  deploymentSummaryError: string | null;
   selectedDeployment: DeploymentRecord | null;
   setSelectedDeployment: (dep: DeploymentRecord | null) => void;
 }
