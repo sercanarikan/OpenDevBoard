@@ -15,11 +15,12 @@ import coverage_ledger as cl
 from date_window import DateWindow
 
 # Fixed table/column names. Only these are interpolated into SQL.
+# Pull requests are intentionally absent: the PR sync is not window-aware and
+# team calendar sync does not persist PRs, so there is no chunkable source yet.
 METRICS: Dict[str, Tuple[str, str, str]] = {
     "pipelines": ("pipeline_runs", "queue_time", "project"),
     "deployments": ("deployment_records", "started_on", "project"),
     "commits": ("team_commits", "date", "project"),
-    "pull-requests": ("pull_requests", "creation_date", "project"),
 }
 
 COVERED_ZERO = "covered_zero"
