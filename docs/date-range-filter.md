@@ -11,7 +11,7 @@ Filtre iki tüketici için çalışır:
 
 | Preset | Tür | API karşılığı |
 | --- | --- | --- |
-| Son 1 gün | Takvim | `startDate` = `endDate` = bugün (UTC) |
+| Son 1 gün | Takvim | `startDate` = `endDate` = bugün (UTC). Gün çözünürlüğünde "Bugün" ile aynı aralığı verir; ayrı tutulur çünkü kullanıcının seçim niyeti farklıdır. Kayan `days=1` isteği kullanılmaz: kayan liste uçları 7/14/30/90 günü kabul eder. |
 | Son 7 / 14 / 30 / 90 gün | Kayan | `days=7/14/30/90` |
 | Son 6 ay | Takvim | bugünden 6 ay öncesinin ertesi günü … bugün |
 | Son 1 yıl | Takvim | bugünden 1 yıl öncesinin ertesi günü … bugün |
@@ -79,11 +79,18 @@ Upstream çekimler **UTC takvim ayı** parçalarına bölünür (chunk). Parça 
 
 | Parametre | Açıklama |
 | --- | --- |
-| `metric` | `pipelines`, `deployments`, `commits`, `pull-requests-created`, `pull-requests-closed`, `workitems-completed` veya `workitems-created` |
+| `metric` | `pipelines`, `deployments`, `commits`, `pull-requests-created`, `pull-requests-closed`, `workitems-completed`, `workitems-created` veya `my-history` |
+| `projects` | İsteğe bağlı; virgülle ayrılmış proje adları. Verilirse kayıtlı proje kümesi bu adlara daraltılır; sayım ve kapsam anahtarı aynı daraltılmış kümeyi kullanır. Yoksa tüm kayıtlı projeler. |
 | `startDate`, `endDate` | `YYYY-MM-DD`, UTC, iki uç dahil; birlikte zorunlu |
 | `mode` | `cache` (upstream başlatmaz) veya `refresh` (varsayılan; eksik, kısmi ve bayat parçalar için arka plan işi başlatır) |
 
-Yanıt: `metric`, `window` (`kind`, `startDate`, `endDate`, `days`, `timezone: "UTC"`), `days` (her UTC günü için `date`, `count`, `state`, `stale`), `job` (`state`: `idle` / `running` / `done` / `partial` / `failed`; ayrıca `pending`, `completed`, `partial`, `failed`) ve `cacheStatus` (`complete`, `partialDays`, `notCollectedDays`).
+Yanıt: `metric`, `window` (`kind`, `startDate`, `endDate`, `days`, `timezone: "UTC"`), `days` (her UTC günü için `date`, `count`, `state`, `stale`), `job` (`state`: `idle` / `running` / `done` / `partial` / `failed`; ayrıca `pending`, `completed`, `partial`, `failed`) ve `cacheStatus` (`complete`, `partialDays`, `notCollectedDays`, `unavailableRetentionDays`).
+
+`cacheStatus.complete` yalnızca kısmi, kapsam dışı (`not_collected`) ve saklama dışı (`unavailable_retention`) gün yokken `true` olur. Saklama süresi dışındaki günler tamamlanmış sayılmaz.
+
+**`my-history` metriği:** yalnızca doğrulanmış geçerli kullanıcının olayları sayılır (`history_events.actor_id` eşleşmesi). Kimlik yoksa HTTP 503 (`identity is unavailable`) döner; başka kullanıcının satırları hiçbir zaman sayılmaz. Kapsam, My History'nin `history` parça kapsamıyla aynıdır; ikinci bir upstream çekimi yapılmaz.
+
+Kayıtlı proje kümesi yoksa `projectScope` değeri `unknown` olur ve günler `not_collected` döner. Yenileme (`mode=refresh`) proje listesini upstream'den keşfeder ve kaydeder; önbellek modu (`mode=cache`) upstream çağırmaz.
 
 Hatalar HTTP 400 döner: geçersiz metrik veya mod, eksik tarih, 1096 günü aşan aralık, 3650 günden eski başlangıç, gelecek bitiş, 37 aydan fazla parça. Yanıtlar kimlik bilgisi içermez.
 
@@ -103,7 +110,7 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 
 ## Dashboard
 
-- Dönemsel kartlar (CI/CD sağlığı, deployment özeti, takım aktivitesi özeti, geçmişim) global aralığı kullanır ve kartın başında uygulanan dönemi gösterir. Takvim aralıklarında pipeline ve deployment kartları önce önbellekten okur; arka plan toplama bildirimi gösterilir. Ayrı bir "Zaman içinde aktivite" kartı yoktur; metrik seçici yalnızca global filtrenin içindedir.
+- Dönemsel kartlar (CI/CD sağlığı, deployment özeti, takım aktivitesi özeti, geçmişim) global aralığı kullanır ve kartın başında uygulanan dönemi gösterir. Takvim aralıklarında pipeline ve deployment kartları önce önbellekten okur; arka plan toplama bildirimi gösterilir. Ayrı bir "Zaman içinde aktivite" kartı yoktur; metrik seçici yalnızca global filtrenin içindedir. Seçici aktif ekrana göre metrik listesi sunar: Dashboard için pipeline, deployment ve commit; Pull Requests için oluşturulan ve tamamlanan PR'lar; Team Activity için commit ve PR'lar; Kanban, Görevler, Hiyerarşi ve Bağımlılıklar için iş öğesi metrikleri; Geçmişim için yalnızca `my-history`. Üst çubuktaki proje seçimi ısı haritası ve zaman çizelgesi isteklerine `projects` olarak gider.
 - **Anlık** durum kartları (aktif görevler, engellenen işler, bekleyen ve açık PR'lar) "Güncel durum" rozetiyle etiketlidir ve tarih filtresinden etkilenmez.
 
 ## Bilinen sınırlamalar
