@@ -1424,17 +1424,36 @@ class HistoryIdentityUnavailable(Exception):
     pass
 
 
+def _history_identity(org_url, refresh):
+    """Verified current user. Cache mode reads the stored identity and never calls upstream; refresh mode verifies
+    once, stores the result, and falls back to a stored identity no older than 24 hours if verification fails."""
+    conn = persistence.get_db_connection()
+    try:
+        if not refresh:
+            return history_service.load_identity(conn, org_url) or {}
+        try:
+            user_info = get_current_user_info() or {}
+        except Exception:
+            user_info = {}
+        if (user_info.get("id") or "").strip():
+            history_service.save_identity(conn, org_url, user_info)
+            return user_info
+        return history_service.load_identity(conn, org_url, max_age=history_service.IDENTITY_MAX_AGE) or {}
+    finally:
+        conn.close()
+
+
 def _history_cache_first(window, refresh=True):
     """Calendar My History: the verified user's local rows plus coverage and job state; upstream only via chunk jobs.
 
     Coverage and rows are scoped to the verified current user, so another user's data is never read or reused.
     """
-    user_info = get_current_user_info() or {}
+    org_url = get_devops_org_url()
+    user_info = _history_identity(org_url, refresh)
     user_id = (user_info.get("id") or "").strip()
     if not user_id:
         raise HistoryIdentityUnavailable()
     chunks = activity_chunks.plan_month_chunks(window)
-    org_url = get_devops_org_url()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     runner = _get_activity_runner()
     busy_refusals = 0
@@ -1474,7 +1493,7 @@ def _history_cache_first(window, refresh=True):
         "source": "local-cache",
         "issues": [],
     }
-    return {"events": events, "cacheStatus": cache_status, "job": job}
+    return {"events": events, "cacheStatus": cache_status, "job": job, "userName": user_info.get("displayName") or ""}
 
 
 def _load_all_history(days=30, force_refresh=False, window=None):
@@ -1502,10 +1521,11 @@ def get_my_history():
         if window_error:
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        user_info = get_current_user_info() or {}
-        user_name = user_info.get("displayName") or "Fixture User"
-
         history_data = _load_all_history(**_range_kwargs(window), force_refresh=force_refresh)
+        if history_data.get("userName"):
+            user_name = history_data["userName"]  # calendar: identity already verified/stored, no second lookup
+        else:
+            user_name = (get_current_user_info() or {}).get("displayName") or "Fixture User"
         events = history_data["events"]
         summary = history_service.compute_history_summary(events, **_range_kwargs(window))
         timeline_groups = history_service.group_events_by_timeline(events)

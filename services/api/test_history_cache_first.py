@@ -72,6 +72,7 @@ class CacheFirstRouteTests(unittest.TestCase):
         ]
         for p in self.patches:
             p.start()
+        self._store_identity(datetime.utcnow(), user=dict(ME))
         self.window = window_for()
         self.chunks = api_app.activity_chunks.plan_month_chunks(self.window)
         self.scope = coverage_ledger.scope_key(ORG, [], actor_id=ME["id"].lower())
@@ -82,6 +83,15 @@ class CacheFirstRouteTests(unittest.TestCase):
             p.stop()
         self.runner.shutdown(wait=True)
         self._tmp.cleanup()
+
+    def _store_identity(self, verified_at, user=None):
+        conn = persistence.get_db_connection(self.db_path)
+        history_service.ensure_identity_schema(conn)
+        conn.execute("DELETE FROM activity_identity")
+        if user is not None:
+            history_service.save_identity(conn, ORG, user, verified_at=verified_at)
+        conn.commit()
+        conn.close()
 
     def _record(self, coverage, scope=None):
         conn = persistence.get_db_connection(self.db_path)
@@ -156,6 +166,11 @@ class CacheFirstRouteTests(unittest.TestCase):
         self.assertEqual(r.get_json()["cacheStatus"]["coverage"]["missing"], len(self.chunks))
 
     def test_unverifiable_identity_returns_503_without_rows(self):
+        self._store_identity(datetime.utcnow())
+        conn = persistence.get_db_connection(self.db_path)
+        conn.execute("DELETE FROM activity_identity")
+        conn.commit()
+        conn.close()
         for user in ({}, {"id": "", "displayName": "Fixture Person A"}):
             with patch.object(self.api_app, "get_current_user_info", return_value=user):
                 for path in ("/api/my-history", "/api/my-history/summary", "/api/my-history/timeline", "/api/my-history/mine-1"):
@@ -163,6 +178,48 @@ class CacheFirstRouteTests(unittest.TestCase):
                     self.assertEqual(r.status_code, 503, path)
                     body = r.get_json()
                     self.assertEqual(body, {"error": "identity is unavailable"}, path)
+
+    def test_cache_mode_never_calls_connection_data(self):
+        self._store_identity(datetime.utcnow(), user=dict(ME))
+        with patch.object(self.api_app, "get_current_user_info", side_effect=AssertionError("connectionData called")):
+            for path in ("/api/my-history", "/api/my-history/summary", "/api/my-history/timeline"):
+                r = self.client.get(f"{path}?{self.q}&mode=cache")
+                self.assertEqual(r.status_code, 200, path)
+            self.assertIn("mine-1", self.client.get(f"/api/my-history/timeline?{self.q}&mode=cache").get_data(as_text=True))
+
+    def test_cache_mode_without_stored_identity_is_503_without_upstream(self):
+        self._store_identity(datetime.utcnow())
+        with patch.object(self.api_app, "get_current_user_info", side_effect=AssertionError("connectionData called")):
+            r = self.client.get(f"/api/my-history/timeline?{self.q}&mode=cache")
+        self.assertEqual(r.status_code, 503)
+        self.assertEqual(r.get_json(), {"error": "identity is unavailable"})
+
+    def test_refresh_stores_the_verified_identity(self):
+        self._store_identity(datetime.utcnow())
+        with patch.object(self.api_app, "get_current_user_info", return_value=dict(ME)) as lookup, \
+                patch.object(self.api_app, "_activity_runner", self._mock_runner()):
+            r = self.client.get(f"/api/my-history/timeline?{self.q}")
+        self.assertEqual(r.status_code, 200)
+        lookup.assert_called_once()
+        conn = persistence.get_db_connection(self.db_path)
+        stored = history_service.load_identity(conn, ORG)
+        conn.close()
+        self.assertEqual(stored["id"], ME["id"])
+        self.assertNotIn(PAT, str(stored))
+
+    def test_refresh_falls_back_to_recent_stored_identity(self):
+        self._store_identity(datetime.utcnow() - timedelta(hours=2), user=dict(ME))
+        with patch.object(self.api_app, "get_current_user_info", return_value={}), \
+                patch.object(self.api_app, "_activity_runner", self._mock_runner()):
+            r = self.client.get(f"/api/my-history/timeline?{self.q}")
+        self.assertEqual(r.status_code, 200)
+
+    def test_refresh_with_stale_stored_identity_and_failing_upstream_is_503(self):
+        self._store_identity(datetime.utcnow() - timedelta(hours=25), user=dict(ME))
+        with patch.object(self.api_app, "get_current_user_info", return_value={}):
+            r = self.client.get(f"/api/my-history/timeline?{self.q}")
+        self.assertEqual(r.status_code, 503)
+        self.assertEqual(r.get_json(), {"error": "identity is unavailable"})
 
     def test_every_route_returns_200_with_documented_keys(self):
         expected = {

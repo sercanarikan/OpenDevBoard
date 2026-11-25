@@ -578,6 +578,55 @@ def sync_live_history(org_url: str, pat: str, user_info: Dict[str, Any], days: i
     }
 
 
+IDENTITY_MAX_AGE = timedelta(hours=24)
+
+
+def _identity_org_key(org_url: str) -> str:
+    return (org_url or "").rstrip("/").lower()
+
+
+def ensure_identity_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS activity_identity (
+            org_key TEXT PRIMARY KEY,
+            actor_id TEXT NOT NULL,
+            display TEXT,
+            verified_at TEXT NOT NULL
+        )"""
+    )
+
+
+def save_identity(conn: sqlite3.Connection, org_url: str, user_info: Dict[str, Any], verified_at: Optional[datetime] = None) -> None:
+    """Persists the verified current user per organisation (no credentials). Call only after a successful check."""
+    actor_id = (user_info.get("id") or "").strip()
+    if not actor_id:
+        return
+    ensure_identity_schema(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO activity_identity (org_key, actor_id, display, verified_at) VALUES (?, ?, ?, ?)",
+        (_identity_org_key(org_url), actor_id, user_info.get("displayName") or "",
+         (verified_at or _utcnow()).isoformat(timespec="seconds")),
+    )
+    conn.commit()
+
+
+def load_identity(conn: sqlite3.Connection, org_url: str, max_age: Optional[timedelta] = None) -> Optional[Dict[str, Any]]:
+    """Stored verified identity, or None when missing (or older than ``max_age`` when given)."""
+    ensure_identity_schema(conn)
+    row = conn.execute(
+        "SELECT actor_id, display, verified_at FROM activity_identity WHERE org_key = ?", (_identity_org_key(org_url),)
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        verified_at = datetime.fromisoformat(row[2])
+    except Exception:
+        return None
+    if max_age is not None and _utcnow() - verified_at > max_age:
+        return None
+    return {"id": row[0], "displayName": row[1] or "", "verifiedAt": row[2]}
+
+
 def load_local_history(conn: sqlite3.Connection, user_id: str, window: DateWindow) -> List[Dict[str, Any]]:
     """Cache-only read of the verified user's events in the window. Never touches upstream.
 
