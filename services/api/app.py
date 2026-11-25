@@ -783,6 +783,57 @@ def _pipeline_cache_first(window, refresh=True):
     return {"items": runs, "cacheStatus": cache_status, "job": job}
 
 
+def _deployment_cache_first(window, refresh=True):
+    """Calendar deployment data: local rows plus coverage and job state; upstream work only via chunk jobs."""
+    chunks = activity_chunks.plan_month_chunks(window)
+    org_url = get_devops_org_url()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    runner = _get_activity_runner()
+    busy_refusals = 0
+    conn = persistence.get_db_connection()
+    try:
+        project_scope.init_project_scope_db(conn)
+        if refresh:
+            try:
+                projects = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+            except Exception:
+                raise ProjectListUnavailable()
+            project_scope.save_project_set(conn, org_url, projects, now.isoformat(timespec="seconds") + "Z")
+        else:
+            projects = project_scope.load_project_set(conn, org_url) or []
+        scope = coverage_ledger.scope_key(org_url, projects)
+        keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+        coverage = coverage_ledger.read_coverage(conn, scope, 'deployments', keys)
+        if refresh:
+            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat())
+            for chunk in chunks:
+                row = coverage.get(activity_chunks.chunk_key(chunk))
+                needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
+                    coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
+                )
+                if needs_fetch and runner.submit(scope, 'deployments', chunk, fetchers['deployments']) == activity_jobs.BUSY:
+                    busy_refusals += 1
+        job = {**runner.status(scope, 'deployments', keys), "busy": busy_refusals}
+        deps = deployment_service.load_local_deployment_records(conn, projects, window)
+    finally:
+        conn.close()
+    counts = {"complete": 0, "partial": 0, "missing": 0}
+    for key in keys:
+        row = coverage.get(key)
+        if row is None:
+            counts["missing"] += 1
+        elif row['coverage'] == coverage_ledger.COVERAGE_COMPLETE:
+            counts["complete"] += 1
+        else:
+            counts["partial"] += 1
+    cache_status = {
+        "complete": counts["partial"] == 0 and counts["missing"] == 0,
+        "coverage": counts,
+        "source": "local-cache",
+    }
+    return {"items": deps, "cacheStatus": cache_status, "job": job}
+
+
 def _load_all_pipelines(days=30, force_refresh=False, window=None):
     window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
@@ -799,6 +850,10 @@ def _load_all_deployments(days=30, force_refresh=False, window=None):
     window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return deployment_service.build_fixture_deployments()
+    if window.is_calendar:
+        # Calendar windows never wait for upstream: local rows now, missing chunks fetched in the background.
+        mode = (request.args.get('mode') or 'refresh').strip().lower()
+        return _deployment_cache_first(window, refresh=(mode != 'cache'))
     org_url = get_devops_org_url()
     org_name = get_devops_org_name()
     pat = get_devops_pat()
@@ -1078,6 +1133,7 @@ def get_deployment_metrics():
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         sync_data = _load_all_deployments(**_range_kwargs(window), force_refresh=force_refresh)
+        job = sync_data.get("job") if isinstance(sync_data, dict) else None
         all_deps = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         summary = deployment_service.compute_deployment_summary(all_deps, **_range_kwargs(window))
 
@@ -1129,6 +1185,8 @@ def get_deployment_metrics():
             "cacheStatus": sync_data.get("cacheStatus") if isinstance(sync_data, dict) else None,
             **({"job": job} if job else {})
         }), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_deployment_metrics: {e}", exc_info=True)
         return jsonify({"total_deployments": 0, "deployment_frequency": 0, "chart_data": [], "recent_deployments": []}), 500
@@ -1142,12 +1200,17 @@ def get_deployments():
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         sync_data = _load_all_deployments(**_range_kwargs(window), force_refresh=force_refresh)
+        job = sync_data.get("job") if isinstance(sync_data, dict) else None
         all_deps = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         res = deployment_service.query_deployments(all_deps, request.args, window=window)
         if isinstance(sync_data, dict):
             res["cacheStatus"] = sync_data.get("cacheStatus")
             res["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
+        if job:
+            res["job"] = job
         return jsonify(res), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_deployments: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -1161,6 +1224,7 @@ def get_deployments_summary():
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         sync_data = _load_all_deployments(**_range_kwargs(window), force_refresh=force_refresh)
+        job = sync_data.get("job") if isinstance(sync_data, dict) else None
         all_deps = sync_data["items"] if isinstance(sync_data, dict) else sync_data
         project = request.args.get('project')
         if project and project != 'all':
@@ -1169,7 +1233,11 @@ def get_deployments_summary():
         if isinstance(sync_data, dict):
             summary["cacheStatus"] = sync_data.get("cacheStatus")
             summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
+        if job:
+            summary["job"] = job
         return jsonify(summary), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_deployments_summary: {e}", exc_info=True)
         return jsonify({"error": str(e), "totalDeployments": 0, "successRate": 100.0}), 500
@@ -1182,11 +1250,14 @@ def get_deployment_by_id(dep_id):
         if window_error:
             return jsonify({"error": window_error}), 400
         all_deps = _load_all_deployments(**_range_kwargs(window))
+        all_deps = all_deps["items"] if isinstance(all_deps, dict) else all_deps
         project = request.args.get('project')
         dep = deployment_service.get_single_deployment_details(all_deps, dep_id, project=project)
         if not dep:
             return jsonify({"error": f"Deployment #{dep_id} not found"}), 404
         return jsonify(dep), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_deployment_by_id: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

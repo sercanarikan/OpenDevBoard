@@ -432,6 +432,21 @@ def _row_to_deployment_dict(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
+def load_local_deployment_records(conn: sqlite3.Connection, projects: List[str], window: DateWindow) -> List[Dict[str, Any]]:
+    """Cache-only read: deployments in the window for the given project set. Never touches upstream."""
+    projects = [p for p in projects if p]
+    if not projects:
+        return []
+    conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" for _ in projects)
+    rows = conn.execute(
+        f"SELECT * FROM deployment_records WHERE project IN ({placeholders}) ORDER BY started_on DESC, id DESC",
+        projects,
+    ).fetchall()
+    deps = [_row_to_deployment_dict(row) for row in rows]
+    return [dep for dep in deps if _deployment_in_window(dep, window)]
+
+
 # -----------------------------------------------------------------------------
 # Query and Metrics Calculation
 # -----------------------------------------------------------------------------
