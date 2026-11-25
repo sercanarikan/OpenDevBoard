@@ -1037,6 +1037,150 @@ def _row_to_pr_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 # -----------------------------------------------------------------------------
+# Window-aware sync and local reads (calendar windows)
+# -----------------------------------------------------------------------------
+
+# Two distinct timestamp semantics that are never merged:
+#   created: pull_requests.creation_date, fetched with queryTimeRangeType=created (any status).
+#   closed:  pull_requests.closed_date with status completed, fetched with queryTimeRangeType=closed, status=completed.
+PR_KINDS = {
+    "created": {"status": "all", "range_type": "created", "column": "creation_date"},
+    "closed": {"status": "completed", "range_type": "closed", "column": "closed_date"},
+}
+
+_PR_UPSERT_SQL = '''INSERT OR REPLACE INTO pull_requests (
+    id, project, repository, title, description, status, is_draft,
+    author_id, author_name, author_avatar, source_branch, target_branch,
+    merge_status, creation_date, closed_date, url, reviewers_json,
+    work_items_json, last_synced_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+
+
+def _check_kind(kind: str) -> Dict[str, str]:
+    if kind not in PR_KINDS:
+        raise ValueError(f"unknown pull request kind: {kind}")
+    return PR_KINDS[kind]
+
+
+def fetch_prs_window(org_url: str, pat: str, projects: Optional[List[str]], window, kind: str):
+    """Read-only (GET) fetch of one UTC window of pull requests, upserted into ``pull_requests``.
+
+    ``kind`` is ``created`` or ``closed`` (see PR_KINDS). Returns ``(rows, complete)``. ``complete`` is False when
+    any project failed, a page request failed, or the page budget was reached; rows read before the failure are
+    still stored. Rows outside the window are kept: the upstream time filter is only a request hint, and nothing is
+    deleted. ``projects=None`` discovers the accessible projects (an incomplete inventory is never complete).
+    """
+    spec = _check_kind(kind)
+    headers = feature_context.get_devops_headers(pat)
+    complete = True
+    if projects is None:
+        projects, inventory_complete = project_inventory.discover_projects(org_url, headers)
+        complete = bool(inventory_complete)
+    raw_rows: List[Dict[str, Any]] = []
+    for proj in [p for p in projects if p]:
+        url = f"{org_url.rstrip('/')}/{quote(proj, safe='')}/_apis/git/pullrequests"
+        offset = 0
+        project_done = False
+        try:
+            for _ in range(PR_PROJECT_MAX_PAGES):
+                params = {
+                    "searchCriteria.status": spec["status"],
+                    "searchCriteria.queryTimeRangeType": spec["range_type"],
+                    "searchCriteria.minTime": window.iso_start(),
+                    "searchCriteria.maxTime": window.iso_end(),
+                    "$skip": offset, "$top": PR_PAGE_SIZE, "api-version": "7.1",
+                }
+                r = _pr_get(url, 'window_fetch', headers=headers, params=params, timeout=15)
+                if r.status_code != 200:
+                    break
+                page = r.json().get("value", [])
+                if not page:
+                    project_done = True
+                    break
+                raw_rows.extend(page)
+                offset += len(page)
+        except Exception as ex:  # noqa: BLE001 - exception text can carry URLs or tokens; log the type only
+            logger.warning("Window PR fetch failed (%s)", type(ex).__name__)
+        if not project_done:
+            complete = False
+
+    unique: Dict[Any, Dict[str, Any]] = {}
+    for raw in raw_rows:
+        try:
+            parsed = parse_azure_pr(raw, org_url)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("Failed to parse a PR record (%s)", type(ex).__name__)
+            continue
+        unique[(parsed["id"], parsed["project"], parsed["repository"])] = parsed
+    rows = list(unique.values())
+    if rows:
+        now_iso = _utcnow().isoformat()
+        init_pr_db()
+        with persistence.db_lock, persistence.get_db_connection() as conn:
+            conn.executemany(_PR_UPSERT_SQL, [(
+                p["id"], p["project"], p["repository"], p["title"], p["description"], p["status"],
+                p["isDraft"], p["authorId"], p["authorName"], p["authorAvatar"], p["sourceBranch"],
+                p["targetBranch"], p["mergeStatus"], p["creationDate"], p["closedDate"], p["url"],
+                json.dumps(p["reviewers"]), json.dumps(p["workItems"]), now_iso) for p in rows])
+            conn.commit()
+    return rows, complete
+
+
+def _parse_utc(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def load_local_pull_requests(conn: sqlite3.Connection, projects: List[str], window, kind: str) -> List[Dict[str, Any]]:
+    """Cache-only read of pull requests for a calendar window and project set. Never touches upstream.
+
+    ``created`` selects by creation_date. ``closed`` selects completed PRs by closed_date.
+    """
+    spec = _check_kind(kind)
+    projects = [p for p in projects if p]
+    if not projects:
+        return []
+    column = spec["column"]  # whitelisted: only PR_KINDS values are interpolated
+    first = window.start.strftime("%Y-%m-%d")
+    last = (window.end - timedelta(days=1)).strftime("%Y-%m-%d")
+    where_status = " AND status = 'completed'" if kind == "closed" else ""
+    placeholders = ",".join("?" for _ in projects)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        f"""SELECT * FROM pull_requests
+            WHERE project IN ({placeholders}){where_status}
+              AND substr({column}, 1, 10) >= ? AND substr({column}, 1, 10) <= ?
+            ORDER BY {column} DESC""",
+        (*projects, first, last),
+    ).fetchall()
+    return [d for d in (_row_to_pr_dict(r) for r in rows)
+            if window.contains(_parse_utc(d["closedDate"] if kind == "closed" else d["creationDate"]))]
+
+
+def to_team_pull_request(pr: Dict[str, Any]) -> Dict[str, Any]:
+    """The compact PR shape team activity aggregation consumes (reviewers who voted, as names)."""
+    return {
+        "id": pr["id"],
+        "project": pr["project"],
+        "repository": pr["repository"],
+        "title": pr["title"] or "PR",
+        "author": pr["authorName"] or "Unknown",
+        "reviewers": [r.get("displayName") for r in pr.get("reviewers", [])
+                      if r.get("displayName") and r.get("vote", 0) != 0],
+        "status": pr["status"] or "active",
+        "creationDate": pr["creationDate"],
+        "url": pr["url"],
+    }
+
+
+# -----------------------------------------------------------------------------
 # Query and Evaluation Layer
 # -----------------------------------------------------------------------------
 

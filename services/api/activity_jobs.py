@@ -153,9 +153,13 @@ class ChunkJobRunner:
         self._pool.shutdown(wait=wait)
 
 
-def build_live_fetchers(org_url: str, org_name: str, pat: str) -> Dict[str, ChunkFetch]:
-    """Chunk fetchers backed by the existing window-aware sync functions."""
+def build_live_fetchers(org_url: str, org_name: str, pat: str, projects=None) -> Dict[str, ChunkFetch]:
+    """Chunk fetchers backed by the existing window-aware sync functions.
+
+    ``projects`` is the project set of the request scope; the pull request fetchers use it (None discovers them).
+    """
     import pipeline_service
+    import pr_service
     import deployment_service
     import team_service
 
@@ -170,6 +174,10 @@ def build_live_fetchers(org_url: str, org_name: str, pat: str) -> Dict[str, Chun
             deployment_service.sync_live_deployments(org_url, org_name, pat, window=chunk, include_cache_status=True)
         ),
         "commits": lambda chunk: _complete(team_service.sync_live_team_activity(org_url, pat, window=chunk)),
+        "pull-requests-created": lambda chunk: bool(
+            pr_service.fetch_prs_window(org_url, pat, projects, chunk, "created")[1]),
+        "pull-requests-closed": lambda chunk: bool(
+            pr_service.fetch_prs_window(org_url, pat, projects, chunk, "closed")[1]),
     }
 
 

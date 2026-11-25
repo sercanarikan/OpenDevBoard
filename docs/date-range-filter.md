@@ -62,7 +62,7 @@ Upstream çekimler **UTC takvim ayı** parçalarına bölünür (chunk). Parça 
 
 | Parametre | Açıklama |
 | --- | --- |
-| `metric` | `pipelines`, `deployments` veya `commits` |
+| `metric` | `pipelines`, `deployments`, `commits`, `pull-requests-created` veya `pull-requests-closed` |
 | `startDate`, `endDate` | `YYYY-MM-DD`, UTC, iki uç dahil; birlikte zorunlu |
 | `mode` | `cache` (upstream başlatmaz) veya `refresh` (varsayılan; eksik, kısmi ve bayat parçalar için arka plan işi başlatır) |
 
@@ -72,6 +72,15 @@ Hatalar HTTP 400 döner: geçersiz metrik veya mod, eksik tarih, 1096 günü aş
 
 Demo ve fixture modunda istemci, aynı sözleşmeyi taklit eden deterministik bir veri üretir; yanıt `fixture: true` taşır ve arayüzde "Örnek veri, canlı değil" olarak gösterilir. Bu veri gerçek kapsam kaydı değildir.
 
+### Pull request pencereleri
+
+Takvim pencerelerinde PR verisi yerel `pull_requests` tablosundan okunur; takvim isteği sırasında canlı PR çekimi yapılmaz. Eksik parçalar ay bazında arka planda çekilir (yalnızca `GET`; sayfa bütçesi dolarsa veya bir istek başarısız olursa parça `partial` kalır). İki ayrı anlam vardır ve karıştırılmaz:
+
+- `pull-requests-created`: oluşturulma tarihine (`creation_date`) göre; `queryTimeRangeType=created`, her durum.
+- `pull-requests-closed`: pencerede **tamamlanan** PR'lar (`closed_date`, yalnızca `status=completed`); `queryTimeRangeType=closed`, `status=completed`. Terk edilen PR'lar sayılmaz.
+
+Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-requests/summary` takvim penceresiyle (`startDate`/`endDate`) çağrıldığında yerel okuma yapar; `dateField=created` (varsayılan) veya `closed` seçilir, geçersiz değer HTTP 400 döner. Yanıt `cacheStatus.coverage` (`complete`/`partial`/`missing`), `job`, `window` ve `dateField` taşır. `/api/team-activity*` PR'ları `created` anlamıyla okur; `cacheStatus.pullRequestCoverage` PR parça kapsamını verir ve `job` commit ile PR işlerini birleştirir. Kayan (`days`) istekler eski yolu kullanır.
+
 ## Dashboard
 
 - **Zaman içinde aktivite** kartı kendi tarih filtresine ve metrik seçicisine (pipeline çalıştırması, deployment, commit) sahiptir. Uzun aralıklar burada desteklenir.
@@ -80,7 +89,6 @@ Demo ve fixture modunda istemci, aynı sözleşmeyi taklit eden deterministik bi
 ## Bilinen sınırlamalar
 
 - **Liste ekranları** hâlâ 90 gün ile sınırlıdır. Pipeline, Deployment, Team Activity ve My History listeleri tek istekte upstream çekildiği için aralıkları parçalı yüklenmemektedir.
-- **Pull request** metriği yoktur: PR senkronizasyonu pencere parametresi almaz ve takım takvim senkronizasyonu PR'ları kalıcı tabloya yazmaz.
 - **My History** için aktivite görünümü yoktur.
 - **Dashboard'un dönemsel kartları** (CI/CD, deployment, takım özeti, geçmiş) hâlâ AppContext'teki sabit pencereleri kullanır; sayfa düzeyinde bir tarih filtresine bağlı değildir.
 - **Yerel senkronizasyonlar** (kayan pencere) kapsam kaydı yazmaz. Bu günler, bir takvim çekimi kapsayana kadar `not_collected` görünür.

@@ -485,8 +485,11 @@ def get_pull_requests():
     """Lists pull requests with server-side pagination, filters, and personal status."""
     try:
         force_refresh = request.args.get('refresh', '').lower() == 'true'
+        try:
+            sync_data, calendar_meta = _load_pr_sync(force_refresh=force_refresh)
+        except ValueError as e:
+            return jsonify({"error": str(e), "items": [], "total": 0}), 400
         current_user = _get_pr_current_user()
-        sync_data = _load_all_prs(force_refresh=force_refresh)
         if _pr_sync_failed_without_cache(sync_data):
             return _pr_unavailable_response(sync_data, {"items": [], "total": 0})
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
@@ -500,8 +503,12 @@ def get_pull_requests():
         if isinstance(sync_data, dict):
             result["cacheStatus"] = sync_data.get("cacheStatus")
             result["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
+        if calendar_meta:
+            result.update(calendar_meta)
         observability.observe_pr_stage('response_prepare', prepare_started)
         return jsonify(result), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable", "items": [], "total": 0}), 503
     except Exception as e:
         app.logger.error("Error in get_pull_requests (%s)", type(e).__name__)
         return jsonify({"error": "Pull requests could not be loaded", "items": [], "total": 0}), 500
@@ -511,8 +518,11 @@ def get_pull_requests_summary():
     """Lightweight aggregate summary of PR metrics for Dashboard overview."""
     try:
         project = request.args.get('project', 'all')
+        try:
+            sync_data, calendar_meta = _load_pr_sync()
+        except ValueError as e:
+            return jsonify({"error": str(e), "needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0}), 400
         current_user = _get_pr_current_user()
-        sync_data = _load_all_prs()
         if _pr_sync_failed_without_cache(sync_data):
             return _pr_unavailable_response(sync_data, {"needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0})
         all_prs = sync_data["items"] if isinstance(sync_data, dict) else sync_data
@@ -527,8 +537,12 @@ def get_pull_requests_summary():
             summary["cacheStatus"] = sync_data.get("cacheStatus")
             summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt")
             summary["lastSyncedAt"] = sync_data.get("cacheStatus", {}).get("lastSyncedAt") or summary.get("lastSyncedAt")
+        if calendar_meta:
+            summary.update(calendar_meta)
         observability.observe_pr_stage('response_prepare', prepare_started)
         return jsonify(summary), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable", "needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0}), 503
     except Exception as e:
         app.logger.error("Error in get_pull_requests_summary (%s)", type(e).__name__)
         return jsonify({"error": "Pull requests could not be loaded", "needsMyReview": 0, "createdByMe": 0, "involved": 0, "totalActive": 0}), 500
@@ -556,19 +570,28 @@ def get_pull_request_by_id(pr_id):
 _live_flights = request_coalescing.Coalescer()
 
 
-def _load_all_team_activity(days=30, force_refresh=False, window=None):
+def _load_all_team_activity(days=30, force_refresh=False, window=None, include_prs=True):
     window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return team_service.build_fixture_team_activity()
     if window.is_calendar:
-        # Commits answer from the local cache now (missing chunks fetched in the background). Pull requests are not
-        # persisted yet (D4), so that portion stays on the live path and can only degrade completeness.
+        # Commits and pull requests both answer from the local cache (missing chunks fetched in the background).
+        # Team pull requests use created semantics (creation date), matching team summary membership.
         mode = (request.args.get('mode') or 'refresh').strip().lower()
-        data = _team_commits_cache_first(window, refresh=(mode != 'cache'))
-        prs, prs_ok = _team_live_pull_requests(window)
-        data["pullRequests"] = prs
-        if not prs_ok:
-            data["cacheStatus"] = {**data["cacheStatus"], "complete": False, "stale": True, "outcome": "partial"}
+        refresh = (mode != 'cache')
+        data = _team_commits_cache_first(window, refresh=refresh)
+        if not include_prs:  # commit-only routes neither read nor fetch pull requests
+            return data
+        pr_data = _pr_cache_first(window, 'created', refresh=refresh)
+        data["pullRequests"] = [pr_service.to_team_pull_request(p) for p in pr_data["items"]]
+        pr_status = pr_data["cacheStatus"]
+        complete = bool(data["cacheStatus"]["complete"]) and bool(pr_status["complete"])
+        data["cacheStatus"] = {
+            **data["cacheStatus"],
+            "complete": complete, "stale": not complete, "outcome": "complete" if complete else "partial",
+            "pullRequestCoverage": pr_status["coverage"],
+        }
+        data["job"] = _merge_jobs(data["job"], pr_data["job"])
         return data
     org_url = get_devops_org_url()
     pat = get_devops_pat()
@@ -722,7 +745,7 @@ def get_team_activity_commits():
         if window_error:
             return jsonify({"error": window_error}), 400
         force_refresh = request.args.get('refresh', '').lower() == 'true'
-        data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
+        data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh, include_prs=False)
         res = team_service.query_commits(data["commits"], request.args, window=window)
         return jsonify({**res, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta(), **({"job": data["job"]} if data.get("job") else {})}), 200
     except ProjectListUnavailable:
@@ -858,8 +881,8 @@ def _deployment_cache_first(window, refresh=True):
 def _team_commits_cache_first(window, refresh=True):
     """Calendar team commits: local rows plus coverage and job state; upstream work only via chunk jobs.
 
-    Commit membership uses team_commits.date (upstream commit author date) only. Team activity pull requests are not
-    persisted yet (D4 adds that), so the PR portion stays on the live path in _load_all_team_activity.
+    Commit membership uses team_commits.date (upstream commit author date) only. Pull requests have their own
+    created-kind chunks (_pr_cache_first), combined in _load_all_team_activity.
     """
     chunks = activity_chunks.plan_month_chunks(window)
     org_url = get_devops_org_url()
@@ -913,16 +936,98 @@ def _team_commits_cache_first(window, refresh=True):
     return {"commits": commits, "cacheStatus": cache_status, "job": job}
 
 
-def _team_live_pull_requests(window):
-    """Team activity PRs are not persisted until D4, so calendar requests keep fetching them live."""
-    report = {}
+def _merge_jobs(first, second):
+    """One polling job for two chunk families: running while either has pending chunks."""
+    merged = {k: (first.get(k, 0) + second.get(k, 0)) for k in
+              ("pending", "completed", "partial", "failed", "deferred", "busy")}
+    merged["retryAfterSeconds"] = max(first.get("retryAfterSeconds", 0), second.get("retryAfterSeconds", 0))
+    if merged["pending"]:
+        merged["state"] = activity_jobs.RUNNING
+    else:
+        merged["state"] = first["state"] if first.get("state") != activity_jobs.IDLE else second.get("state", activity_jobs.IDLE)
+    return merged
+
+
+def _pr_cache_first(window, kind, refresh=True):
+    """Calendar pull requests: local rows plus coverage and job state; upstream work only via chunk jobs.
+
+    ``kind`` is ``created`` or ``closed`` (separate ledger rows, separate membership rules).
+    """
+    metric = f"pull-requests-{kind}"
+    chunks = activity_chunks.plan_month_chunks(window)
+    org_url = get_devops_org_url()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    runner = _get_activity_runner()
+    busy_refusals = 0
+    conn = persistence.get_db_connection()
     try:
-        prs = team_service._load_live_prs_summary_only(
-            get_devops_org_url(), get_devops_pat(), window.days, window=window, report=report)
-    except Exception as e:
-        app.logger.warning("Live team pull request fetch failed: %s", e)
-        return [], False
-    return prs, not report.get("incomplete")
+        project_scope.init_project_scope_db(conn)
+        if refresh:
+            try:
+                projects = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+            except Exception:
+                raise ProjectListUnavailable()
+            project_scope.save_project_set(conn, org_url, projects, now.isoformat(timespec="seconds") + "Z")
+        else:
+            projects = project_scope.load_project_set(conn, org_url) or []
+        scope = coverage_ledger.scope_key(org_url, projects)
+        keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+        coverage = coverage_ledger.read_coverage(conn, scope, metric, keys)
+        if refresh:
+            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat(), projects=projects)
+            for chunk in chunks:
+                row = coverage.get(activity_chunks.chunk_key(chunk))
+                needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
+                    coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
+                )
+                if needs_fetch and runner.submit(scope, metric, chunk, fetchers[metric]) == activity_jobs.BUSY:
+                    busy_refusals += 1
+        job = {**runner.status(scope, metric, keys), "busy": busy_refusals}
+        prs = pr_service.load_local_pull_requests(conn, projects, window, kind)
+    finally:
+        conn.close()
+    counts = {"complete": 0, "partial": 0, "missing": 0}
+    for key in keys:
+        row = coverage.get(key)
+        if row is None:
+            counts["missing"] += 1
+        elif row['coverage'] == coverage_ledger.COVERAGE_COMPLETE:
+            counts["complete"] += 1
+        else:
+            counts["partial"] += 1
+    cache_status = {
+        "complete": counts["partial"] == 0 and counts["missing"] == 0,
+        "coverage": counts,
+        "source": "local-cache",
+    }
+    return {"items": prs, "cacheStatus": cache_status, "job": job}
+
+
+def _pr_calendar_request():
+    """Returns (window, kind, error). window is None for rolling and fixture requests (legacy snapshot path)."""
+    if sync_service.is_fixture_mode():
+        return None, None, None
+    if not ((request.args.get("startDate") or "").strip() or (request.args.get("endDate") or "").strip()):
+        return None, None, None
+    window, error = _request_window()
+    if error:
+        return None, None, error
+    kind = (request.args.get("dateField") or "created").strip().lower()
+    if kind not in pr_service.PR_KINDS:
+        return None, None, "dateField must be one of: " + ", ".join(sorted(pr_service.PR_KINDS))
+    return window, kind, None
+
+
+def _load_pr_sync(force_refresh=False):
+    """Pull request snapshot for the list routes; calendar windows read the local cache (no upstream wait)."""
+    window, kind, error = _pr_calendar_request()
+    if error:
+        raise ValueError(error)
+    if window is None:
+        return _load_all_prs(force_refresh=force_refresh), None
+    mode = (request.args.get('mode') or 'refresh').strip().lower()
+    data = _pr_cache_first(window, kind, refresh=(mode != 'cache'))
+    return data, {"window": window.to_meta(), "dateField": kind, "job": data["job"]}
 
 
 def _load_all_pipelines(days=30, force_refresh=False, window=None):
@@ -1022,7 +1127,7 @@ def get_activity_daily():
         keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
         coverage = coverage_ledger.read_coverage(conn, scope, metric, keys)
         if mode == 'refresh':
-            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat())
+            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat(), projects=projects)
             for chunk in chunks:
                 row = coverage.get(activity_chunks.chunk_key(chunk))
                 needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (

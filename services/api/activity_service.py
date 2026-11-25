@@ -15,12 +15,18 @@ import coverage_ledger as cl
 from date_window import DateWindow
 
 # Fixed table/column names. Only these are interpolated into SQL.
-# Pull requests are intentionally absent: the PR sync is not window-aware and
-# team calendar sync does not persist PRs, so there is no chunkable source yet.
+# Pull requests have two separate metrics: created (creation_date) and closed (closed_date, status completed only).
 METRICS: Dict[str, Tuple[str, str, str]] = {
     "pipelines": ("pipeline_runs", "queue_time", "project"),
     "deployments": ("deployment_records", "started_on", "project"),
     "commits": ("team_commits", "date", "project"),
+    "pull-requests-created": ("pull_requests", "creation_date", "project"),
+    "pull-requests-closed": ("pull_requests", "closed_date", "project"),
+}
+
+# Fixed, whitelisted extra WHERE conditions (never built from input).
+EXTRA_WHERE: Dict[str, str] = {
+    "pull-requests-closed": "status = 'completed'",
 }
 
 COVERED_ZERO = "covered_zero"
@@ -38,13 +44,14 @@ def daily_counts(conn: sqlite3.Connection, metric: str, projects: Sequence[str],
     if not projects:
         return {}
     table, day_column, project_column = METRICS[metric]
+    extra = f" AND {EXTRA_WHERE[metric]}" if metric in EXTRA_WHERE else ""
     placeholders = ",".join("?" for _ in projects)
     first = window.start.strftime("%Y-%m-%d")
     last = (window.end - timedelta(days=1)).strftime("%Y-%m-%d")
     rows = conn.execute(
         f"""SELECT substr({day_column}, 1, 10) AS day, COUNT(*) AS n
             FROM {table}
-            WHERE {project_column} IN ({placeholders})
+            WHERE {project_column} IN ({placeholders}){extra}
               AND substr({day_column}, 1, 10) >= ? AND substr({day_column}, 1, 10) <= ?
             GROUP BY day""",
         (*projects, first, last),

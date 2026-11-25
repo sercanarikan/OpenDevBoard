@@ -28,6 +28,13 @@ SCHEMA = """CREATE TABLE team_commits (
     PRIMARY KEY (commit_id, repository))"""
 
 
+PR_SCHEMA = """CREATE TABLE pull_requests (
+    id INTEGER NOT NULL, project TEXT NOT NULL, repository TEXT NOT NULL, title TEXT NOT NULL, description TEXT,
+    status TEXT NOT NULL, is_draft INTEGER DEFAULT 0, author_id TEXT, author_name TEXT, author_avatar TEXT,
+    source_branch TEXT, target_branch TEXT, merge_status TEXT, creation_date TEXT, closed_date TEXT, url TEXT,
+    reviewers_json TEXT, work_items_json TEXT, last_synced_at TEXT, PRIMARY KEY (id, project, repository))"""
+
+
 def insert_commit(conn, cid, project, date, author="Fixture Person A"):
     conn.execute(
         "INSERT INTO team_commits (commit_id, project, repository, author_name, author_email, date, comment, url)"
@@ -61,6 +68,7 @@ class CacheFirstRouteTests(unittest.TestCase):
         self.db_path = os.path.join(self._tmp.name, "p.db")
         conn = sqlite3.connect(self.db_path)
         conn.execute(SCHEMA)
+        conn.execute(PR_SCHEMA)
         insert_commit(conn, "a", "Alpha", f"{rel(10)}T10:00:00Z")
         conn.commit()
         conn.close()
@@ -179,12 +187,17 @@ class CacheFirstRouteTests(unittest.TestCase):
         r = self.client.get(f"/api/team-activity/summary?{self.q}&mode=cache")
         self.assertEqual(r.get_json()["totalCommits"], 1)
 
-    def test_pull_requests_stay_live(self):
-        pr = {"id": 1, "project": "Alpha", "repository": "Alpha.Repo", "title": "t", "author": "Fixture Person A",
-              "reviewers": [], "status": "active", "creationDate": f"{rel(10)}T10:00:00Z", "url": "u"}
-        with patch.object(team_service, "_load_live_prs_summary_only", return_value=[pr]) as live:
+    def test_pull_requests_come_from_the_local_cache(self):
+        # D4 changed this contract: team PRs are persisted and read locally; the upstream PR list is never called.
+        conn = persistence.get_db_connection(self.db_path)
+        conn.execute(
+            "INSERT INTO pull_requests (id, project, repository, title, status, author_name, creation_date, url,"
+            " reviewers_json, work_items_json) VALUES (1, 'Alpha', 'Alpha.Repo', 't', 'active', 'Fixture Person A', ?, 'u', '[]', '[]')",
+            (f"{rel(10)}T10:00:00Z",))
+        conn.commit()
+        conn.close()
+        with patch.object(team_service, "_load_live_prs_summary_only", side_effect=AssertionError("live PR fetch")):
             r = self.client.get(f"/api/team-activity/summary?{self.q}&mode=cache")
-        live.assert_called_once()
         self.assertEqual(r.get_json()["totalPRs"], 1)
 
     def test_refresh_discovers_and_stores_project_set(self):
