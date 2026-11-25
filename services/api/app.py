@@ -27,6 +27,7 @@ import activity_chunks
 import activity_jobs
 import coverage_ledger
 import persistence
+import project_scope
 
 # Azure DevOps SDK imports
 from msrest.authentication import BasicAuthentication
@@ -791,19 +792,28 @@ def get_activity_daily():
     fixture = sync_service.is_fixture_mode()
     if fixture:
         mode = 'cache'  # fixture data is never fetched upstream
-    try:
-        projects = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
-    except Exception:
-        return jsonify({"error": "project list is unavailable"}), 503
-
     org_url = get_devops_org_url()
-    scope = coverage_ledger.scope_key(org_url, projects)
-    keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     runner = _get_activity_runner()
 
     conn = persistence.get_db_connection()
     try:
+        project_scope.init_project_scope_db(conn)
+        if mode == 'refresh' and not fixture:
+            # Only refresh discovers projects upstream; the set is stored for cache-only requests.
+            try:
+                discovered = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+            except Exception:
+                return jsonify({"error": "project list is unavailable"}), 503
+            project_scope.save_project_set(conn, org_url, discovered, now.isoformat(timespec="seconds") + "Z")
+            projects = discovered
+            project_scope_state = "discovered"
+        else:
+            stored = project_scope.load_project_set(conn, org_url)
+            projects = stored or []
+            project_scope_state = "stored" if stored is not None else "unknown"
+        scope = coverage_ledger.scope_key(org_url, projects)
+        keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
         coverage = coverage_ledger.read_coverage(conn, scope, metric, keys)
         if mode == 'refresh':
             fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat())
@@ -833,6 +843,7 @@ def get_activity_daily():
             "notCollectedDays": not_collected_days,
         },
     }
+    body["projectScope"] = project_scope_state
     if fixture:
         body["fixture"] = True
     return jsonify(body), 200

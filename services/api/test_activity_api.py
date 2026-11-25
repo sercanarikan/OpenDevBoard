@@ -105,6 +105,24 @@ class ActivityDailyRouteTests(unittest.TestCase):
         self.assertEqual(body["job"]["state"], "idle")
         self.assertFalse(body["cacheStatus"]["complete"])
 
+    def test_cache_mode_never_calls_upstream_project_discovery(self):
+        from unittest.mock import patch as p2
+        with p2.object(self.api_app, "get_projects_data", side_effect=AssertionError("upstream project list called")):
+            response = self.get(self.range_query("pipelines", 20, 18, mode="cache"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["projectScope"], "unknown")
+
+    def test_cache_mode_uses_the_project_set_stored_by_refresh(self):
+        import project_scope as ps
+        conn = persistence.get_db_connection(self.db_path)
+        ps.init_project_scope_db(conn)
+        ps.save_project_set(conn, ORG, ["Alpha"], "2026-11-25T10:00:00Z")
+        conn.close()
+        from unittest.mock import patch as p2
+        with p2.object(self.api_app, "get_projects_data", side_effect=AssertionError("upstream project list called")):
+            body = self.get(self.range_query("pipelines", 20, 18, mode="cache")).get_json()
+        self.assertEqual(body["projectScope"], "stored")
+
     def test_response_never_contains_the_pat(self):
         response = self.get(self.range_query("pipelines", 20, 18, mode="cache"))
         self.assertNotIn(PAT, response.get_data(as_text=True))
@@ -155,7 +173,8 @@ class ActivityDailyRouteTests(unittest.TestCase):
 
     def test_response_shape_contract(self):
         body = self.get(self.range_query("commits", 3, 2, mode="cache")).get_json()
-        self.assertEqual(set(body), {"metric", "window", "days", "job", "cacheStatus"})
+        # projectScope is an additive field: stored / discovered / unknown.
+        self.assertEqual(set(body), {"metric", "window", "days", "job", "cacheStatus", "projectScope"})
         self.assertEqual(body["window"]["timezone"], "UTC")
         self.assertEqual(set(body["days"][0]), {"date", "count", "state", "stale"})
 
