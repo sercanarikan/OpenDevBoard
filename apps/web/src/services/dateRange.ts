@@ -182,24 +182,34 @@ export function customSelection(startDate: string, endDate: string): DateRangeSe
   return { kind: 'calendar', preset: 'custom', startDate, endDate };
 }
 
-export function validateCustomRange(startDate: string, endDate: string, todayKey: string): CustomRangeError | null {
+export function validateCustomRange(
+  startDate: string,
+  endDate: string,
+  todayKey: string,
+  maxSpanDays: number = DATE_RANGE_MAX_SPAN_DAYS
+): CustomRangeError | null {
   if (!isDateKey(startDate) || !isDateKey(endDate) || !isDateKey(todayKey)) return 'invalidDate';
   if (endDate < startDate) return 'endBeforeStart';
   if (endDate > todayKey) return 'future';
   if (startDate < addDaysToKey(todayKey, -DATE_RANGE_MAX_AGE_DAYS)) return 'tooOld';
-  if (dayCountInclusive(startDate, endDate) > DATE_RANGE_MAX_SPAN_DAYS) return 'tooLong';
+  if (dayCountInclusive(startDate, endDate) > maxSpanDays) return 'tooLong';
   return null;
 }
 
 /** Whether a day can be picked, given the first click (anchor) of a range being built. */
-export function isPickableDay(dayKey: string, todayKey: string, anchorKey: string | null): boolean {
+export function isPickableDay(
+  dayKey: string,
+  todayKey: string,
+  anchorKey: string | null,
+  maxSpanDays: number = DATE_RANGE_MAX_SPAN_DAYS
+): boolean {
   if (dayKey > todayKey) return false;
   if (dayKey < addDaysToKey(todayKey, -DATE_RANGE_MAX_AGE_DAYS)) return false;
   if (anchorKey === null) return true;
   // Once the start is chosen, only days that keep the span within the limit are selectable.
   const earlier = dayKey < anchorKey ? dayKey : anchorKey;
   const later = dayKey < anchorKey ? anchorKey : dayKey;
-  return dayCountInclusive(earlier, later) <= DATE_RANGE_MAX_SPAN_DAYS;
+  return dayCountInclusive(earlier, later) <= maxSpanDays;
 }
 
 export function toApiRange(selection: DateRangeSelection): DateRangeQuery {
@@ -274,4 +284,9 @@ export function analyticsRangeDays(range: AnalyticsRange): number {
 export function chartLabelStep(dayCount: number): number {
   if (dayCount <= 14) return 1;
   return Math.ceil(dayCount / 6);
+}
+
+/** Number of UTC days a selection covers. */
+export function selectionSpanDays(selection: DateRangeSelection): number {
+  return selection.kind === 'rolling' ? selection.days : dayCountInclusive(selection.startDate, selection.endDate);
 }

@@ -94,7 +94,8 @@
     "nudgeEndLater": "Bitişi bir gün sonraya al",
     "loadFailed": "Aktivite yüklenemedi.",
     "timeout": "Yükleme çok uzun sürdü. Tekrar deneyin.",
-    "fixture": "Örnek veri, canlı değil"
+    "fixture": "Örnek veri, canlı değil",
+    "loading": "Aktivite yükleniyor…"
   },
   "actions": {
     "apply": "Uygula",
@@ -107,5 +108,6 @@
     "future": "Gelecek tarihler kullanılamaz.",
     "tooOld": "{{max}} günden eski tarihler kullanılamaz."
   },
-  "hintUtc": "Tarihler UTC takvim günleridir."
+  "hintUtc": "Tarihler UTC takvim günleridir.",
+  "limitHint": "Bu ekranda en fazla {{max}} gün gösterilir. Daha uzun dönemler aktivite görünümlerinde ve panoda kullanılabilir."
 }
