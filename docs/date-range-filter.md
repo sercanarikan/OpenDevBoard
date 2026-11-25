@@ -1,8 +1,10 @@
 # Tarih aralığı filtresi
 
-Tarih filtresi iki ayrı tüketici için çalışır:
+Uygulamada **tek bir global tarih filtresi** vardır; üst çubukta (header) bulunur ve seçilen aralık `DateRangeProvider` ile tüm ekranlara dağıtılır. Ekranlarda ayrı bir tarih filtresi yoktur. Seçim yalnızca **Uygula** ile kesinleşir ve tarayıcıda (`opendevboard.dateRange.v1`, localStorage) saklanır; bozuk veya sınır dışı bir kayıt varsayılana (son 30 gün) döner. Global değişiklik yalnızca bağlamı günceller; her açık ekran kendi metriklerini kendisi çeker, kapalı ekranlar için upstream isteği başlamaz.
 
-- **Liste ekranları** (Pipeline Health, Deployment Metrics, Team Activity, My History): seçilen aralık tek bir upstream isteğiyle çekilir. Bu ekranlarda en fazla **90 gün** seçilebilir; daha uzun presetler devre dışıdır ve nedeni picker içinde açıklanır.
+Filtre iki tüketici için çalışır:
+
+- **Liste ekranları** (Pipeline Health, Deployment Metrics, Team Activity, My History): global aralığı okur ve kendi isteğini yapar. Aralık değişince sayfa 1'e döner; geç gelen eski yanıt yeni seçimi ezmez.
 - **Aktivite görünümleri** (Dashboard'daki "Zaman içinde aktivite" kartı): günlük sayılar yerel kapsam kaydından (coverage ledger) okunur. Seçilebilecek en uzun aralık **1096 gün**dür (üç yıl). Uzun aralıklar parça parça (ay bazında) ve arka planda çekilir.
 
 ## Presetler
@@ -18,11 +20,13 @@ Tarih filtresi iki ayrı tüketici için çalışır:
 | Bu çeyrek / Geçen çeyrek | Takvim | çeyreğin ilk günü … bugün; önceki çeyreğin tamamı |
 | Bu yıl / Geçen yıl | Takvim | yılın ilk günü … bugün; önceki yılın tamamı |
 
-Dönem seçimi: **Gün**, **Ay**, **Çeyrek** ve **Yıl** sekmeleriyle doğrudan tek bir gün, takvim ayı, Q1–Q4 çeyreği veya yıl seçilebilir. Devam eden bir dönem (bu ay, bu çeyrek, bu yıl) bugüne kadar kırpılır; gelecek günler asla seçilmez. **Özel** sekmesinde iki tıklamayla başlangıç ve bitiş seçilir.
+Presetler sol tarafta dikey bir listedir; en sık kullanılan sekiz dönem açıktır, kalanı **Diğer dönemler** altındadır. Telefonda (<640 px) presetler tek bir seçim kutusudur. Preset seçmek yalnızca taslağı değiştirir; **Uygula** ile kesinleşir, **İptal** taslağı atar.
+
+Takvim başlığına (ay adı) tıklamak **Ay / Çeyrek / Yıl** seçicisini açar (varsayılan görünümde gizlidir). Ay, çeyrek ve yıl doğrudan tam dönem olarak seçilir; yıl listesi sabit değildir (geriye sınırsız gezilir, ileri bu yılla sınırlıdır; saklama yaşından eski yıllar seçilemez). Devam eden bir dönem bugüne kadar kırpılır; gelecek günler asla seçilmez. Takvimde iki tıklamayla başlangıç ve bitiş seçilir; alttaki başlangıç/bitiş alanlarına `YYYY-AA-GG` yazılabilir (geçersiz giriş Uygula'yı kapatır).
 
 ## Sınırlar (UTC)
 
-- Aralık en fazla **1096 gün** (iki uç dahil) olabilir. Liste ekranlarında bu üst sınır **90 gün**dür.
+- Aralık en fazla **1096 gün** (iki uç dahil) olabilir.
 - Başlangıç bugünden en fazla **3650 gün** önce olabilir.
 - Bitiş bugünden ileri olamaz; sessiz kırpma yapılmaz, geçersiz aralık HTTP 400 ile reddedilir.
 - Tarihler UTC takvim günleridir. Yerel saat dilimi farkı gün sınırında bir günlük kaymaya yol açmaz.
@@ -31,8 +35,8 @@ Dönem seçimi: **Gün**, **Ay**, **Çeyrek** ve **Yıl** sekmeleriyle doğrudan
 
 Picker içinde (ve dashboard kartında) iki bileşen bulunur:
 
-- **Zaman çizelgesi:** gün, hafta veya ay çubukları (45 güne kadar günlük, 200 güne kadar haftalık, daha uzun aralıklarda aylık). İki tutamaç (başlangıç, bitiş) sürüklenebilir; klavyeyle (ok tuşları ±1 gün, Shift+ok ±7 gün, Home/End sınır) ve **−/+** düğmeleriyle de değiştirilebilir. Sürükleme yalnızca taslağı değiştirir; **Uygula** ile seçim kesinleşir.
-- **Isı haritası:** her takvim günü seçili kaynağın günlük sayısını gösterir. Renk yoğunluğu (düşükten yükseğe) ile seçili aralık (amber çerçeve) birbirinden ayrılır. Her hücrenin erişilebilir adı tarihi, durumu ve sayıyı içerir; ekran okuyucu ve klavye odağı bu bilgiyi okur.
+- **Zaman çizelgesi:** gün, hafta veya ay çubukları (120 güne kadar günlük, 400 güne kadar haftalık, daha uzun aralıklarda aylık; Gün/Hafta/Ay düğmesiyle daha kaba bir boyut seçilebilir). İki tutamaç (başlangıç, bitiş) sürüklenebilir; klavyeyle (ok tuşları ±1 gün, Shift+ok ±7 gün, Home/End sınır) ve **−/+** düğmeleriyle de değiştirilebilir. Sürükleme yalnızca taslağı değiştirir; **Uygula** ile seçim kesinleşir.
+- **Isı haritası:** her takvim günü seçili kaynağın günlük sayısını gösterir. Takvim hücresi aynı zamanda ısı haritasıdır: yoğunluk 6 seviyedir, seçili aralık hücre altındaki çizgiyle, giriş/çıkış günleri koyu dolguyla gösterilir (yoğunluk ve seçim ayrı kanallardır). İpucu (tooltip) yalnızca fare üzerine gelince ve klavye odağında görünür; dokunmatikte gün bilgisi alt satırda gösterilir. Her hücrenin erişilebilir adı tarihi, durumu ve sayıyı içerir; ekran okuyucu ve klavye odağı bu bilgiyi okur.
 
 ### Gün durumları
 
@@ -84,12 +88,12 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 
 ## Dashboard
 
-- **Zaman içinde aktivite** kartı kendi tarih filtresine ve metrik seçicisine (pipeline çalıştırması, deployment, commit) sahiptir. Uzun aralıklar burada desteklenir.
+- **Zaman içinde aktivite** kartı global aralığı kullanır; kendi tarih filtresi yoktur. Isı haritasının kaynağını seçen metrik seçici (pipeline çalıştırması, deployment, commit) filtrenin içinde ve kartta bulunur; yalnızca ısı haritası kaynağını değiştirir, global aralığı değiştirmez.
 - **Anlık** durum kartları (aktif görevler, engellenen işler, bekleyen ve açık PR'lar) etiketlidir ve tarih filtresinden etkilenmez.
 
 ## Bilinen sınırlamalar
 
-- **Liste ekranları** hâlâ 90 gün ile sınırlıdır. Pipeline, Deployment, Team Activity ve My History listeleri tek istekte upstream çekildiği için aralıkları parçalı yüklenmemektedir.
+- **Liste ekranları** global aralığı (1096 güne kadar) olduğu gibi gönderir; parça parça (chunk) yükleme bu ekranlar için henüz tamamlanmamıştır, çok uzun aralıklarda yanıt yavaş olabilir (D3 kapsamında ele alınacaktır).
 - **My History** için aktivite görünümü yoktur.
 - **Dashboard'un dönemsel kartları** (CI/CD, deployment, takım özeti, geçmiş) hâlâ AppContext'teki sabit pencereleri kullanır; sayfa düzeyinde bir tarih filtresine bağlı değildir.
 - **Yerel senkronizasyonlar** (kayan pencere) kapsam kaydı yazmaz. Bu günler, bir takvim çekimi kapsayana kadar `not_collected` görünür.
@@ -106,5 +110,6 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 - `apps/web/src/services/dateRange.test.ts`: presetler, dönem seçimleri, sınır doğrulamaları.
 - `apps/web/src/services/activityDaily.test.ts`: sorgu sözleşmesi, demo fixture'ı, tüm gün durumları.
 - `apps/web/src/components/Common/dateRange/*.test.ts(x)`: görünüm modeli, heatmap/timeline etiketleri ve klavye, sürüklemenin istek üretmemesi, yoklama, eski yanıtın reddi.
-- `apps/web/src/components/Common/DateRangeFilter*.test.tsx`: sekmeler, presetler, Uygula/İptal, span sınırı, aktivite bölümü.
+- `apps/web/src/components/Common/DateRangeFilter*.test.tsx`: presetler (taslak), başlığa tıklayınca açılan ay/çeyrek/yıl seçici, sınırsız yıl gezintisi, mobil preset seçimi, elle giriş doğrulaması, Uygula/İptal, tooltip (fare/klavye) ve dokunmatik alt satır, global bağlam.
+- `apps/web/src/context/DateRangeContext.test.tsx`: varsayılan, kalıcılık, bozuk/sınır dışı kayıt, depolama hatası, isteksiz değişiklik.
 - `apps/web/src/components/Dashboard/DashboardActivityCard.test.tsx`: metrik seçici ve dönemsel etiket.

@@ -119,7 +119,7 @@ Geriye dönük uyumluluk için korunmuştur.
    - Toplam Pipeline, Toplam Koşum, Başarılı, Kırık/Hatalı, Devam Eden ve Başarı Oranı rozetleri.
 3. **Filtreler ve Zaman Seçici:**
    - Hızlı filtreler: *Tümü*, *Başarılı*, *Başarısız*.
-   - Zaman aralığı seçici: *Son 7 Gün* / *Son 30 Gün*.
+   - Zaman aralığı: üst çubuktaki global tarih filtresinden okunur (ayrıntılar için [Tarih aralığı filtresi](date-range-filter.md)).
    - Arama çubuğu (debounced 250ms).
 4. **Detay Paneli (`PipelineInspector.tsx`):**
    - Bir pipeline satırına tıklandığında sağdan açılır.
