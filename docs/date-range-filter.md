@@ -31,6 +31,19 @@ Takvim başlığına (ay adı) tıklamak **Ay / Çeyrek / Yıl** seçicisini aç
 - Bitiş bugünden ileri olamaz; sessiz kırpma yapılmaz, geçersiz aralık HTTP 400 ile reddedilir.
 - Tarihler UTC takvim günleridir. Yerel saat dilimi farkı gün sınırında bir günlük kaymaya yol açmaz.
 
+### Sınırların gerekçesi (sentetik ölçüm)
+
+Aşağıdaki sayılar `services/api/bench` altındaki sentetik karşılaştırmadan gelir (`python -m bench.bench_activity`, `services/api` dizininden): sahte upstream, üretilmiş veri (5 proje, proje ve ay başına 20 ya da 200 kayıt), geçici SQLite dosyası, çağrı başına 5 ms sahte gecikme, 2 işçili gerçek `ChunkJobRunner`. Bu makine ve bu yapay yük için geçerlidir; Azure DevOps ya da üretim başarımı hakkında bir söz değildir.
+
+- **Parça başına maliyet:** bir parça bir UTC ayıdır ve bir iş çalıştırır. İş 1 WIQL sorgusu ve ek olarak 200 kayıtlık her ayrıntı grubu için 1 GET yapar: ayda 20 kayıt/proje (toplam 100) için 2 istek, ayda 200 kayıt/proje (toplam 1000) için 6 istek. Soğuk önbellekte 1096 günlük pencere 37 parçada 74 (düşük hacim) ya da 222 (yüksek hacim) upstream isteği üretti; arka plan işi 5 ms gecikmeyle yaklaşık 0,5 s (düşük hacim) ve 1,2 s (yüksek hacim), 50 ms gecikmeyle yaklaşık 2,2 s'de bitti. Bu süre, isteklerin upstream'de beklediği süre arttıkça doğrusal büyür (parça sayısı x istek sayısı / 2 işçi); 429 geri çekilme beklemeleri sahte istemcide uyutulmadığı için bu süreye dahil değildir.
+- **1096 günde parça yayılımı:** en kötü durumda 37 parça (`MAX_CHUNKS = 37`). İş kuyruğu sınırı 64 olduğundan 37 parça tek istekte kuyruğa girer (kuyruk tepesi 37, reddedilen 0). Sınır 16'ya indirildiğinde aynı pencerede 21 parça `busy` ile reddedildi; reddedilen parçalar sonraki yenilemede yeniden denenir.
+- **Sıcak yol (tüm parçalar tam ve taze):** istek yalnızca yerel SQLite okur, upstream çağrısı ve iş başlatma yoktur. Ölçülen API yanıt süresi (p50 / p95): 365 günde 3,6 / 5,4 ms (düşük hacim) ve 10,5 / 16,6 ms (yüksek hacim); 1096 günde 9,3 / 10,9 ms (düşük hacim, 3700 satır) ve 29,9 / 32,3 ms (yüksek hacim, 37000 satır). Yerel `daily_counts` okuması 1096 günde p95 yaklaşık 6 ms (düşük) ve 23 ms (yüksek); yanıt süresinin kalanı gün sınıflandırması ve JSON üretimidir.
+- **Eşzamanlı aynı istekler:** 8 eşzamanlı aynı istek, 90 günde 4 parça için 4, 1096 günde 37 parça için 37 iş başlattı (parça başına bir; geri kalan gönderimler birleştirildi, upstream sorgusu parça başına 1).
+- **429 davranışı:** `Retry-After: 0` aynı istek bütçesinde yeniden denenir (2 hata sonrası başarı: parça başına en çok 3 yeniden deneme, iş `done`). `Retry-After: 90` süreç içinde beklenmez (uyku sayısı 0, parça başına 1 istek) ve parça `deferred` olarak ertelenir.
+- **1096 gün:** ölçüm bu sınırı destekler: soğuk dolum arka planda kalır (API yanıtı yaklaşık 13 ms), sıcak yol 1096 günde en kötü ölçümde p95 yaklaşık 32 ms'dir. Sabit değiştirilmedi.
+- **3650 gün (yaş sınırı):** bu sınır bir başarım ölçümünden değil, kapsam kaydının (ledger) saklama ufku varsayımından gelir: yaklaşık on yıllık geçmiş, `ACTIVITY_RETENTION_DAYS` ile daraltılabilen üst sınırdır. Azure DevOps'un gerçek saklama süresi hakkında bir iddia değildir. Yaş sınırı parça sayısını artırmaz (pencere en çok 1096 gün olduğundan parça yayılımı hep en çok 37'dir), bu yüzden karşılaştırma bu sınırı ayrıca zorlamaz; sentetik veri bu sayıyı doğrulamaz ya da çürütmez. Sabit değiştirilmedi.
+- **Ölçümde görülen sınırlama:** `pipelines` metriğinin proje kapsamlı okuması hiçbir zaman `complete` sonucu vermez (`cacheStatus.complete` her zaman yanlıştır), bu yüzden pipeline parçaları kapsam kaydında `partial` kalır ve her yenilemede yeniden çekilir (sıcak yolu yoktur). Bu karşılaştırma yalnızca bunu gözlemler; düzeltme bu çalışmanın kapsamında değildir.
+
 ## Aktivite görünümü
 
 Picker içinde iki bileşen bulunur:
@@ -108,6 +121,7 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 - `services/api/test_coverage_ledger.py`: kısmi yenileme `complete` kaydı düşürmez, başarısız deneme kapsamı değiştirmez, kapsam izolasyonu, tazelik TTL'i.
 - `services/api/test_activity_service.py`: gün sınıflandırması, sıfır ile toplanmamış ayrımı, saklama süresi, yıl sonu ve artık gün.
 - `services/api/test_activity_jobs.py`: birleştirme, eşzamanlılık sınırı (2), bekleyen sınırı, hata sınıfı kaydı, durum hesabı.
+- `services/api/test_bench_harness.py`: sentetik karşılaştırma sayaçları (sahte upstream çağrı sayımı, birleştirme sayacı, kuyruk tepesi); zamanlamalar doğrulanmaz.
 - `services/api/test_activity_api.py`: 400 doğrulamaları, `mode=cache` upstream çağırmaz, eksik parçalar için iş başlatma, kısmi yanıtın sıfır üretmemesi, PAT'in yanıtta olmaması.
 - `apps/web/src/services/dateRange.test.ts`: presetler, dönem seçimleri, sınır doğrulamaları.
 - `apps/web/src/services/activityDaily.test.ts`: sorgu sözleşmesi, demo fixture'ı, tüm gün durumları.
