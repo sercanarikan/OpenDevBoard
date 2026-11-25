@@ -98,7 +98,18 @@ function emitNetwork(event: { ok: boolean; error?: ApiError }) {
 }
 
 /** GET + JSON with a timeout that composes with the caller's AbortSignal (a superseded request aborts cleanly). */
-export async function getJson<T>(path: string, query?: URLSearchParams, signal?: AbortSignal, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+/**
+ * `reportNetwork: false` keeps a secondary request out of the global connection status: its timeouts and
+ * successes neither mark the backend unreachable nor refresh the recent-response shortcut.
+ */
+export async function getJson<T>(
+  path: string,
+  query?: URLSearchParams,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  options: { reportNetwork?: boolean } = {}
+): Promise<T> {
+  const reportNetwork = options.reportNetwork !== false;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onAbort = () => controller.abort();
@@ -128,11 +139,14 @@ export async function getJson<T>(path: string, query?: URLSearchParams, signal?:
       });
     }
     const body = (await res.json()) as T;
-    lastResponseAt = Date.now();
-    emitNetwork({ ok: true });
+    if (reportNetwork) {
+      lastResponseAt = Date.now();
+      emitNetwork({ ok: true });
+    }
     return body;
   } catch (err: any) {
     if (err instanceof ApiError) {
+      if (!reportNetwork) throw err;
       // A cold PR snapshot is an intentional loading response; a 503 otherwise still means the backend is unavailable.
       if (err.isLoading) {
         lastResponseAt = Date.now();
@@ -149,7 +163,7 @@ export async function getJson<T>(path: string, query?: URLSearchParams, signal?:
       err?.name === 'AbortError'
         ? new ApiError('timeout', 0, { isNetwork: true })
         : new ApiError(err?.message || 'network error', 0, { isNetwork: true });
-    emitNetwork({ ok: false, error: apiErr });
+    if (reportNetwork) emitNetwork({ ok: false, error: apiErr });
     throw apiErr;
   } finally {
     clearTimeout(timer);
@@ -470,5 +484,5 @@ export const liveApi: WorkItemsApi = {
 
 /** Per-day activity counts with coverage states. `mode=cache` never starts upstream work. */
 export function fetchActivityDaily(params: ActivityDailyParams, signal?: AbortSignal): Promise<ActivityDailyResponse> {
-  return getJson<ActivityDailyResponse>('/activity/daily', activityQuery(params), signal, 30_000);
+  return getJson<ActivityDailyResponse>('/activity/daily', activityQuery(params), signal, 30_000, { reportNetwork: false });
 }

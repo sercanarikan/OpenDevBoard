@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DateRangeFilter } from '../Common/DateRangeFilter';
 import { ActivityHeatmap } from '../Common/dateRange/ActivityHeatmap';
@@ -17,16 +17,19 @@ export function DashboardActivityCard() {
   const [metric, setMetric] = useState<ActivityMetric>('pipelines');
   const [range, setRange] = useState<DateRangeSelection>(() => presetSelection(DEFAULT_DATE_RANGE_PRESET, utcTodayKey()));
   const bounds = selectionBounds(range, utcTodayKey());
+  const cardRef = useRef<HTMLElement>(null);
+  // The card is secondary to the status feeds, so its first request waits until the card is actually on screen.
+  const visible = useVisibility(cardRef);
   const { data, error, loading } = useActivityDaily({
     metric,
     startDate: bounds.startDate,
     endDate: bounds.endDate,
     mode: 'refresh',
-    enabled: true,
+    enabled: visible,
   });
 
   return (
-    <section data-testid="dash-activity-card" className="bg-white dark:bg-[#0E131F] rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xs">
+    <section ref={cardRef} data-testid="dash-activity-card" className="bg-white dark:bg-[#0E131F] rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xs">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">{t('activityCard.title')}</h2>
@@ -70,4 +73,26 @@ export function DashboardActivityCard() {
       ) : null}
     </section>
   );
+}
+
+/** True once the element has intersected the viewport. Without IntersectionObserver the element counts as visible. */
+function useVisibility(ref: RefObject<HTMLElement | null>): boolean {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return visible;
 }
