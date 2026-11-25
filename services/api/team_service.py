@@ -503,6 +503,23 @@ def _sync_calendar_team_activity(org_url: str, pat: str, window: DateWindow) -> 
     }
 
 
+def load_local_team_commits(conn: sqlite3.Connection, projects: List[str], window: DateWindow) -> List[Dict[str, Any]]:
+    """Cache-only read: commits in the window for the given project set. Never touches upstream.
+
+    Membership uses team_commits.date (the upstream commit author date) only.
+    """
+    projects = [p for p in projects if p]
+    if not projects:
+        return []
+    conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" for _ in projects)
+    rows = conn.execute(
+        f"SELECT * FROM team_commits WHERE project IN ({placeholders}) ORDER BY date DESC",
+        projects,
+    ).fetchall()
+    return [c for c in (_row_to_commit_dict(row) for row in rows) if _window_matches(c.get("date"), window)]
+
+
 def _window_matches(date_str: Optional[str], window: DateWindow) -> bool:
     """Window membership for a timestamp string. Rolling keeps the historical lower-bound-only semantics."""
     if not window.is_calendar:

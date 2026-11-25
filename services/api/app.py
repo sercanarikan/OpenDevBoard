@@ -560,6 +560,16 @@ def _load_all_team_activity(days=30, force_refresh=False, window=None):
     window = window or date_window.rolling_window(days)
     if sync_service.is_fixture_mode():
         return team_service.build_fixture_team_activity()
+    if window.is_calendar:
+        # Commits answer from the local cache now (missing chunks fetched in the background). Pull requests are not
+        # persisted yet (D4), so that portion stays on the live path and can only degrade completeness.
+        mode = (request.args.get('mode') or 'refresh').strip().lower()
+        data = _team_commits_cache_first(window, refresh=(mode != 'cache'))
+        prs, prs_ok = _team_live_pull_requests(window)
+        data["pullRequests"] = prs
+        if not prs_ok:
+            data["cacheStatus"] = {**data["cacheStatus"], "complete": False, "stale": True, "outcome": "partial"}
+        return data
     org_url = get_devops_org_url()
     pat = get_devops_pat()
     return _live_flights.run(('team',) + window.key + (force_refresh,), lambda: team_service.sync_live_team_activity(org_url, pat, days=window.days, force_refresh=force_refresh, **_window_kw(window)))
@@ -659,8 +669,11 @@ def get_team_activity():
             "totalCommits": summary["totalCommits"],
             "totalPRs": summary["totalPRs"],
             "activeContributors": summary["activeContributors"],
-            "cacheStatus": _team_activity_cache_status(data)
+            "cacheStatus": _team_activity_cache_status(data),
+            **({"job": data["job"]} if data.get("job") else {})
         }), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_team_activity: {e}", exc_info=True)
         return jsonify({"error": str(e), "total_commits": 0, "total_prs": 0, "contributors_count": 0}), 500
@@ -677,7 +690,9 @@ def get_team_activity_summary():
         repository = request.args.get('repository')
         data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
         summary = team_service.compute_team_summary(data["commits"], data["pullRequests"], project=project, repository=repository, **_range_kwargs(window))
-        return jsonify({**summary, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
+        return jsonify({**summary, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta(), **({"job": data["job"]} if data.get("job") else {})}), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_summary: {e}", exc_info=True)
         return jsonify({"error": str(e), "totalCommits": 0, "activeContributors": 0}), 500
@@ -692,7 +707,9 @@ def get_team_activity_contributors():
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
         res = team_service.query_contributors(data["commits"], data["pullRequests"], request.args, window=window)
-        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
+        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta(), **({"job": data["job"]} if data.get("job") else {})}), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_contributors: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -707,7 +724,9 @@ def get_team_activity_commits():
         force_refresh = request.args.get('refresh', '').lower() == 'true'
         data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
         res = team_service.query_commits(data["commits"], request.args, window=window)
-        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
+        return jsonify({**res, "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta(), **({"job": data["job"]} if data.get("job") else {})}), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_commits: {e}", exc_info=True)
         return jsonify({"error": str(e), "items": [], "total": 0}), 500
@@ -723,7 +742,9 @@ def get_team_activity_repositories():
         project = request.args.get('project')
         data = _load_all_team_activity(**_range_kwargs(window), force_refresh=force_refresh)
         repos = team_service.compute_repository_activity(data["commits"], data["pullRequests"], project=project)
-        return jsonify({"repositories": repos, "total": len(repos), "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta()}), 200
+        return jsonify({"repositories": repos, "total": len(repos), "cacheStatus": _team_activity_cache_status(data), "window": window.to_meta(), **({"job": data["job"]} if data.get("job") else {})}), 200
+    except ProjectListUnavailable:
+        return jsonify({"error": "project list is unavailable"}), 503
     except Exception as e:
         app.logger.error(f"Error in get_team_activity_repositories: {e}", exc_info=True)
         return jsonify({"error": str(e), "repositories": []}), 500
@@ -832,6 +853,76 @@ def _deployment_cache_first(window, refresh=True):
         "source": "local-cache",
     }
     return {"items": deps, "cacheStatus": cache_status, "job": job}
+
+
+def _team_commits_cache_first(window, refresh=True):
+    """Calendar team commits: local rows plus coverage and job state; upstream work only via chunk jobs.
+
+    Commit membership uses team_commits.date (upstream commit author date) only. Team activity pull requests are not
+    persisted yet (D4 adds that), so the PR portion stays on the live path in _load_all_team_activity.
+    """
+    chunks = activity_chunks.plan_month_chunks(window)
+    org_url = get_devops_org_url()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    runner = _get_activity_runner()
+    busy_refusals = 0
+    conn = persistence.get_db_connection()
+    try:
+        project_scope.init_project_scope_db(conn)
+        if refresh:
+            try:
+                projects = sorted({p.get('name') for p in get_projects_data() if p.get('name')})
+            except Exception:
+                raise ProjectListUnavailable()
+            project_scope.save_project_set(conn, org_url, projects, now.isoformat(timespec="seconds") + "Z")
+        else:
+            projects = project_scope.load_project_set(conn, org_url) or []
+        scope = coverage_ledger.scope_key(org_url, projects)
+        keys = [activity_chunks.chunk_key(chunk) for chunk in chunks]
+        coverage = coverage_ledger.read_coverage(conn, scope, 'commits', keys)
+        if refresh:
+            fetchers = activity_jobs.build_live_fetchers(org_url, get_devops_org_name(), get_devops_pat())
+            for chunk in chunks:
+                row = coverage.get(activity_chunks.chunk_key(chunk))
+                needs_fetch = row is None or row['coverage'] != coverage_ledger.COVERAGE_COMPLETE or (
+                    coverage_ledger.freshness(row['fetchedAt'], row['chunkEnd'], now=now) == coverage_ledger.STALE
+                )
+                if needs_fetch and runner.submit(scope, 'commits', chunk, fetchers['commits']) == activity_jobs.BUSY:
+                    busy_refusals += 1
+        job = {**runner.status(scope, 'commits', keys), "busy": busy_refusals}
+        commits = team_service.load_local_team_commits(conn, projects, window)
+    finally:
+        conn.close()
+    counts = {"complete": 0, "partial": 0, "missing": 0}
+    for key in keys:
+        row = coverage.get(key)
+        if row is None:
+            counts["missing"] += 1
+        elif row['coverage'] == coverage_ledger.COVERAGE_COMPLETE:
+            counts["complete"] += 1
+        else:
+            counts["partial"] += 1
+    complete = counts["partial"] == 0 and counts["missing"] == 0
+    cache_status = {
+        "outcome": "complete" if complete else "partial",
+        "complete": complete,
+        "stale": not complete,
+        "coverage": counts,
+        "source": "local-cache",
+    }
+    return {"commits": commits, "cacheStatus": cache_status, "job": job}
+
+
+def _team_live_pull_requests(window):
+    """Team activity PRs are not persisted until D4, so calendar requests keep fetching them live."""
+    report = {}
+    try:
+        prs = team_service._load_live_prs_summary_only(
+            get_devops_org_url(), get_devops_pat(), window.days, window=window, report=report)
+    except Exception as e:
+        app.logger.warning("Live team pull request fetch failed: %s", e)
+        return [], False
+    return prs, not report.get("incomplete")
 
 
 def _load_all_pipelines(days=30, force_refresh=False, window=None):
