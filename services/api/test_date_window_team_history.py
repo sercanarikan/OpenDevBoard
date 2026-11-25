@@ -207,6 +207,62 @@ class TestCalendarSync(unittest.TestCase):
         self.assertEqual(result["cacheStatus"]["outcome"], "partial")
         self.assertFalse(result["cacheStatus"]["complete"])
 
+    def _pr(self, pr_id):
+        return {"pullRequestId": pr_id, "creationDate": "2028-02-01T08:00:00Z", "title": f"PR {pr_id}",
+                "createdBy": {"displayName": "Ada"}, "repository": {"name": "R", "project": {"name": "P"}}}
+
+    def _pr_get(self, second_page):
+        """First PR page is full (200 items); the second page is produced by ``second_page``."""
+        first = [self._pr(i) for i in range(200)]
+
+        def get(url, **kwargs):
+            if "/pullrequests" in url:
+                if "$skip=200" in url:
+                    return second_page()
+                return _response({"value": first})
+            return _response({"value": []})
+        return get
+
+    def _live_prs(self, get):
+        report = {}
+        with patch.object(team_service.feature_context, "get_devops_headers", return_value={}), \
+                patch.object(team_service.azure_http, "get", side_effect=get), \
+                patch.object(team_service, "_utcnow", return_value=NOW):
+            prs = team_service._load_live_prs_summary_only(
+                "https://dev.azure.com/org", "unused", 30, window=self.window, report=report)
+        return prs, report
+
+    def test_calendar_pr_page_cap_marks_the_result_partial(self):
+        def get(url, **kwargs):
+            return _response({"value": [self._pr(i) for i in range(200)]})
+        with patch.object(team_service, "CALENDAR_MAX_PAGES", 2):
+            _prs, report = self._live_prs(get)
+        self.assertTrue(report["incomplete"])
+
+    def test_calendar_pr_second_page_http_error_is_partial_and_keeps_first_page(self):
+        prs, report = self._live_prs(self._pr_get(lambda: _response({"message": "boom"}, status=500)))
+        self.assertTrue(report["incomplete"])
+        self.assertEqual(len(prs), 200, "records from the successful first page must be kept")
+
+    def test_calendar_pr_second_page_timeout_is_partial_and_keeps_first_page(self):
+        def timeout():
+            raise TimeoutError("read timed out")
+        prs, report = self._live_prs(self._pr_get(timeout))
+        self.assertTrue(report["incomplete"])
+        self.assertEqual(len(prs), 200)
+
+    def test_calendar_pr_first_page_timeout_is_partial_not_complete(self):
+        def get(url, **kwargs):
+            raise TimeoutError("read timed out")
+        prs, report = self._live_prs(get)
+        self.assertTrue(report["incomplete"])
+        self.assertEqual(prs, [])
+
+    def test_calendar_pr_short_page_is_complete(self):
+        prs, report = self._live_prs(lambda url, **kw: _response({"value": [self._pr(1)]}))
+        self.assertFalse(report["incomplete"])
+        self.assertEqual(len(prs), 1)
+
     def test_calendar_commit_second_page_failure_is_partial_and_keeps_true_records(self):
         first = [_commit(f"k{i}", "2028-02-01T08:00:00Z") for i in range(team_service.CALENDAR_PAGE_SIZE)]
 
