@@ -652,7 +652,8 @@ def get_team_activity():
             if c["authoredPRs"] > 0
         ]
         top_reviewers = [
-            {"name": c["name"], "count": c["reviewsCount"]}
+            # "count" is kept for API compatibility; it counts reviewer assignments, not review events.
+            {"name": c["name"], "count": c["reviewsCount"], "reviewerAssignments": c["reviewsCount"]}
             for c in sorted(summary["contributors"], key=lambda x: x["reviewsCount"], reverse=True)[:10]
             if c["reviewsCount"] > 0
         ]

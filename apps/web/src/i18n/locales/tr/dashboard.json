@@ -80,14 +80,11 @@
     "goToTeam": "Ekip Aktivitesi",
     "goToHistory": "Geçmişim"
   },
-  "activityCard": {
-    "title": "Zaman içinde aktivite",
-    "subtitle": "Toplanmış verilerden UTC günü başına sayılar. Toplanmamış günler sıfır olarak gösterilmez.",
-    "periodBadge": "Tarih filtresi bu kartı etkiler",
-    "coverage": "{{partial}} kısmen toplanmış gün · {{notCollected}} gün henüz toplanmadı"
+  "live": {
+    "badge": "Güncel durum",
+    "hint": "Güncel durum; tarih filtresinden etkilenmez"
   },
-  "scope": {
-    "instant": "Anlık",
-    "instantHint": "Güncel durum; tarih filtresinden etkilenmez"
+  "period": {
+    "hint": "Tarih filtresi dönemi"
   }
 }

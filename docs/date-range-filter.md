@@ -5,7 +5,7 @@ Uygulamada **tek bir global tarih filtresi** vardır; üst çubukta (header) bul
 Filtre iki tüketici için çalışır:
 
 - **Liste ekranları** (Pipeline Health, Deployment Metrics, Team Activity, My History): global aralığı okur ve kendi isteğini yapar. Aralık değişince sayfa 1'e döner; geç gelen eski yanıt yeni seçimi ezmez.
-- **Aktivite görünümleri** (Dashboard'daki "Zaman içinde aktivite" kartı): günlük sayılar yerel kapsam kaydından (coverage ledger) okunur. Seçilebilecek en uzun aralık **1096 gün**dür (üç yıl). Uzun aralıklar parça parça (ay bazında) ve arka planda çekilir.
+- **Aktivite görünümleri** (filtrenin içindeki ısı haritası ve zaman çizelgesi): günlük sayılar yerel kapsam kaydından (coverage ledger) okunur. Seçilebilecek en uzun aralık **1096 gün**dür (üç yıl). Uzun aralıklar parça parça (ay bazında) ve arka planda çekilir.
 
 ## Presetler
 
@@ -33,7 +33,7 @@ Takvim başlığına (ay adı) tıklamak **Ay / Çeyrek / Yıl** seçicisini aç
 
 ## Aktivite görünümü
 
-Picker içinde (ve dashboard kartında) iki bileşen bulunur:
+Picker içinde iki bileşen bulunur:
 
 - **Zaman çizelgesi:** gün, hafta veya ay çubukları (120 güne kadar günlük, 400 güne kadar haftalık, daha uzun aralıklarda aylık; Gün/Hafta/Ay düğmesiyle daha kaba bir boyut seçilebilir). İki tutamaç (başlangıç, bitiş) sürüklenebilir; klavyeyle (ok tuşları ±1 gün, Shift+ok ±7 gün, Home/End sınır) ve **−/+** düğmeleriyle de değiştirilebilir. Sürükleme yalnızca taslağı değiştirir; **Uygula** ile seçim kesinleşir.
 - **Isı haritası:** her takvim günü seçili kaynağın günlük sayısını gösterir. Takvim hücresi aynı zamanda ısı haritasıdır: yoğunluk 6 seviyedir, seçili aralık hücre altındaki çizgiyle, giriş/çıkış günleri koyu dolguyla gösterilir (yoğunluk ve seçim ayrı kanallardır). İpucu (tooltip) yalnızca fare üzerine gelince ve klavye odağında görünür; dokunmatikte gün bilgisi alt satırda gösterilir. Her hücrenin erişilebilir adı tarihi, durumu ve sayıyı içerir; ekran okuyucu ve klavye odağı bu bilgiyi okur.
@@ -88,14 +88,14 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 
 ## Dashboard
 
-- **Zaman içinde aktivite** kartı global aralığı kullanır; kendi tarih filtresi yoktur. Isı haritasının kaynağını seçen metrik seçici (pipeline çalıştırması, deployment, commit) filtrenin içinde ve kartta bulunur; yalnızca ısı haritası kaynağını değiştirir, global aralığı değiştirmez.
-- **Anlık** durum kartları (aktif görevler, engellenen işler, bekleyen ve açık PR'lar) etiketlidir ve tarih filtresinden etkilenmez.
+- Dönemsel kartlar (CI/CD sağlığı, deployment özeti, takım aktivitesi özeti, geçmişim) global aralığı kullanır ve kartın başında uygulanan dönemi gösterir. Takvim aralıklarında pipeline ve deployment kartları önce önbellekten okur; arka plan toplama bildirimi gösterilir. Ayrı bir "Zaman içinde aktivite" kartı yoktur; metrik seçici yalnızca global filtrenin içindedir.
+- **Anlık** durum kartları (aktif görevler, engellenen işler, bekleyen ve açık PR'lar) "Güncel durum" rozetiyle etiketlidir ve tarih filtresinden etkilenmez.
 
 ## Bilinen sınırlamalar
 
 - **Liste ekranları** global aralığı (1096 güne kadar) olduğu gibi gönderir; parça parça (chunk) yükleme bu ekranlar için henüz tamamlanmamıştır, çok uzun aralıklarda yanıt yavaş olabilir (D3 kapsamında ele alınacaktır).
 - **My History** için aktivite görünümü yoktur.
-- **Dashboard'un dönemsel kartları** (CI/CD, deployment, takım özeti, geçmiş) hâlâ AppContext'teki sabit pencereleri kullanır; sayfa düzeyinde bir tarih filtresine bağlı değildir.
+- **Dashboard takım özeti ve geçmiş kartları** takvim aralığında arka plan toplama bildirimi göstermez ve yoklama yapmaz; ilk yanıtı gösterir.
 - **Yerel senkronizasyonlar** (kayan pencere) kapsam kaydı yazmaz. Bu günler, bir takvim çekimi kapsayana kadar `not_collected` görünür.
 - `ACTIVITY_RETENTION_DAYS` tanımlı değilse `unavailable_retention` hiç üretilmez; geçmiş verinin varlığı iddia edilmez.
 
@@ -112,4 +112,4 @@ Her anlamın kapsam kaydı ayrıdır. `GET /api/pull-requests` ve `/api/pull-req
 - `apps/web/src/components/Common/dateRange/*.test.ts(x)`: görünüm modeli, heatmap/timeline etiketleri ve klavye, sürüklemenin istek üretmemesi, yoklama, eski yanıtın reddi.
 - `apps/web/src/components/Common/DateRangeFilter*.test.tsx`: presetler (taslak), başlığa tıklayınca açılan ay/çeyrek/yıl seçici, sınırsız yıl gezintisi, mobil preset seçimi, elle giriş doğrulaması, Uygula/İptal, tooltip (fare/klavye) ve dokunmatik alt satır, global bağlam.
 - `apps/web/src/context/DateRangeContext.test.tsx`: varsayılan, kalıcılık, bozuk/sınır dışı kayıt, depolama hatası, isteksiz değişiklik.
-- `apps/web/src/components/Dashboard/DashboardActivityCard.test.tsx`: metrik seçici ve dönemsel etiket.
+- `apps/web/src/components/Dashboard/DashboardOverview.test.tsx`: dönemsel kartlarda aralık etiketi, anlık kartlarda "Güncel durum" rozeti, ayrı aktivite kartının olmaması.

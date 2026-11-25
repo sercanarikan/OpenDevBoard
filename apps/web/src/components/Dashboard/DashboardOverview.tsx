@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   UserCheck,
@@ -23,7 +23,6 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { pullRequestsPath } from '../../utils/prFilter';
 import { useApp } from '../../context/useApp';
-import { DashboardActivityCard } from './DashboardActivityCard';
 import type { WorkItem, ViewMode } from '../../types';
 import type { PullRequest, HistoryEvent, TeamActivitySummary } from '../../types/paging';
 import { PriorityBadge, TypeBadge } from '../Common/Badge';
@@ -35,6 +34,34 @@ import { stateLabel } from '../../i18n/labels';
 import { getIntegrationState } from '../../utils/integrationStatus';
 import { seedFor, taskFeedScope } from '../../utils/dashboardFeedCache';
 import { getPipelineNotice } from '../../utils/pipelineNotice';
+import { useDateRange } from '../../context/useDateRange';
+import { useCacheJob } from '../../hooks/useCacheJob';
+import { CacheJobNotice } from '../Common/CacheJobNotice';
+import { formatDayLabel } from '../../services/dateRange';
+import type { PipelineSummary, DeploymentSummary } from '../../types/paging';
+
+/** Text badge naming the global range a period card covers. */
+const PeriodLabel: React.FC = () => {
+  const { t, i18n } = useTranslation(['dashboard', 'dateRange']);
+  const { range, bounds } = useDateRange();
+  const locale = i18n.language || 'en';
+  const dates = bounds.startDate === bounds.endDate
+    ? formatDayLabel(bounds.startDate, locale)
+    : `${formatDayLabel(bounds.startDate, locale)} – ${formatDayLabel(bounds.endDate, locale)}`;
+  return (
+    <span data-testid="dash-period-label" title={t('period.hint', { ns: 'dashboard' })} className="inline-block rounded-full bg-brand-50 dark:bg-brand-900/40 px-2 py-0.5 text-[10px] font-semibold text-brand-700 dark:text-brand-300">
+      {t(`presets.${range.preset}`, { ns: 'dateRange' })} · {dates}
+    </span>
+  );
+};
+
+/** Text badge for cards that always show the present state, whatever the date filter says. */
+const LiveBadge: React.FC = () => {
+  const { t } = useTranslation('dashboard');
+  return (
+    <span data-testid="dash-live-badge" className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('live.hint')}>{t('live.badge')}</span>
+  );
+};
 
 type LoadState = { request: object; error: string | null; successfulScope?: string };
 
@@ -51,14 +78,8 @@ export const DashboardOverview: React.FC = () => {
     prSummary,
     prSummaryLoading,
     prSummaryError,
-    pipelineSummary,
-    pipelineSummaryLoading,
-    pipelineSummaryError,
     selectedPipelineRun,
     setSelectedPipelineRun,
-    deploymentSummary,
-    deploymentSummaryLoading,
-    deploymentSummaryError,
     selectedDeployment,
     setSelectedDeployment,
     currentUserName,
@@ -73,12 +94,16 @@ export const DashboardOverview: React.FC = () => {
   } = useApp();
 
   const navigate = useNavigate();
+  // Period cards follow the global date range; live status cards keep their own fetches.
+  const { query: rangeQuery, selectionKey: rangeKey } = useDateRange();
+  // History and team feeds are scoped by project and applied range, so a cached result never shows under another range.
+  const periodScope = JSON.stringify([filters.selectedProject, rangeKey]);
   // Cards start from the last result for the same scope, so coming back to the dashboard never shows an empty
   // spinner; the request below refreshes them in the background.
   const seedTasks = seedFor(feeds, 'tasks', taskFeedScope(filters.selectedProject, currentUserName));
   const seedPRs = seedFor(feeds, 'prs', filters.selectedProject);
-  const seedHistory = seedFor(feeds, 'history', filters.selectedProject);
-  const seedTeam = seedFor(feeds, 'team', filters.selectedProject);
+  const seedHistory = seedFor(feeds, 'history', periodScope);
+  const seedTeam = seedFor(feeds, 'team', periodScope);
   const seededState = (scope?: string): LoadState | null => (scope === undefined ? null : { request: {}, error: null, successfulScope: scope });
 
   const [priorityItems, setPriorityItems] = useState<WorkItem[]>(() => seedTasks?.priority ?? []);
@@ -95,14 +120,31 @@ export const DashboardOverview: React.FC = () => {
 
   const [refreshNonce, setRefreshNonce] = useState(0);
 
+  // Calendar ranges are cache-first: the hook re-polls while the backend collects in the background.
+  const periodKey = useMemo(
+    () => JSON.stringify([rangeQuery, filters.selectedProject, refreshToken, refreshNonce]),
+    [rangeQuery, filters.selectedProject, refreshToken, refreshNonce]
+  );
+  const poll = 'startDate' in rangeQuery;
+  const fetchPipelineSummary = useCallback((signal: AbortSignal) => api.pipelinesSummary(rangeQuery, filters.selectedProject, signal), [api, rangeQuery, filters.selectedProject]);
+  const fetchDeploymentSummary = useCallback((signal: AbortSignal) => api.deploymentsSummary(rangeQuery, filters.selectedProject, signal), [api, rangeQuery, filters.selectedProject]);
+  const pipelineJob = useCacheJob<PipelineSummary>({ requestKey: `pipelines:${periodKey}`, fetch: fetchPipelineSummary, poll, enabled: !booting, keepPrevious: true });
+  const deploymentJob = useCacheJob<DeploymentSummary>({ requestKey: `deployments:${periodKey}`, fetch: fetchDeploymentSummary, poll, enabled: !booting, keepPrevious: true });
+  const pipelineSummary = pipelineJob.data;
+  const pipelineSummaryLoading = pipelineJob.loading;
+  const pipelineSummaryError = pipelineJob.error;
+  const deploymentSummary = deploymentJob.data;
+  const deploymentSummaryLoading = deploymentJob.loading;
+  const deploymentSummaryError = deploymentJob.error;
+
   // Each panel settles independently; keep successful data only within its original scope.
-  const request = useMemo(() => ({ api, project: filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce }),
-    [api, filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce]);
+  const request = useMemo(() => ({ api, project: filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce, rangeQuery, periodScope }),
+    [api, filters.selectedProject, currentUserName, booting, refreshToken, refreshNonce, rangeQuery, periodScope]);
   const taskScope = JSON.stringify([request.project, request.currentUserName]);
   const tasksAvailable = !!currentUserName && tasksState?.successfulScope === taskScope;
   const prsAvailable = prsState?.successfulScope === request.project;
-  const historyAvailable = historyState?.successfulScope === request.project;
-  const teamAvailable = teamState?.successfulScope === request.project;
+  const historyAvailable = historyState?.successfulScope === periodScope;
+  const teamAvailable = teamState?.successfulScope === periodScope;
   const loadingTasks = booting ? !tasksAvailable : !!currentUserName && tasksState?.request !== request;
   const loadingPRs = booting ? !prsAvailable : prsState?.request !== request;
   const loadingHistory = booting ? !historyAvailable : historyState?.request !== request;
@@ -114,7 +156,7 @@ export const DashboardOverview: React.FC = () => {
   useEffect(() => {
     if (request.booting) return;
     const ctrl = new AbortController();
-    const { api, project, currentUserName } = request;
+    const { api, project, currentUserName, rangeQuery, periodScope } = request;
     const scope = JSON.stringify([project, currentUserName]);
 
     if (currentUserName) {
@@ -152,23 +194,23 @@ export const DashboardOverview: React.FC = () => {
         setPrsState(prev => ({ request, error: e?.message || 'Failed to load pending reviews', successfulScope: prev?.successfulScope }));
       });
 
-    api.myHistoryTimeline({ limit: 5, project }, ctrl.signal)
+    api.myHistoryTimeline({ limit: 5, project, ...rangeQuery }, ctrl.signal)
       .then(res => {
         if (ctrl.signal.aborted) return;
         setRecentEvents(res.items);
-        feeds.history = { scope: project, items: res.items };
-        setHistoryState({ request, error: null, successfulScope: project });
+        feeds.history = { scope: periodScope, items: res.items };
+        setHistoryState({ request, error: null, successfulScope: periodScope });
       }, (e: any) => {
         if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
         setHistoryState(prev => ({ request, error: null, successfulScope: prev?.successfulScope }));
       });
 
-    api.teamActivitySummary(7, project, ctrl.signal)
+    api.teamActivitySummary(rangeQuery, project, ctrl.signal)
       .then(res => {
         if (ctrl.signal.aborted) return;
         setTeamSnapshot(res);
-        feeds.team = { scope: project, snapshot: res };
-        setTeamState({ request, error: null, successfulScope: project });
+        feeds.team = { scope: periodScope, snapshot: res };
+        setTeamState({ request, error: null, successfulScope: periodScope });
       }, (e: any) => {
         if (ctrl.signal.aborted || e?.name === 'AbortError' || e?.isAbort) return;
         setTeamState(prev => ({ request, error: 'failed', successfulScope: prev?.successfulScope }));
@@ -288,7 +330,7 @@ export const DashboardOverview: React.FC = () => {
               </span>
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.myTasks')}
-                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
+                <LiveBadge />
               </div>
               <div className="text-[11px] text-slate-400 truncate">
                 {t('cards.myTasksDesc')}
@@ -314,7 +356,7 @@ export const DashboardOverview: React.FC = () => {
               </span>
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.blockedTasks')}
-                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
+                <LiveBadge />
               </div>
               <div className="text-[11px] text-slate-400 truncate">
                 {t('cards.blockedTasksDesc')}
@@ -341,7 +383,7 @@ export const DashboardOverview: React.FC = () => {
               {prSummaryError && <span className="sr-only" data-testid="dash-pr-summary-error">{prSummaryError}</span>}
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.pendingPRs')}
-                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
+                <LiveBadge />
               </div>
               <div role={prSummaryError ? 'alert' : undefined} className="text-[11px] text-slate-400 truncate">
                 {prSummaryError || (prIdentityRefreshing
@@ -374,7 +416,7 @@ export const DashboardOverview: React.FC = () => {
               {prSummaryError && <span className="sr-only" data-testid="dash-pr-summary-error">{prSummaryError}</span>}
               <div className="font-semibold text-xs text-slate-700 dark:text-slate-300">
                 {t('cards.myOpenPRs')}
-                <span className="ml-1.5 align-middle rounded-full bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" title={t('scope.instantHint')}>{t('scope.instant')}</span>
+                <LiveBadge />
               </div>
               <div role={prSummaryError ? 'alert' : undefined} className="text-[11px] text-slate-400 truncate">
                 {prSummaryError || (prCacheStale
@@ -527,8 +569,6 @@ export const DashboardOverview: React.FC = () => {
             <p className="text-[11px] text-slate-400">{t('sections.cicdHealthDesc')}</p>
           </div>
 
-          <DashboardActivityCard />
-
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Pipelines Health Card */}
             <div data-testid="dash-pipeline-card" className="bg-white dark:bg-[#0E131F] rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xs flex flex-col justify-between">
@@ -536,6 +576,7 @@ export const DashboardOverview: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <PlayCircle className="w-4 h-4 text-sky-500" />
                   <span className="font-bold text-xs text-slate-900 dark:text-slate-100">{t('sections.pipelineStatus')}</span>
+                  <PeriodLabel />
                   {pipelineRefreshing && (
                     <span role="status" data-testid="dash-pipeline-loading" className="flex items-center gap-1 text-[10px] text-slate-400">
                       <span className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
@@ -551,6 +592,8 @@ export const DashboardOverview: React.FC = () => {
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
+
+              <div className="empty:hidden"><CacheJobNotice job={pipelineJob.job} coverage={pipelineJob.coverage} /></div>
 
               <div className="grid grid-cols-3 gap-2.5">
                 <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 text-center">
@@ -628,6 +671,7 @@ export const DashboardOverview: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <Server className="w-4 h-4 text-purple-500" />
                   <span className="font-bold text-xs text-slate-900 dark:text-slate-100">{t('sections.latestDeployment')}</span>
+                  <PeriodLabel />
                   {deploymentRefreshing && (
                     <span role="status" data-testid="dash-deployment-loading" className="flex items-center gap-1 text-[10px] text-slate-400">
                       <span className="w-3 h-3 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
@@ -643,6 +687,8 @@ export const DashboardOverview: React.FC = () => {
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
+
+              <div className="empty:hidden"><CacheJobNotice job={deploymentJob.job} coverage={deploymentJob.coverage} /></div>
 
               <div className="grid grid-cols-3 gap-2.5">
                 <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 text-center">
@@ -716,6 +762,7 @@ export const DashboardOverview: React.FC = () => {
                   </h3>
                 </div>
                 <p className="text-[11px] text-slate-400">{t('sections.myRecentActivityDesc')}</p>
+                <PeriodLabel />
               </div>
               <button
                 onClick={() => navigateTo('my-history')}
@@ -782,6 +829,7 @@ export const DashboardOverview: React.FC = () => {
                 <p className="text-[11px] text-slate-400">
                   {t('sections.teamActivitySnapshotDesc')} ({filters.selectedProject === 'all' ? t('projects.all', { ns: 'common' }) : filters.selectedProject})
                 </p>
+                <PeriodLabel />
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {teamRefreshing && (
