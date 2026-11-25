@@ -263,6 +263,7 @@ export const MyHistoryTimeline: React.FC = () => {
           {/* Shared date range filter (presets + calendar range, applied on Apply) */}
           <DateRangeFilter
             value={range}
+            maxSpanDays={90}
             onApply={next => { setRange(next); setPage(1); }}
           />
         </div>

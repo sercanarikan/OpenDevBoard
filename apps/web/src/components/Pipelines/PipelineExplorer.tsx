@@ -260,6 +260,7 @@ export const PipelineExplorer: React.FC = () => {
           {/* Shared date range filter (presets + calendar range, applied on Apply) */}
           <DateRangeFilter
             value={range}
+            maxSpanDays={90}
             onApply={next => { setSelectedPipelineRun(null); setRange(next); setPage(1); }}
           />
         </div>

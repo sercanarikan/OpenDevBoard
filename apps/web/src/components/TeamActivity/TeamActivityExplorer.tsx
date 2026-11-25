@@ -187,6 +187,7 @@ export const TeamActivityExplorer: React.FC = () => {
             <div className="mt-1">
               <DateRangeFilter
                 value={range}
+                maxSpanDays={90}
                 onApply={next => { setRange(next); setCommitPage(1); }}
               />
             </div>
